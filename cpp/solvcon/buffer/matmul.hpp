@@ -28,6 +28,98 @@ inline constexpr bool can_matmul_blas_v = std::is_same_v<T, float> ||
                                           std::is_same_v<T, Complex<float>> ||
                                           std::is_same_v<T, Complex<double>>;
 
+class MatmulPlan
+{
+public:
+    using shape_type = small_vector<ssize_t>;
+
+    shape_type const & output_shape() const noexcept { return m_output_shape; }
+    ssize_t rows() const noexcept { return m_rows; }
+    ssize_t columns() const noexcept { return m_columns; }
+    ssize_t inner_size() const noexcept { return m_inner_size; }
+    ssize_t lhs_row_stride() const noexcept { return m_lhs_row_stride; }
+    ssize_t lhs_inner_stride() const noexcept { return m_lhs_inner_stride; }
+    ssize_t rhs_inner_stride() const noexcept { return m_rhs_inner_stride; }
+    ssize_t rhs_column_stride() const noexcept { return m_rhs_column_stride; }
+
+    template <typename Array>
+    static MatmulPlan make(Array const & lhs, Array const & rhs);
+
+private:
+    shape_type m_output_shape;
+    ssize_t m_rows = 0;
+    ssize_t m_columns = 0;
+    ssize_t m_inner_size = 0;
+    ssize_t m_lhs_row_stride = 0;
+    ssize_t m_lhs_inner_stride = 0;
+    ssize_t m_rhs_inner_stride = 0;
+    ssize_t m_rhs_column_stride = 0;
+}; /* end class MatmulPlan */
+
+template <typename Array>
+class MatmulExecutor
+{
+public:
+    using value_type = typename Array::value_type;
+
+    static Array execute(MatmulPlan const & plan, Array const & lhs, Array const & rhs);
+}; /* end class MatmulExecutor */
+
+template <typename Array>
+MatmulPlan MatmulPlan::make(Array const & lhs, Array const & rhs)
+{
+    if (lhs.ndim() != 2 || rhs.ndim() != 2)
+    {
+        throw std::invalid_argument("planned matrix-matrix matmul requires rank-2 operands");
+    }
+    if (lhs.shape(1) != rhs.shape(0))
+    {
+        throw std::invalid_argument(
+            std::format("SimpleArray::matmul_planned(): shape mismatch: "
+                        "this=({},{}) other=({},{})",
+                        lhs.shape(0),
+                        lhs.shape(1),
+                        rhs.shape(0),
+                        rhs.shape(1)));
+    }
+
+    MatmulPlan plan;
+    plan.m_rows = lhs.shape(0);
+    plan.m_columns = rhs.shape(1);
+    plan.m_inner_size = lhs.shape(1);
+    plan.m_output_shape = shape_type{plan.m_rows, plan.m_columns};
+    plan.m_lhs_row_stride = lhs.stride(0);
+    plan.m_lhs_inner_stride = lhs.stride(1);
+    plan.m_rhs_inner_stride = rhs.stride(0);
+    plan.m_rhs_column_stride = rhs.stride(1);
+    return plan;
+}
+
+template <typename Array>
+Array MatmulExecutor<Array>::execute(MatmulPlan const & plan, Array const & lhs, Array const & rhs)
+{
+    Array output(plan.output_shape());
+    value_type * output_data = output.logical_data();
+    value_type const * lhs_data = lhs.logical_data();
+    value_type const * rhs_data = rhs.logical_data();
+
+    for (ssize_t row = 0; row < plan.rows(); ++row)
+    {
+        for (ssize_t column = 0; column < plan.columns(); ++column)
+        {
+            value_type total{};
+            for (ssize_t inner = 0; inner < plan.inner_size(); ++inner)
+            {
+                ssize_t const lhs_offset = row * plan.lhs_row_stride() + inner * plan.lhs_inner_stride();
+                ssize_t const rhs_offset = inner * plan.rhs_inner_stride() + column * plan.rhs_column_stride();
+                total += lhs_data[lhs_offset] * rhs_data[rhs_offset];
+            }
+            output_data[row * plan.columns() + column] = total;
+        }
+    }
+    return output;
+}
+
 template <typename A, typename T>
 class SimpleArrayMatmulHelper
 {
