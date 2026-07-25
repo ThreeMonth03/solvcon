@@ -215,6 +215,66 @@ void ElementwiseExecutor<Array, T, Kernel>::execute(
                         rhs_data[rhs_offset]));
                 continue;
             }
+            if (selected_output_stride == 1 &&
+                selected_rhs_stride == 0)
+            {
+                value_type * selected_output =
+                    output_data + output_offset;
+                value_type const rhs_value =
+                    rhs_data[rhs_offset];
+                for (size_t index = 0; index < inner.size(); ++index)
+                {
+                    selected_output[index] =
+                        kernel(lhs_data[lhs_offset], rhs_value);
+                    lhs_offset += selected_lhs_stride;
+                }
+                continue;
+            }
+            if (selected_output_stride == 1 &&
+                selected_lhs_stride == 0)
+            {
+                value_type * selected_output =
+                    output_data + output_offset;
+                value_type const lhs_value =
+                    lhs_data[lhs_offset];
+                for (size_t index = 0; index < inner.size(); ++index)
+                {
+                    selected_output[index] =
+                        kernel(lhs_value, rhs_data[rhs_offset]);
+                    rhs_offset += selected_rhs_stride;
+                }
+                continue;
+            }
+            if (selected_output_stride == 1 &&
+                selected_lhs_stride == 1)
+            {
+                value_type * selected_output =
+                    output_data + output_offset;
+                value_type const * selected_lhs =
+                    lhs_data + lhs_offset;
+                for (size_t index = 0; index < inner.size(); ++index)
+                {
+                    selected_output[index] =
+                        kernel(selected_lhs[index], rhs_data[rhs_offset]);
+                    rhs_offset += selected_rhs_stride;
+                }
+                continue;
+            }
+            if (selected_output_stride == 1 &&
+                selected_rhs_stride == 1)
+            {
+                value_type * selected_output =
+                    output_data + output_offset;
+                value_type const * selected_rhs =
+                    rhs_data + rhs_offset;
+                for (size_t index = 0; index < inner.size(); ++index)
+                {
+                    selected_output[index] =
+                        kernel(lhs_data[lhs_offset], selected_rhs[index]);
+                    lhs_offset += selected_lhs_stride;
+                }
+                continue;
+            }
             for (size_t index = 0; index < inner.size(); ++index)
             {
                 output_data[output_offset] = kernel(
