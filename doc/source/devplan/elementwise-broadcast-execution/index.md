@@ -188,18 +188,18 @@ The performance catalog contains 340,480 combinations, of which 233,128 are
 valid under NumPy.  The release sweep covers every layout at size 32, every
 left and right layout at sizes 8, 128, and 512, every catalog size from 1
 through 1024 for C operands, and both singleton sides across all sizes and
-layouts.  After duplicate identifiers are removed, revision `cb577c80` has
+layouts.  After duplicate identifiers are removed, revision `bb0af292` has
 33,368 valid timed cases and all results match NumPy.
 
 | Topology family | Cases | Win rate | Median NumPy / planned |
 | --- | ---: | ---: | ---: |
-| Non-broadcast | 4,160 | 99.13% | 2.02x |
-| Python scalar | 672 | 96.58% | 2.27x |
-| Singleton broadcast | 9,952 | 96.89% | 2.25x |
-| Single-axis broadcast | 9,664 | 99.75% | 2.49x |
-| Outer broadcast | 2,288 | 100.00% | 2.55x |
-| Mixed-rank broadcast | 6,632 | 98.58% | 2.51x |
-| All cases | 33,368 | 98.54% | 2.39x |
+| Non-broadcast | 4,160 | 99.57% | 2.01x |
+| Python scalar | 672 | 97.02% | 2.25x |
+| Singleton broadcast | 9,952 | 96.78% | 2.25x |
+| Single-axis broadcast | 9,664 | 99.67% | 2.49x |
+| Outer broadcast | 2,288 | 100.00% | 2.56x |
+| Mixed-rank broadcast | 6,632 | 98.94% | 2.47x |
+| All cases | 33,368 | 98.62% | 2.38x |
 
 The original losses had two causes.  The benchmark's extra NumPy-view access
 cost about 0.35 to 0.40 microseconds per planned call.  The executor also
@@ -216,9 +216,16 @@ in-place aliases reuse one offset.
 The broad sweep deliberately uses a one-millisecond timing target so tens of
 thousands of cases remain practical.  Its tail is sensitive to scheduling.
 The six lowest reported cases were repeated with 15 samples, five warmups,
-and a 20-millisecond target.  All repeated at or above parity, from 1.00x to
-1.49x.  A separate 50-millisecond diagnostic for the stride-2 in-place
-singleton path measured 1.12x after the alias specialization.
+and a 20-millisecond target.  Five repeated from 1.02x to 1.53x.  The
+remaining float32 in-place division repeated at 0.85x, compared with 0.84x
+before the executor refactor.  A 1,001-sample diagnostic measured the
+stride-2 in-place singleton path at 1.10x.
+
+The executor refactor was also compared directly with revision `cb577c80`
+across 12 tail and representative cases.  The median old/new planned-time
+ratio was 0.998, and the median ratio after normalization by the paired NumPy
+measurement was 1.000.  The extracted helpers were fully inlined, and the
+float binding text section was approximately 7 KB smaller.
 
 A shared AVX2 array-and-scalar prototype was 1.8% slower in aggregate over 64
 large C-layout cases, so it was removed rather than adding an unproven SIMD
