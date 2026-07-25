@@ -142,61 +142,86 @@ void ElementwiseExecutor<Array, T, Kernel>::execute(
             inner.outer(), inner.outer_mappings());
         for (; cursor; cursor.advance())
         {
-            if (output_stride == 1 &&
-                lhs_stride == 1 &&
-                rhs_stride == 1)
-            {
-                kernel_type::contiguous(
-                    output_data + cursor.offset(0),
-                    inner.size(),
-                    lhs_data + cursor.offset(1),
-                    rhs_data + cursor.offset(2));
-                continue;
-            }
-            if (output_stride == 1 &&
-                lhs_stride == 1 &&
-                rhs_stride == 0)
-            {
-                kernel_type::contiguous_scalar(
-                    output_data + cursor.offset(0),
-                    inner.size(),
-                    lhs_data + cursor.offset(1),
-                    rhs_data[cursor.offset(2)]);
-                continue;
-            }
-            if (output_stride == 1 &&
-                lhs_stride == 0 &&
-                rhs_stride == 1)
-            {
-                kernel_type::contiguous_lhs_scalar(
-                    output_data + cursor.offset(0),
-                    inner.size(),
-                    lhs_data[cursor.offset(1)],
-                    rhs_data + cursor.offset(2));
-                continue;
-            }
-            if (output_stride == 1 &&
-                lhs_stride == 0 &&
-                rhs_stride == 0)
-            {
-                std::fill_n(
-                    output_data + cursor.offset(0),
-                    inner.size(),
-                    kernel(
-                        lhs_data[cursor.offset(1)],
-                        rhs_data[cursor.offset(2)]));
-                continue;
-            }
+            ssize_t selected_output_stride = output_stride;
+            ssize_t selected_lhs_stride = lhs_stride;
+            ssize_t selected_rhs_stride = rhs_stride;
             ssize_t output_offset = cursor.offset(0);
             ssize_t lhs_offset = cursor.offset(1);
             ssize_t rhs_offset = cursor.offset(2);
+            if (selected_output_stride == -1 &&
+                (selected_lhs_stride == -1 ||
+                 selected_lhs_stride == 0) &&
+                (selected_rhs_stride == -1 ||
+                 selected_rhs_stride == 0))
+            {
+                ssize_t const shift =
+                    static_cast<ssize_t>(inner.size() - 1);
+                output_offset -= shift;
+                selected_output_stride = 1;
+                if (selected_lhs_stride == -1)
+                {
+                    lhs_offset -= shift;
+                    selected_lhs_stride = 1;
+                }
+                if (selected_rhs_stride == -1)
+                {
+                    rhs_offset -= shift;
+                    selected_rhs_stride = 1;
+                }
+            }
+
+            if (selected_output_stride == 1 &&
+                selected_lhs_stride == 1 &&
+                selected_rhs_stride == 1)
+            {
+                kernel_type::contiguous(
+                    output_data + output_offset,
+                    inner.size(),
+                    lhs_data + lhs_offset,
+                    rhs_data + rhs_offset);
+                continue;
+            }
+            if (selected_output_stride == 1 &&
+                selected_lhs_stride == 1 &&
+                selected_rhs_stride == 0)
+            {
+                kernel_type::contiguous_scalar(
+                    output_data + output_offset,
+                    inner.size(),
+                    lhs_data + lhs_offset,
+                    rhs_data[rhs_offset]);
+                continue;
+            }
+            if (selected_output_stride == 1 &&
+                selected_lhs_stride == 0 &&
+                selected_rhs_stride == 1)
+            {
+                kernel_type::contiguous_lhs_scalar(
+                    output_data + output_offset,
+                    inner.size(),
+                    lhs_data[lhs_offset],
+                    rhs_data + rhs_offset);
+                continue;
+            }
+            if (selected_output_stride == 1 &&
+                selected_lhs_stride == 0 &&
+                selected_rhs_stride == 0)
+            {
+                std::fill_n(
+                    output_data + output_offset,
+                    inner.size(),
+                    kernel(
+                        lhs_data[lhs_offset],
+                        rhs_data[rhs_offset]));
+                continue;
+            }
             for (size_t index = 0; index < inner.size(); ++index)
             {
                 output_data[output_offset] = kernel(
                     lhs_data[lhs_offset], rhs_data[rhs_offset]);
-                output_offset += output_stride;
-                lhs_offset += lhs_stride;
-                rhs_offset += rhs_stride;
+                output_offset += selected_output_stride;
+                lhs_offset += selected_lhs_stride;
+                rhs_offset += selected_rhs_stride;
             }
         }
         return;
@@ -246,32 +271,51 @@ void ElementwiseExecutor<Array, T, Kernel>::execute_scalar(
             inner.outer(), inner.outer_mappings());
         for (; cursor; cursor.advance())
         {
-            if (output_stride == 1 && lhs_stride == 1)
+            ssize_t selected_output_stride = output_stride;
+            ssize_t selected_lhs_stride = lhs_stride;
+            ssize_t output_offset = cursor.offset(0);
+            ssize_t lhs_offset = cursor.offset(1);
+            if (selected_output_stride == -1 &&
+                (selected_lhs_stride == -1 ||
+                 selected_lhs_stride == 0))
+            {
+                ssize_t const shift =
+                    static_cast<ssize_t>(inner.size() - 1);
+                output_offset -= shift;
+                selected_output_stride = 1;
+                if (selected_lhs_stride == -1)
+                {
+                    lhs_offset -= shift;
+                    selected_lhs_stride = 1;
+                }
+            }
+
+            if (selected_output_stride == 1 &&
+                selected_lhs_stride == 1)
             {
                 kernel_type::contiguous_scalar(
-                    output_data + cursor.offset(0),
+                    output_data + output_offset,
                     inner.size(),
-                    lhs_data + cursor.offset(1),
+                    lhs_data + lhs_offset,
                     scalar);
                 continue;
             }
-            if (output_stride == 1 && lhs_stride == 0)
+            if (selected_output_stride == 1 &&
+                selected_lhs_stride == 0)
             {
                 std::fill_n(
-                    output_data + cursor.offset(0),
+                    output_data + output_offset,
                     inner.size(),
-                    kernel(lhs_data[cursor.offset(1)], scalar));
+                    kernel(lhs_data[lhs_offset], scalar));
                 continue;
             }
 
-            ssize_t output_offset = cursor.offset(0);
-            ssize_t lhs_offset = cursor.offset(1);
             for (size_t index = 0; index < inner.size(); ++index)
             {
                 output_data[output_offset] =
                     kernel(lhs_data[lhs_offset], scalar);
-                output_offset += output_stride;
-                lhs_offset += lhs_stride;
+                output_offset += selected_output_stride;
+                lhs_offset += selected_lhs_stride;
             }
         }
         return;

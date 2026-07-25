@@ -37,13 +37,28 @@ public:
                            size_t count,
                            double const * lhs,
                            double const * rhs);
+    static void contiguous_scalar(double * output,
+                                  size_t count,
+                                  double const * lhs,
+                                  double rhs);
 
-    static void reset() noexcept { m_calls = 0; }
+    static void reset() noexcept;
     static size_t calls() noexcept { return m_calls; }
+    static size_t contiguous_scalar_calls() noexcept
+    {
+        return m_contiguous_scalar_calls;
+    }
 
 private:
     inline static size_t m_calls = 0;
+    inline static size_t m_contiguous_scalar_calls = 0;
 }; /* end class CountingAddKernel */
+
+void CountingAddKernel::reset() noexcept
+{
+    m_calls = 0;
+    m_contiguous_scalar_calls = 0;
+}
 
 void CountingAddKernel::contiguous(
     double * output,
@@ -56,6 +71,17 @@ void CountingAddKernel::contiguous(
     {
         output[index] = kernel(lhs[index], rhs[index]);
     }
+}
+
+void CountingAddKernel::contiguous_scalar(
+    double * output,
+    size_t count,
+    double const * lhs,
+    double rhs)
+{
+    ++m_contiguous_scalar_calls;
+    BinaryKernelBase::contiguous_scalar(
+        output, count, lhs, rhs);
 }
 
 } /* end namespace */
@@ -197,6 +223,24 @@ TEST(ElementwiseExecutor, ReusesConstantInnerPair)
 
     EXPECT_EQ(output.shape(), (ew::shape_type{2, 4, 3, 5}));
     EXPECT_EQ(CountingAddKernel::calls(), 24);
+}
+
+TEST(ElementwiseExecutor, NormalizesReversedInnerLoop)
+{
+    using array_type = solvcon::SimpleArray<double>;
+    array_type destination = ew::allocate_layout<array_type>(
+        ew::shape_type{3, 5}, ew::stride_type{5, -1});
+    array_type rhs(ew::shape_type{3, 1});
+    destination.fill(1.0);
+    rhs.fill(2.0);
+
+    CountingAddKernel::reset();
+    ew::ElementwiseExecutor<
+        array_type,
+        double,
+        CountingAddKernel>::transform_into(destination, rhs, CountingAddKernel{});
+
+    EXPECT_EQ(CountingAddKernel::contiguous_scalar_calls(), 3);
 }
 
 // vim: set ff=unix fenc=utf8 nobomb et sw=4 ts=4 sts=4:
