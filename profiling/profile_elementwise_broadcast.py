@@ -661,10 +661,7 @@ def time_case_method(
         )
 
         def function():
-            result = function_method(rhs_operand)
-            if spec.mode == "in":
-                return lhs_array.ndarray
-            return result.ndarray
+            return function_method(rhs_operand)
 
     reset = None
     if spec.mode == "in":

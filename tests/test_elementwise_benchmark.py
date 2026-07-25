@@ -1,7 +1,9 @@
 # Copyright (c) 2026, solvcon team <contact@solvcon.net>
 # BSD 3-Clause License, see COPYING
 
+import types
 import unittest
+import unittest.mock
 
 import numpy as np
 
@@ -229,6 +231,51 @@ class ElementwiseBenchmarkCatalogTC(unittest.TestCase):
 
         self.assertTrue(np.shares_memory(result, lhs.view))
         np.testing.assert_array_equal(lhs.view, expected)
+
+    def test_planned_timing_does_not_extract_numpy_view(self):
+        """Time the operation without an extra ndarray property access."""
+        topology = next(
+            topology
+            for topology in benchmark_cases.make_topologies(4)
+            if topology.name == "same-1d"
+        )
+        case = benchmark_cases.CaseSpec(
+            catalog="performance",
+            size=4,
+            topology=topology,
+            operation="add",
+            dtype="float64",
+            mode="out",
+            lhs_layout="c",
+            rhs_layout="c",
+        )
+        lhs = benchmark_cases.make_layout(
+            np.arange(4, dtype="float64"), "c"
+        )
+        rhs = benchmark_cases.make_layout(
+            np.arange(4, dtype="float64") + 1, "c"
+        )
+        result = None
+
+        def capture(function, *args):
+            nonlocal result
+            result = function()
+            return {}
+
+        arguments = types.SimpleNamespace(
+            samples=1, warmup=0, target_ms=1
+        )
+        with unittest.mock.patch.object(
+            benchmark_profile,
+            "timed_samples",
+            side_effect=capture,
+        ):
+            benchmark_profile.time_case_method(
+                case, "planned", lhs, rhs, arguments
+            )
+
+        self.assertFalse(isinstance(result, np.ndarray))
+        self.assertTrue(hasattr(result, "ndarray"))
 
     def test_smoke_case_identifiers_are_unique(self):
         """Keep command-line filtering unambiguous for reproductions."""
