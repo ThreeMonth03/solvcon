@@ -138,7 +138,8 @@ void ElementwiseExecutor<Array, T, Kernel>::execute(
         ssize_t const output_stride = inner.stride(0);
         ssize_t const lhs_stride = inner.stride(1);
         ssize_t const rhs_stride = inner.stride(2);
-        OffsetCursor cursor(inner.outer(), inner.outer_mappings());
+        MappedOffsetCursor cursor(
+            inner.outer(), inner.outer_mappings());
         for (; cursor; cursor.advance())
         {
             if (output_stride == 1 &&
@@ -189,7 +190,7 @@ void ElementwiseExecutor<Array, T, Kernel>::execute(
         return;
     }
 
-    for (OffsetCursor cursor(plan.domain(), mappings);
+    for (MappedOffsetCursor cursor(plan.domain(), mappings);
          cursor;
          cursor.advance())
     {
@@ -229,7 +230,8 @@ void ElementwiseExecutor<Array, T, Kernel>::execute_scalar(
             plan.domain(), mappings, plan.inner_axis());
         ssize_t const output_stride = inner.stride(0);
         ssize_t const lhs_stride = inner.stride(1);
-        OffsetCursor cursor(inner.outer(), inner.outer_mappings());
+        MappedOffsetCursor cursor(
+            inner.outer(), inner.outer_mappings());
         for (; cursor; cursor.advance())
         {
             if (output_stride == 1 && lhs_stride == 1)
@@ -263,7 +265,7 @@ void ElementwiseExecutor<Array, T, Kernel>::execute_scalar(
         return;
     }
 
-    for (OffsetCursor cursor(plan.domain(), mappings);
+    for (MappedOffsetCursor cursor(plan.domain(), mappings);
          cursor;
          cursor.advance())
     {
@@ -295,9 +297,8 @@ Array ElementwiseExecutor<Array, T, Kernel>::transform(
     if (shapes_match &&
         std::ranges::equal(lhs.stride(), rhs.stride()))
     {
-        IterationDomain const domain(lhs.shape());
-        OperandMapping const mapping =
-            OperandMapping::exact(lhs.stride());
+        LoopDomain const domain(lhs.shape());
+        OperandMapping const mapping(lhs.stride());
         if (mapping.is_dense(domain))
         {
             Array output =
@@ -332,13 +333,11 @@ Array ElementwiseExecutor<Array, T, Kernel>::transform(
         return output;
     }
 
-    IterationDomain const result_domain(
+    LoopDomain const result_domain(
         ElementwisePlan::broadcast_shape(lhs, rhs));
     shape_type const & result_shape = result_domain.shape();
-    OperandMapping const lhs_mapping =
-        OperandMapping::exact(lhs.stride());
-    OperandMapping const rhs_mapping =
-        OperandMapping::exact(rhs.stride());
+    OperandMapping const lhs_mapping(lhs.stride());
+    OperandMapping const rhs_mapping(rhs.stride());
     bool const result_matches_lhs =
         std::ranges::equal(result_shape, lhs.shape());
     bool const result_matches_rhs =
@@ -388,9 +387,8 @@ Array ElementwiseExecutor<Array, T, Kernel>::transform(
         return output;
     }
 
-    IterationDomain const domain(lhs.shape());
-    OperandMapping const mapping =
-        OperandMapping::exact(lhs.stride());
+    LoopDomain const domain(lhs.shape());
+    OperandMapping const mapping(lhs.stride());
     if (mapping.is_dense(domain))
     {
         Array output =

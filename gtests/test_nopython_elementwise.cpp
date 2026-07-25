@@ -15,17 +15,19 @@
 #endif
 
 namespace ew = solvcon::detail::elementwise;
+using solvcon::detail::LoopDomain;
+using solvcon::detail::MappedOffsetCursor;
+using solvcon::detail::OperandMapping;
 
 TEST(ElementwisePlan, BroadcastMappingsAlignTrailingAxes)
 {
     ew::shape_type const lhs_shape{2, 1, 4};
     ew::shape_type const rhs_shape{1, 3, 1};
-    ew::IterationDomain const domain(
-        ew::IterationDomain::broadcast_shape(
-            lhs_shape, rhs_shape));
-    ew::OperandMapping const lhs = ew::OperandMapping::broadcast(
+    LoopDomain const domain(
+        ew::broadcast_shape(lhs_shape, rhs_shape));
+    OperandMapping const lhs = ew::broadcast_mapping(
         lhs_shape, ew::stride_type{4, 4, 1}, domain);
-    ew::OperandMapping const rhs = ew::OperandMapping::broadcast(
+    OperandMapping const rhs = ew::broadcast_mapping(
         rhs_shape, ew::stride_type{3, 1, 1}, domain);
 
     EXPECT_EQ(domain.shape(), (ew::shape_type{2, 3, 4}));
@@ -33,27 +35,27 @@ TEST(ElementwisePlan, BroadcastMappingsAlignTrailingAxes)
     EXPECT_EQ(rhs.strides(), (ew::stride_type{0, 1, 0}));
 }
 
-TEST(ElementwisePlan, EmptyDomainHasNoCursorIteration)
+TEST(LoopTraversal, EmptyDomainHasNoCursorIteration)
 {
-    ew::IterationDomain const domain(ew::shape_type{3, 0, 4});
-    solvcon::small_vector<ew::OperandMapping> const mappings{
-        ew::OperandMapping(ew::stride_type{0, 4, 1})};
-    ew::OffsetCursor cursor(domain, mappings);
+    LoopDomain const domain(ew::shape_type{3, 0, 4});
+    solvcon::small_vector<OperandMapping> const mappings{
+        OperandMapping(ew::stride_type{0, 4, 1})};
+    MappedOffsetCursor cursor(domain, mappings);
 
     EXPECT_TRUE(domain.empty());
     EXPECT_EQ(domain.size(), 0);
     EXPECT_FALSE(cursor);
 }
 
-TEST(ElementwisePlan, SignedOffsetsRetainLogicalOrigin)
+TEST(LoopTraversal, SignedOffsetsRetainLogicalOrigin)
 {
-    ew::IterationDomain const domain(ew::shape_type{2, 3});
-    ew::OperandMapping const mapping(ew::stride_type{-3, 1}, 3);
-    solvcon::small_vector<ew::OperandMapping> const mappings{mapping};
+    LoopDomain const domain(ew::shape_type{2, 3});
+    OperandMapping const mapping(ew::stride_type{-3, 1}, 3);
+    solvcon::small_vector<OperandMapping> const mappings{mapping};
     std::array<ssize_t, 6> const expected{3, 4, 5, 0, 1, 2};
 
     size_t index = 0;
-    for (ew::OffsetCursor cursor(domain, mappings);
+    for (MappedOffsetCursor cursor(domain, mappings);
          cursor;
          cursor.advance(), ++index)
     {
@@ -63,27 +65,27 @@ TEST(ElementwisePlan, SignedOffsetsRetainLogicalOrigin)
     EXPECT_TRUE(mapping.is_dense(domain));
 }
 
-TEST(ElementwisePlan, DenseMappingRejectsOverlappingStride)
+TEST(LoopTraversal, DenseMappingRejectsOverlappingStride)
 {
     ew::shape_type const shape{2, 2};
 
     EXPECT_FALSE(
-        ew::OperandMapping::is_dense(
+        OperandMapping::is_dense(
             shape, ew::stride_type{3, 0}));
     EXPECT_TRUE(
-        ew::OperandMapping::is_dense(
+        OperandMapping::is_dense(
             shape, ew::stride_type{-1, 2}));
 }
 
-TEST(ElementwisePlan, ConstantMappingIgnoresSingletonAxes)
+TEST(LoopTraversal, ConstantMappingIgnoresSingletonAxes)
 {
-    ew::IterationDomain const domain(ew::shape_type{1, 3, 1});
+    LoopDomain const domain(ew::shape_type{1, 3, 1});
 
     EXPECT_TRUE(
-        ew::OperandMapping(ew::stride_type{7, 0, 1})
+        OperandMapping(ew::stride_type{7, 0, 1})
             .is_constant(domain));
     EXPECT_FALSE(
-        ew::OperandMapping(ew::stride_type{7, 1, 1})
+        OperandMapping(ew::stride_type{7, 1, 1})
             .is_constant(domain));
 }
 

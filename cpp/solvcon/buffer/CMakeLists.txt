@@ -8,6 +8,7 @@ set(SOLVCON_BUFFER_HEADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/BufferBase.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/small_vector.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/signed_stride_layout.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/loop.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/elementwise/plan.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/elementwise/kernel.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/elementwise/executor.hpp
