@@ -518,13 +518,18 @@ class SOLVCON_PYTHON_WRAPPER_VISIBILITY WrapSimpleArray
                 "_planned_add",
                 pybind11::overload_cast<
                     wrapped_type const &,
-                    wrapped_type const &>(
-                    &elementwise_type::planned_add))
+                    value_type>(&elementwise_type::planned_add))
             .def(
                 "_planned_add",
                 pybind11::overload_cast<
                     wrapped_type const &,
-                    value_type>(&elementwise_type::planned_add))
+                    wrapped_type const &>(
+                    &elementwise_type::planned_add))
+            .def(
+                "_planned_sub",
+                pybind11::overload_cast<
+                    wrapped_type const &,
+                    value_type>(&elementwise_type::planned_sub))
             .def(
                 "_planned_sub",
                 pybind11::overload_cast<
@@ -532,10 +537,10 @@ class SOLVCON_PYTHON_WRAPPER_VISIBILITY WrapSimpleArray
                     wrapped_type const &>(
                     &elementwise_type::planned_sub))
             .def(
-                "_planned_sub",
+                "_planned_mul",
                 pybind11::overload_cast<
                     wrapped_type const &,
-                    value_type>(&elementwise_type::planned_sub))
+                    value_type>(&elementwise_type::planned_mul))
             .def(
                 "_planned_mul",
                 pybind11::overload_cast<
@@ -543,10 +548,10 @@ class SOLVCON_PYTHON_WRAPPER_VISIBILITY WrapSimpleArray
                     wrapped_type const &>(
                     &elementwise_type::planned_mul))
             .def(
-                "_planned_mul",
+                "_planned_div",
                 pybind11::overload_cast<
                     wrapped_type const &,
-                    value_type>(&elementwise_type::planned_mul))
+                    value_type>(&elementwise_type::planned_div))
             .def(
                 "_planned_div",
                 pybind11::overload_cast<
@@ -554,10 +559,10 @@ class SOLVCON_PYTHON_WRAPPER_VISIBILITY WrapSimpleArray
                     wrapped_type const &>(
                     &elementwise_type::planned_div))
             .def(
-                "_planned_div",
+                "_planned_iadd",
                 pybind11::overload_cast<
-                    wrapped_type const &,
-                    value_type>(&elementwise_type::planned_div))
+                    wrapped_type &,
+                    value_type>(&elementwise_type::planned_iadd))
             .def(
                 "_planned_iadd",
                 pybind11::overload_cast<
@@ -565,10 +570,10 @@ class SOLVCON_PYTHON_WRAPPER_VISIBILITY WrapSimpleArray
                     wrapped_type const &>(
                     &elementwise_type::planned_iadd))
             .def(
-                "_planned_iadd",
+                "_planned_isub",
                 pybind11::overload_cast<
                     wrapped_type &,
-                    value_type>(&elementwise_type::planned_iadd))
+                    value_type>(&elementwise_type::planned_isub))
             .def(
                 "_planned_isub",
                 pybind11::overload_cast<
@@ -576,10 +581,10 @@ class SOLVCON_PYTHON_WRAPPER_VISIBILITY WrapSimpleArray
                     wrapped_type const &>(
                     &elementwise_type::planned_isub))
             .def(
-                "_planned_isub",
+                "_planned_imul",
                 pybind11::overload_cast<
                     wrapped_type &,
-                    value_type>(&elementwise_type::planned_isub))
+                    value_type>(&elementwise_type::planned_imul))
             .def(
                 "_planned_imul",
                 pybind11::overload_cast<
@@ -587,21 +592,16 @@ class SOLVCON_PYTHON_WRAPPER_VISIBILITY WrapSimpleArray
                     wrapped_type const &>(
                     &elementwise_type::planned_imul))
             .def(
-                "_planned_imul",
+                "_planned_idiv",
                 pybind11::overload_cast<
                     wrapped_type &,
-                    value_type>(&elementwise_type::planned_imul))
+                    value_type>(&elementwise_type::planned_idiv))
             .def(
                 "_planned_idiv",
                 pybind11::overload_cast<
                     wrapped_type &,
                     wrapped_type const &>(
                     &elementwise_type::planned_idiv))
-            .def(
-                "_planned_idiv",
-                pybind11::overload_cast<
-                    wrapped_type &,
-                    value_type>(&elementwise_type::planned_idiv))
             //
             ;
         return *this;

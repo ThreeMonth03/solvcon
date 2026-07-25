@@ -232,6 +232,24 @@ void ElementwiseExecutor<Array, T, Kernel>::execute_scalar(
         OffsetCursor cursor(inner.outer(), inner.outer_mappings());
         for (; cursor; cursor.advance())
         {
+            if (output_stride == 1 && lhs_stride == 1)
+            {
+                kernel_type::contiguous_scalar(
+                    output_data + cursor.offset(0),
+                    inner.size(),
+                    lhs_data + cursor.offset(1),
+                    scalar);
+                continue;
+            }
+            if (output_stride == 1 && lhs_stride == 0)
+            {
+                std::fill_n(
+                    output_data + cursor.offset(0),
+                    inner.size(),
+                    kernel(lhs_data[cursor.offset(1)], scalar));
+                continue;
+            }
+
             ssize_t output_offset = cursor.offset(0);
             ssize_t lhs_offset = cursor.offset(1);
             for (size_t index = 0; index < inner.size(); ++index)
@@ -259,6 +277,61 @@ requires ArithmeticKernel<Kernel, T>
 Array ElementwiseExecutor<Array, T, Kernel>::transform(
     Array const & lhs, Array const & rhs, kernel_type kernel)
 {
+    bool const shapes_match =
+        std::ranges::equal(lhs.shape(), rhs.shape());
+    if (shapes_match &&
+        lhs.is_c_contiguous() &&
+        rhs.is_c_contiguous())
+    {
+        Array output(lhs.shape());
+        kernel_type::contiguous(
+            output.logical_data(),
+            output.size(),
+            lhs.logical_data(),
+            rhs.logical_data());
+        return output;
+    }
+
+    if (shapes_match &&
+        std::ranges::equal(lhs.stride(), rhs.stride()))
+    {
+        IterationDomain const domain(lhs.shape());
+        OperandMapping const mapping =
+            OperandMapping::exact(lhs.stride());
+        if (mapping.is_dense(domain))
+        {
+            Array output =
+                allocate_layout<Array>(lhs.shape(), lhs.stride());
+            ssize_t const offset = mapping.span(domain).minimum();
+            kernel_type::contiguous(
+                output.logical_data() + offset,
+                output.size(),
+                lhs.logical_data() + offset,
+                rhs.logical_data() + offset);
+            return output;
+        }
+    }
+
+    if (shapes_match && lhs.shape().size() == 1)
+    {
+        Array output(lhs.shape());
+        value_type * output_data = output.logical_data();
+        value_type const * lhs_data = lhs.logical_data();
+        value_type const * rhs_data = rhs.logical_data();
+        ssize_t lhs_offset = 0;
+        ssize_t rhs_offset = 0;
+        ssize_t const lhs_stride = lhs.stride()[0];
+        ssize_t const rhs_stride = rhs.stride()[0];
+        for (size_t index = 0; index < output.size(); ++index)
+        {
+            output_data[index] =
+                kernel(lhs_data[lhs_offset], rhs_data[rhs_offset]);
+            lhs_offset += lhs_stride;
+            rhs_offset += rhs_stride;
+        }
+        return output;
+    }
+
     IterationDomain const result_domain(
         ElementwisePlan::broadcast_shape(lhs, rhs));
     shape_type const & result_shape = result_domain.shape();
@@ -304,13 +377,34 @@ requires ArithmeticKernel<Kernel, T>
 Array ElementwiseExecutor<Array, T, Kernel>::transform(
     Array const & lhs, value_type scalar, kernel_type kernel)
 {
+    if (lhs.is_c_contiguous())
+    {
+        Array output(lhs.shape());
+        kernel_type::contiguous_scalar(
+            output.logical_data(),
+            output.size(),
+            lhs.logical_data(),
+            scalar);
+        return output;
+    }
+
     IterationDomain const domain(lhs.shape());
     OperandMapping const mapping =
         OperandMapping::exact(lhs.stride());
-    Array output = mapping.is_dense(domain)
-                       ? allocate_layout<Array>(
-                             lhs.shape(), lhs.stride())
-                       : Array(lhs.shape());
+    if (mapping.is_dense(domain))
+    {
+        Array output =
+            allocate_layout<Array>(lhs.shape(), lhs.stride());
+        ssize_t const offset = mapping.span(domain).minimum();
+        kernel_type::contiguous_scalar(
+            output.logical_data() + offset,
+            output.size(),
+            lhs.logical_data() + offset,
+            scalar);
+        return output;
+    }
+
+    Array output(lhs.shape());
     ElementwisePlan const plan =
         ElementwisePlan::make_scalar(output, lhs);
     execute_scalar(plan, output, lhs, scalar, kernel);
@@ -345,6 +439,20 @@ bool ElementwiseExecutor<Array, T, Kernel>::storage_overlaps(
     Array const & lhs, Array const & rhs)
 {
     if (lhs.size() == 0 || rhs.size() == 0)
+    {
+        return false;
+    }
+
+    std::uintptr_t const lhs_storage_begin =
+        reinterpret_cast<std::uintptr_t>(lhs.data());
+    std::uintptr_t const lhs_storage_end =
+        lhs_storage_begin + lhs.buffer().nbytes();
+    std::uintptr_t const rhs_storage_begin =
+        reinterpret_cast<std::uintptr_t>(rhs.data());
+    std::uintptr_t const rhs_storage_end =
+        rhs_storage_begin + rhs.buffer().nbytes();
+    if (lhs_storage_begin >= rhs_storage_end ||
+        rhs_storage_begin >= lhs_storage_end)
     {
         return false;
     }
@@ -406,6 +514,31 @@ void ElementwiseExecutor<Array, T, Kernel>::execute_into(
             destination.logical_data() + offset,
             destination.size(),
             rhs.logical_data() + offset);
+        return;
+    }
+
+    if (std::ranges::equal(
+            destination.shape(), rhs.shape()) &&
+        destination.shape().size() == 1)
+    {
+        value_type * destination_data =
+            destination.logical_data();
+        value_type const * rhs_data = rhs.logical_data();
+        ssize_t destination_offset = 0;
+        ssize_t rhs_offset = 0;
+        ssize_t const destination_stride =
+            destination.stride()[0];
+        ssize_t const rhs_stride = rhs.stride()[0];
+        for (size_t index = 0;
+             index < destination.size();
+             ++index)
+        {
+            destination_data[destination_offset] = kernel(
+                destination_data[destination_offset],
+                rhs_data[rhs_offset]);
+            destination_offset += destination_stride;
+            rhs_offset += rhs_stride;
+        }
         return;
     }
 
