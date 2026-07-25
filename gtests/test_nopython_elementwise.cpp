@@ -4,6 +4,7 @@
  */
 
 #include <solvcon/buffer/SimpleArray.hpp>
+#include <solvcon/buffer/elementwise/executor.hpp>
 #include <solvcon/buffer/elementwise/plan.hpp>
 
 #include <array>
@@ -18,6 +19,46 @@ namespace ew = solvcon::detail::elementwise;
 using solvcon::detail::LoopDomain;
 using solvcon::detail::MappedOffsetCursor;
 using solvcon::detail::OperandMapping;
+
+namespace
+{
+
+class CountingAddKernel
+    : public ew::BinaryKernelBase<CountingAddKernel, double>
+{
+public:
+    double operator()(double lhs, double rhs) const
+    {
+        ++m_calls;
+        return lhs + rhs;
+    }
+
+    static void contiguous(double * output,
+                           size_t count,
+                           double const * lhs,
+                           double const * rhs);
+
+    static void reset() noexcept { m_calls = 0; }
+    static size_t calls() noexcept { return m_calls; }
+
+private:
+    inline static size_t m_calls = 0;
+}; /* end class CountingAddKernel */
+
+void CountingAddKernel::contiguous(
+    double * output,
+    size_t count,
+    double const * lhs,
+    double const * rhs)
+{
+    CountingAddKernel const kernel;
+    for (size_t index = 0; index < count; ++index)
+    {
+        output[index] = kernel(lhs[index], rhs[index]);
+    }
+}
+
+} /* end namespace */
 
 TEST(ElementwisePlan, BroadcastMappingsAlignTrailingAxes)
 {
@@ -137,6 +178,25 @@ TEST(ElementwisePlan, InnerAxisKeepsSmallOutputStride)
 
     EXPECT_EQ(plan.route(), ew::ExecutionRoute::inner_strided);
     EXPECT_EQ(plan.inner_axis(), 1);
+}
+
+TEST(ElementwiseExecutor, ReusesConstantInnerPair)
+{
+    using array_type = solvcon::SimpleArray<double>;
+    array_type lhs(ew::shape_type{2, 1, 3, 1});
+    array_type rhs = ew::allocate_layout<array_type>(
+        ew::shape_type{1, 4, 1, 5},
+        ew::stride_type{4, 1, 1, 0});
+
+    CountingAddKernel::reset();
+    array_type const output =
+        ew::ElementwiseExecutor<
+            array_type,
+            double,
+            CountingAddKernel>::transform(lhs, rhs, CountingAddKernel{});
+
+    EXPECT_EQ(output.shape(), (ew::shape_type{2, 4, 3, 5}));
+    EXPECT_EQ(CountingAddKernel::calls(), 24);
 }
 
 // vim: set ff=unix fenc=utf8 nobomb et sw=4 ts=4 sts=4:

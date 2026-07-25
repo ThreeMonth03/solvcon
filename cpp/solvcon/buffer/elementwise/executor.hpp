@@ -175,6 +175,18 @@ void ElementwiseExecutor<Array, T, Kernel>::execute(
                     rhs_data + cursor.offset(2));
                 continue;
             }
+            if (output_stride == 1 &&
+                lhs_stride == 0 &&
+                rhs_stride == 0)
+            {
+                std::fill_n(
+                    output_data + cursor.offset(0),
+                    inner.size(),
+                    kernel(
+                        lhs_data[cursor.offset(1)],
+                        rhs_data[cursor.offset(2)]));
+                continue;
+            }
             ssize_t output_offset = cursor.offset(0);
             ssize_t lhs_offset = cursor.offset(1);
             ssize_t rhs_offset = cursor.offset(2);
