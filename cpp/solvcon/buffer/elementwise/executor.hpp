@@ -9,6 +9,7 @@
 #include <solvcon/buffer/elementwise/plan.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 
 namespace solvcon
@@ -42,11 +43,58 @@ public:
                                kernel_type kernel);
 
 private:
+    struct InnerLoopState
+    {
+        std::array<ssize_t, 3> m_stride;
+        std::array<ssize_t, 3> m_offset;
+    }; /* end struct InnerLoopState */
+
+    static constexpr size_t OUTPUT_INDEX = 0;
+    static constexpr size_t LHS_INDEX = 1;
+    static constexpr size_t RHS_INDEX = 2;
+
     static void execute(ElementwisePlan const & plan,
                         Array & output,
                         Array const & lhs,
                         Array const & rhs,
                         kernel_type kernel);
+    static void execute_inner_strided(
+        ElementwisePlan const & plan,
+        Array & output,
+        Array const & lhs,
+        Array const & rhs,
+        kernel_type kernel);
+    static void normalize_reversed_inner(
+        size_t inner_size,
+        InnerLoopState & state);
+    static bool try_execute_unit_stride_inner(
+        size_t inner_size,
+        value_type * output_data,
+        value_type const * lhs_data,
+        value_type const * rhs_data,
+        InnerLoopState const & state,
+        kernel_type kernel);
+    static bool try_execute_output_contiguous_inner(
+        size_t inner_size,
+        value_type * output_data,
+        value_type const * lhs_data,
+        value_type const * rhs_data,
+        InnerLoopState const & state,
+        kernel_type kernel);
+    static bool try_execute_inplace_inner(
+        size_t inner_size,
+        value_type * output_data,
+        value_type const * lhs_data,
+        value_type const * rhs_data,
+        InnerLoopState const & state,
+        kernel_type kernel);
+    static void execute_generic_inner(
+        size_t inner_size,
+        value_type * output_data,
+        value_type const * lhs_data,
+        value_type const * rhs_data,
+        InnerLoopState const & state,
+        kernel_type kernel);
     static void execute_scalar(ElementwisePlan const & plan,
                                Array & output,
                                Array const & lhs,
@@ -58,6 +106,304 @@ private:
     static bool storage_overlaps(Array const & lhs,
                                  Array const & rhs);
 }; /* end class ElementwiseExecutor */
+
+template <typename Array, typename T, typename Kernel>
+requires ArithmeticKernel<Kernel, T>
+void ElementwiseExecutor<Array, T, Kernel>::normalize_reversed_inner(
+    size_t inner_size,
+    InnerLoopState & state)
+{
+    if (state.m_stride[OUTPUT_INDEX] != -1 ||
+        (state.m_stride[LHS_INDEX] != -1 &&
+         state.m_stride[LHS_INDEX] != 0) ||
+        (state.m_stride[RHS_INDEX] != -1 &&
+         state.m_stride[RHS_INDEX] != 0))
+    {
+        return;
+    }
+
+    ssize_t const shift =
+        static_cast<ssize_t>(inner_size - 1);
+    state.m_offset[OUTPUT_INDEX] -= shift;
+    state.m_stride[OUTPUT_INDEX] = 1;
+    if (state.m_stride[LHS_INDEX] == -1)
+    {
+        state.m_offset[LHS_INDEX] -= shift;
+        state.m_stride[LHS_INDEX] = 1;
+    }
+    if (state.m_stride[RHS_INDEX] == -1)
+    {
+        state.m_offset[RHS_INDEX] -= shift;
+        state.m_stride[RHS_INDEX] = 1;
+    }
+}
+
+template <typename Array, typename T, typename Kernel>
+requires ArithmeticKernel<Kernel, T>
+bool ElementwiseExecutor<Array, T, Kernel>::
+    try_execute_unit_stride_inner(
+        size_t inner_size,
+        value_type * output_data,
+        value_type const * lhs_data,
+        value_type const * rhs_data,
+        InnerLoopState const & state,
+        kernel_type kernel)
+{
+    if (state.m_stride[OUTPUT_INDEX] == 1 &&
+        state.m_stride[LHS_INDEX] == 1 &&
+        state.m_stride[RHS_INDEX] == 1)
+    {
+        kernel_type::contiguous(
+            output_data + state.m_offset[OUTPUT_INDEX],
+            inner_size,
+            lhs_data + state.m_offset[LHS_INDEX],
+            rhs_data + state.m_offset[RHS_INDEX]);
+        return true;
+    }
+    if (state.m_stride[OUTPUT_INDEX] == 1 &&
+        state.m_stride[LHS_INDEX] == 1 &&
+        state.m_stride[RHS_INDEX] == 0)
+    {
+        kernel_type::contiguous_scalar(
+            output_data + state.m_offset[OUTPUT_INDEX],
+            inner_size,
+            lhs_data + state.m_offset[LHS_INDEX],
+            rhs_data[state.m_offset[RHS_INDEX]]);
+        return true;
+    }
+    if (state.m_stride[OUTPUT_INDEX] == 1 &&
+        state.m_stride[LHS_INDEX] == 0 &&
+        state.m_stride[RHS_INDEX] == 1)
+    {
+        kernel_type::contiguous_lhs_scalar(
+            output_data + state.m_offset[OUTPUT_INDEX],
+            inner_size,
+            lhs_data[state.m_offset[LHS_INDEX]],
+            rhs_data + state.m_offset[RHS_INDEX]);
+        return true;
+    }
+    if (state.m_stride[OUTPUT_INDEX] == 1 &&
+        state.m_stride[LHS_INDEX] == 0 &&
+        state.m_stride[RHS_INDEX] == 0)
+    {
+        std::fill_n(
+            output_data + state.m_offset[OUTPUT_INDEX],
+            inner_size,
+            kernel(
+                lhs_data[state.m_offset[LHS_INDEX]],
+                rhs_data[state.m_offset[RHS_INDEX]]));
+        return true;
+    }
+    return false;
+}
+
+template <typename Array, typename T, typename Kernel>
+requires ArithmeticKernel<Kernel, T>
+bool ElementwiseExecutor<Array, T, Kernel>::
+    try_execute_output_contiguous_inner(
+        size_t inner_size,
+        value_type * output_data,
+        value_type const * lhs_data,
+        value_type const * rhs_data,
+        InnerLoopState const & state,
+        kernel_type kernel)
+{
+    if (state.m_stride[OUTPUT_INDEX] != 1)
+    {
+        return false;
+    }
+
+    ssize_t lhs_offset = state.m_offset[LHS_INDEX];
+    ssize_t rhs_offset = state.m_offset[RHS_INDEX];
+    value_type * selected_output =
+        output_data + state.m_offset[OUTPUT_INDEX];
+    if (state.m_stride[RHS_INDEX] == 0)
+    {
+        value_type const rhs_value = rhs_data[rhs_offset];
+        for (size_t index = 0; index < inner_size; ++index)
+        {
+            selected_output[index] =
+                kernel(lhs_data[lhs_offset], rhs_value);
+            lhs_offset += state.m_stride[LHS_INDEX];
+        }
+        return true;
+    }
+    if (state.m_stride[LHS_INDEX] == 0)
+    {
+        value_type const lhs_value = lhs_data[lhs_offset];
+        for (size_t index = 0; index < inner_size; ++index)
+        {
+            selected_output[index] =
+                kernel(lhs_value, rhs_data[rhs_offset]);
+            rhs_offset += state.m_stride[RHS_INDEX];
+        }
+        return true;
+    }
+    if (state.m_stride[LHS_INDEX] == 1)
+    {
+        value_type const * selected_lhs = lhs_data + lhs_offset;
+        for (size_t index = 0; index < inner_size; ++index)
+        {
+            selected_output[index] =
+                kernel(selected_lhs[index], rhs_data[rhs_offset]);
+            rhs_offset += state.m_stride[RHS_INDEX];
+        }
+        return true;
+    }
+    if (state.m_stride[RHS_INDEX] == 1)
+    {
+        value_type const * selected_rhs = rhs_data + rhs_offset;
+        for (size_t index = 0; index < inner_size; ++index)
+        {
+            selected_output[index] =
+                kernel(lhs_data[lhs_offset], selected_rhs[index]);
+            lhs_offset += state.m_stride[LHS_INDEX];
+        }
+        return true;
+    }
+    return false;
+}
+
+template <typename Array, typename T, typename Kernel>
+requires ArithmeticKernel<Kernel, T>
+bool ElementwiseExecutor<Array, T, Kernel>::
+    try_execute_inplace_inner(
+        size_t inner_size,
+        value_type * output_data,
+        value_type const * lhs_data,
+        value_type const * rhs_data,
+        InnerLoopState const & state,
+        kernel_type kernel)
+{
+    if (state.m_stride[RHS_INDEX] == 0 &&
+        output_data == lhs_data &&
+        state.m_offset[OUTPUT_INDEX] ==
+            state.m_offset[LHS_INDEX] &&
+        state.m_stride[OUTPUT_INDEX] ==
+            state.m_stride[LHS_INDEX])
+    {
+        value_type const rhs_value =
+            rhs_data[state.m_offset[RHS_INDEX]];
+        ssize_t output_offset = state.m_offset[OUTPUT_INDEX];
+        for (size_t index = 0; index < inner_size; ++index)
+        {
+            output_data[output_offset] =
+                kernel(output_data[output_offset], rhs_value);
+            output_offset += state.m_stride[OUTPUT_INDEX];
+        }
+        return true;
+    }
+    if (state.m_stride[LHS_INDEX] == 0 &&
+        output_data == rhs_data &&
+        state.m_offset[OUTPUT_INDEX] ==
+            state.m_offset[RHS_INDEX] &&
+        state.m_stride[OUTPUT_INDEX] ==
+            state.m_stride[RHS_INDEX])
+    {
+        value_type const lhs_value =
+            lhs_data[state.m_offset[LHS_INDEX]];
+        ssize_t output_offset = state.m_offset[OUTPUT_INDEX];
+        for (size_t index = 0; index < inner_size; ++index)
+        {
+            output_data[output_offset] =
+                kernel(lhs_value, output_data[output_offset]);
+            output_offset += state.m_stride[OUTPUT_INDEX];
+        }
+        return true;
+    }
+    return false;
+}
+
+template <typename Array, typename T, typename Kernel>
+requires ArithmeticKernel<Kernel, T>
+void ElementwiseExecutor<Array, T, Kernel>::execute_generic_inner(
+    size_t inner_size,
+    value_type * output_data,
+    value_type const * lhs_data,
+    value_type const * rhs_data,
+    InnerLoopState const & state,
+    kernel_type kernel)
+{
+    ssize_t output_offset = state.m_offset[OUTPUT_INDEX];
+    ssize_t lhs_offset = state.m_offset[LHS_INDEX];
+    ssize_t rhs_offset = state.m_offset[RHS_INDEX];
+    for (size_t index = 0; index < inner_size; ++index)
+    {
+        output_data[output_offset] =
+            kernel(lhs_data[lhs_offset], rhs_data[rhs_offset]);
+        output_offset += state.m_stride[OUTPUT_INDEX];
+        lhs_offset += state.m_stride[LHS_INDEX];
+        rhs_offset += state.m_stride[RHS_INDEX];
+    }
+}
+
+template <typename Array, typename T, typename Kernel>
+requires ArithmeticKernel<Kernel, T>
+void ElementwiseExecutor<Array, T, Kernel>::execute_inner_strided(
+    ElementwisePlan const & plan,
+    Array & output,
+    Array const & lhs,
+    Array const & rhs,
+    kernel_type kernel)
+{
+    value_type * output_data = output.logical_data();
+    value_type const * lhs_data = lhs.logical_data();
+    value_type const * rhs_data = rhs.logical_data();
+    small_vector<OperandMapping> const mappings{
+        plan.output(), plan.input(0), plan.input(1)};
+    InnerLoopPlan const inner(
+        plan.domain(), mappings, plan.inner_axis());
+    MappedOffsetCursor cursor(
+        inner.outer(), inner.outer_mappings());
+    for (; cursor; cursor.advance())
+    {
+        InnerLoopState state{
+            {inner.stride(OUTPUT_INDEX),
+             inner.stride(LHS_INDEX),
+             inner.stride(RHS_INDEX)},
+            {cursor.offset(OUTPUT_INDEX),
+             cursor.offset(LHS_INDEX),
+             cursor.offset(RHS_INDEX)}};
+        normalize_reversed_inner(inner.size(), state);
+        if (try_execute_unit_stride_inner(
+                inner.size(),
+                output_data,
+                lhs_data,
+                rhs_data,
+                state,
+                kernel))
+        {
+            continue;
+        }
+        if (try_execute_output_contiguous_inner(
+                inner.size(),
+                output_data,
+                lhs_data,
+                rhs_data,
+                state,
+                kernel))
+        {
+            continue;
+        }
+        if (try_execute_inplace_inner(
+                inner.size(),
+                output_data,
+                lhs_data,
+                rhs_data,
+                state,
+                kernel))
+        {
+            continue;
+        }
+        execute_generic_inner(
+            inner.size(),
+            output_data,
+            lhs_data,
+            rhs_data,
+            state,
+            kernel);
+    }
+}
 
 template <typename Array, typename T, typename Kernel>
 requires ArithmeticKernel<Kernel, T>
@@ -129,194 +475,15 @@ void ElementwiseExecutor<Array, T, Kernel>::execute(
         return;
     }
 
-    small_vector<OperandMapping> const mappings{
-        plan.output(), lhs_mapping, rhs_mapping};
     if (plan.route() == ExecutionRoute::inner_strided)
     {
-        InnerLoopPlan const inner(
-            plan.domain(), mappings, plan.inner_axis());
-        ssize_t const output_stride = inner.stride(0);
-        ssize_t const lhs_stride = inner.stride(1);
-        ssize_t const rhs_stride = inner.stride(2);
-        MappedOffsetCursor cursor(
-            inner.outer(), inner.outer_mappings());
-        for (; cursor; cursor.advance())
-        {
-            ssize_t selected_output_stride = output_stride;
-            ssize_t selected_lhs_stride = lhs_stride;
-            ssize_t selected_rhs_stride = rhs_stride;
-            ssize_t output_offset = cursor.offset(0);
-            ssize_t lhs_offset = cursor.offset(1);
-            ssize_t rhs_offset = cursor.offset(2);
-            if (selected_output_stride == -1 &&
-                (selected_lhs_stride == -1 ||
-                 selected_lhs_stride == 0) &&
-                (selected_rhs_stride == -1 ||
-                 selected_rhs_stride == 0))
-            {
-                ssize_t const shift =
-                    static_cast<ssize_t>(inner.size() - 1);
-                output_offset -= shift;
-                selected_output_stride = 1;
-                if (selected_lhs_stride == -1)
-                {
-                    lhs_offset -= shift;
-                    selected_lhs_stride = 1;
-                }
-                if (selected_rhs_stride == -1)
-                {
-                    rhs_offset -= shift;
-                    selected_rhs_stride = 1;
-                }
-            }
-
-            if (selected_output_stride == 1 &&
-                selected_lhs_stride == 1 &&
-                selected_rhs_stride == 1)
-            {
-                kernel_type::contiguous(
-                    output_data + output_offset,
-                    inner.size(),
-                    lhs_data + lhs_offset,
-                    rhs_data + rhs_offset);
-                continue;
-            }
-            if (selected_output_stride == 1 &&
-                selected_lhs_stride == 1 &&
-                selected_rhs_stride == 0)
-            {
-                kernel_type::contiguous_scalar(
-                    output_data + output_offset,
-                    inner.size(),
-                    lhs_data + lhs_offset,
-                    rhs_data[rhs_offset]);
-                continue;
-            }
-            if (selected_output_stride == 1 &&
-                selected_lhs_stride == 0 &&
-                selected_rhs_stride == 1)
-            {
-                kernel_type::contiguous_lhs_scalar(
-                    output_data + output_offset,
-                    inner.size(),
-                    lhs_data[lhs_offset],
-                    rhs_data + rhs_offset);
-                continue;
-            }
-            if (selected_output_stride == 1 &&
-                selected_lhs_stride == 0 &&
-                selected_rhs_stride == 0)
-            {
-                std::fill_n(
-                    output_data + output_offset,
-                    inner.size(),
-                    kernel(
-                        lhs_data[lhs_offset],
-                        rhs_data[rhs_offset]));
-                continue;
-            }
-            if (selected_output_stride == 1 &&
-                selected_rhs_stride == 0)
-            {
-                value_type * selected_output =
-                    output_data + output_offset;
-                value_type const rhs_value =
-                    rhs_data[rhs_offset];
-                for (size_t index = 0; index < inner.size(); ++index)
-                {
-                    selected_output[index] =
-                        kernel(lhs_data[lhs_offset], rhs_value);
-                    lhs_offset += selected_lhs_stride;
-                }
-                continue;
-            }
-            if (selected_output_stride == 1 &&
-                selected_lhs_stride == 0)
-            {
-                value_type * selected_output =
-                    output_data + output_offset;
-                value_type const lhs_value =
-                    lhs_data[lhs_offset];
-                for (size_t index = 0; index < inner.size(); ++index)
-                {
-                    selected_output[index] =
-                        kernel(lhs_value, rhs_data[rhs_offset]);
-                    rhs_offset += selected_rhs_stride;
-                }
-                continue;
-            }
-            if (selected_output_stride == 1 &&
-                selected_lhs_stride == 1)
-            {
-                value_type * selected_output =
-                    output_data + output_offset;
-                value_type const * selected_lhs =
-                    lhs_data + lhs_offset;
-                for (size_t index = 0; index < inner.size(); ++index)
-                {
-                    selected_output[index] =
-                        kernel(selected_lhs[index], rhs_data[rhs_offset]);
-                    rhs_offset += selected_rhs_stride;
-                }
-                continue;
-            }
-            if (selected_output_stride == 1 &&
-                selected_rhs_stride == 1)
-            {
-                value_type * selected_output =
-                    output_data + output_offset;
-                value_type const * selected_rhs =
-                    rhs_data + rhs_offset;
-                for (size_t index = 0; index < inner.size(); ++index)
-                {
-                    selected_output[index] =
-                        kernel(lhs_data[lhs_offset], selected_rhs[index]);
-                    lhs_offset += selected_lhs_stride;
-                }
-                continue;
-            }
-            if (selected_rhs_stride == 0 &&
-                output_data == lhs_data &&
-                output_offset == lhs_offset &&
-                selected_output_stride == selected_lhs_stride)
-            {
-                value_type const rhs_value =
-                    rhs_data[rhs_offset];
-                for (size_t index = 0; index < inner.size(); ++index)
-                {
-                    output_data[output_offset] =
-                        kernel(output_data[output_offset], rhs_value);
-                    output_offset += selected_output_stride;
-                }
-                continue;
-            }
-            if (selected_lhs_stride == 0 &&
-                output_data == rhs_data &&
-                output_offset == rhs_offset &&
-                selected_output_stride == selected_rhs_stride)
-            {
-                value_type const lhs_value =
-                    lhs_data[lhs_offset];
-                for (size_t index = 0; index < inner.size(); ++index)
-                {
-                    output_data[output_offset] =
-                        kernel(lhs_value, output_data[output_offset]);
-                    output_offset += selected_output_stride;
-                }
-                continue;
-            }
-            for (size_t index = 0; index < inner.size(); ++index)
-            {
-                output_data[output_offset] = kernel(
-                    lhs_data[lhs_offset], rhs_data[rhs_offset]);
-                output_offset += selected_output_stride;
-                lhs_offset += selected_lhs_stride;
-                rhs_offset += selected_rhs_stride;
-            }
-        }
+        execute_inner_strided(
+            plan, output, lhs, rhs, kernel);
         return;
     }
 
+    small_vector<OperandMapping> const mappings{
+        plan.output(), lhs_mapping, rhs_mapping};
     for (MappedOffsetCursor cursor(plan.domain(), mappings);
          cursor;
          cursor.advance())
