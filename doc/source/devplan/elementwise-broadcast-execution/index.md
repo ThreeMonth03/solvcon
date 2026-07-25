@@ -172,38 +172,39 @@ reach a one- or five-millisecond target.  Suspicious extremes were repeated
 with 15 samples, five warmups, and a 20-millisecond target.
 
 The performance catalog contains 340,480 combinations, of which 233,128 are
-valid under NumPy.  Stable timing of every valid Cartesian combination would
-be needlessly expensive, so the performance audit uses these overlapping
-systematic slices:
+valid under NumPy.  The initial broad run covered 33,368 unique cases across
+every topology family and layout.  It exposed a benchmark error: each timed
+planned call also extracted its NumPy view, while the NumPy callable had no
+equivalent work.  The corrected timer measures only the requested operation
+and has a regression test that rejects view extraction inside the timed
+callable.
 
-- every valid size-32 combination across 22 topologies, nine left layouts,
-  ten right layouts including Python scalars, four operations, two dtypes,
-  and both execution modes;
-- all sizes from 1 through 1024 in the catalog for C/C and Python-scalar
-  operands;
-- sizes 8, 128, and 512 with every left layout and then every right layout;
-- every catalog size and layout side for singleton-array broadcasts.
-
-After duplicate case identifiers are removed, these slices contain 33,368
-timed cases.  All reports identify revision `0b403d68`.  Overall, the planned
-path wins 30,429 cases (91.19%).  The median NumPy/planned ratio is 1.62x,
-with p10 at 1.04x and p90 at 2.67x.
+The corrected follow-up targets the previously weak non-broadcast and Python
+scalar families.  It covers every layout at size 32, every left and right
+layout at sizes 8, 128, and 512, and every catalog size from 1 through 1024
+for C operands.  After duplicate identifiers are removed, revision
+`1f7c9e9b` has 4,832 cases and all results match NumPy.
 
 | Topology family | Cases | Wins | Median NumPy / planned |
 | --- | ---: | ---: | ---: |
-| Non-broadcast | 4,160 | 55.87% | 1.13x |
-| Python scalar | 672 | 62.05% | 1.11x |
-| Singleton broadcast | 9,952 | 95.08% | 1.48x |
-| Single-axis broadcast | 9,664 | 98.98% | 1.72x |
-| Outer broadcast | 2,288 | 98.56% | 1.73x |
-| Mixed-rank broadcast | 6,632 | 96.59% | 1.78x |
+| Non-broadcast | 4,160 | 99.16% | 1.98x |
+| Python scalar | 672 | 96.88% | 2.24x |
+| Combined | 4,832 | 98.84% | 1.99x |
 
-The result is not a universal advantage over NumPy.  Small non-broadcast
-arrays expose the prototype's fixed planning and binding cost.  Python
-scalars and some stepped or reversed division cases also lose.  The strongest
-evidence is the broadcast work this prototype targets: every broadcast family
-has a median advantage, and the four array-broadcast families win more than
-95% of their measured cases.
+The original losses had two causes.  The benchmark's extra NumPy-view access
+cost about 0.35 to 0.40 microseconds per planned call.  The executor also
+built a broadcast plan for equal-shape dense arrays and scalar operations.
+Equal-shape contiguous and dense-layout operations now use direct loops.
+Rank-one signed-stride operations avoid a plan, disjoint backing storage is
+rejected before logical-span analysis, and Python scalar overloads are tried
+before array conversion.  A zero-stride scalar inner loop computes once and
+fills the destination.
+
+Of the 56 remaining losses, 48 occur at 512 or 1024 elements.  At those sizes
+the direct kernels are dominated by cache and memory throughput instead of
+planning cost.  A shared AVX2 array-and-scalar prototype was 1.8% slower in
+aggregate over 64 large C-layout cases, so it was removed rather than adding
+an unproven SIMD layer.
 
 ## Out of scope
 
@@ -222,8 +223,8 @@ has a median advantage, and the four array-broadcast families win more than
 - Branch: `codex/prototype-elementwise-broadcast`
 - Correctness catalog: complete
 - Focused tests: complete
-- Performance specialization: complete for layout-selected inner loops and
-  dense singleton broadcasts
+- Performance specialization: complete for layout-selected inner loops,
+  direct equal-shape and scalar loops, and dense singleton broadcasts
 - Commits: split into benchmark, implementation, and documentation concerns
 - CI: pending
 - Documentation preview: blocked locally by missing Doxygen and Sphinx
@@ -241,5 +242,7 @@ has a median advantage, and the four array-broadcast families win more than
    where the planned path beats NumPy.
 5. The user required performance evidence for non-broadcast execution and
    different layouts, not only outer broadcasting.
+6. The user required investigation and optimization of the non-broadcast and
+   Python scalar losses.
 
 <!-- vim: set ft=markdown ff=unix fenc=utf8 et sw=2 ts=2 sts=2 tw=79: -->
