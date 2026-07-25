@@ -86,7 +86,7 @@ logical origin.
 routes:
 
 - `contiguous` for a shared dense traversal;
-- `inner_strided` when the last-axis strides are fixed for each outer
+- `inner_strided` when one axis has fixed strides for each outer
   coordinate;
 - `mapped` for the fully general signed-stride cursor.
 
@@ -95,8 +95,13 @@ dispatch.  A partially overlapping in-place source is snapshotted before
 execution.  Dense layouts may be preserved, while sparse broadcast results
 use compact C-contiguous storage.
 
-The operation kernels own only arithmetic semantics and hot loops.  The fixed
-inner loop recognizes both common scalar sides:
+The inner-axis selector prefers a unit output stride, then a small output
+stride, while also rewarding zero or unit input strides.  This lets
+Fortran-contiguous and permuted destinations use their dense direction
+without making stepped destinations traverse a distant axis.
+
+The operation kernels own only arithmetic semantics and hot loops.  The
+selected inner loop recognizes both common scalar sides:
 
 ```text
 output stride  lhs stride  rhs stride  specialization
@@ -108,6 +113,12 @@ output stride  lhs stride  rhs stride  specialization
 The last route is important for an outer broadcast shaped like `(rows, 1)` op
 `(1, columns)`.  It hoists the left value out of the inner loop and lets the
 compiler optimize a simple contiguous operation.
+
+A mapping is constant when every non-singleton domain axis has zero stride.
+If the other operand already has a dense result layout, out-of-place
+execution preserves that layout and uses a full-domain contiguous scalar
+kernel.  Singleton-axis strides are ignored when recognizing the constant
+mapping.
 
 ## Implementation
 
@@ -154,22 +165,45 @@ result allocation.
 ### Performance evidence
 
 Measurements used WSL2 on x86-64, Python 3.12.7, NumPy 2.3.0, and one thread
-for the common numerical-library environment variables.  Each reported value
-is the median of 15 samples after five warmups.
+for the common numerical-library environment variables.  All runs were
+pinned to the same CPU.  Systematic runs used medians of five or seven samples
+after two or three warmups.  The timer repeated each callable long enough to
+reach a one- or five-millisecond target.  Suspicious extremes were repeated
+with 15 samples, five warmups, and a 20-millisecond target.
 
-For C-contiguous outer broadcasting, add and multiply were measured at sizes
-32, 128, and 512 for `float32` and `float64`.  The planned path was faster
-than NumPy in all 12 cases:
+The performance catalog contains 340,480 combinations, of which 233,128 are
+valid under NumPy.  Stable timing of every valid Cartesian combination would
+be needlessly expensive, so the performance audit uses these overlapping
+systematic slices:
 
-| Size | NumPy / planned range |
-| ---: | ---: |
-| 32 | 1.72x to 1.79x |
-| 128 | 2.61x to 3.21x |
-| 512 | 3.71x to 5.02x |
+- every valid size-32 combination across 22 topologies, nine left layouts,
+  ten right layouts including Python scalars, four operations, two dtypes,
+  and both execution modes;
+- all sizes from 1 through 1024 in the catalog for C/C and Python-scalar
+  operands;
+- sizes 8, 128, and 512 with every left layout and then every right layout;
+- every catalog size and layout side for singleton-array broadcasts.
 
-The best measured case was `float64` multiplication at size 512, where the
-planned path was 5.02x faster than NumPy.  These numbers establish a useful
-specialization, not a claim that the prototype wins for every layout or size.
+After duplicate case identifiers are removed, these slices contain 33,368
+timed cases.  All reports identify revision `0b403d68`.  Overall, the planned
+path wins 30,429 cases (91.19%).  The median NumPy/planned ratio is 1.62x,
+with p10 at 1.04x and p90 at 2.67x.
+
+| Topology family | Cases | Wins | Median NumPy / planned |
+| --- | ---: | ---: | ---: |
+| Non-broadcast | 4,160 | 55.87% | 1.13x |
+| Python scalar | 672 | 62.05% | 1.11x |
+| Singleton broadcast | 9,952 | 95.08% | 1.48x |
+| Single-axis broadcast | 9,664 | 98.98% | 1.72x |
+| Outer broadcast | 2,288 | 98.56% | 1.73x |
+| Mixed-rank broadcast | 6,632 | 96.59% | 1.78x |
+
+The result is not a universal advantage over NumPy.  Small non-broadcast
+arrays expose the prototype's fixed planning and binding cost.  Python
+scalars and some stepped or reversed division cases also lose.  The strongest
+evidence is the broadcast work this prototype targets: every broadcast family
+has a median advantage, and the four array-broadcast families win more than
+95% of their measured cases.
 
 ## Out of scope
 
@@ -188,7 +222,8 @@ specialization, not a claim that the prototype wins for every layout or size.
 - Branch: `codex/prototype-elementwise-broadcast`
 - Correctness catalog: complete
 - Focused tests: complete
-- Performance specialization: complete for contiguous inner broadcast loops
+- Performance specialization: complete for layout-selected inner loops and
+  dense singleton broadcasts
 - Commits: split into benchmark, implementation, and documentation concerns
 - CI: pending
 - Documentation preview: blocked locally by missing Doxygen and Sphinx
@@ -204,5 +239,7 @@ specialization, not a claim that the prototype wins for every layout or size.
    shared layer.
 4. The user approved implementing the architecture and asked for conditions
    where the planned path beats NumPy.
+5. The user required performance evidence for non-broadcast execution and
+   different layouts, not only outer broadcasting.
 
 <!-- vim: set ft=markdown ff=unix fenc=utf8 et sw=2 ts=2 sts=2 tw=79: -->
