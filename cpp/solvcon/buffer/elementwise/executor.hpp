@@ -68,11 +68,51 @@ void ElementwiseExecutor<Array, T, Kernel>::execute(
     Array const & rhs,
     kernel_type kernel)
 {
+    if (plan.domain().empty())
+    {
+        return;
+    }
+
     value_type * output_data = output.logical_data();
     value_type const * lhs_data = lhs.logical_data();
     value_type const * rhs_data = rhs.logical_data();
     OperandMapping const & lhs_mapping = plan.input(0);
     OperandMapping const & rhs_mapping = plan.input(1);
+    bool const output_matches_lhs =
+        std::ranges::equal(
+            plan.output().strides(), lhs_mapping.strides()) &&
+        plan.output().is_dense(plan.domain());
+    bool const output_matches_rhs =
+        std::ranges::equal(
+            plan.output().strides(), rhs_mapping.strides()) &&
+        plan.output().is_dense(plan.domain());
+    bool const lhs_is_constant =
+        lhs_mapping.is_constant(plan.domain());
+    bool const rhs_is_constant =
+        rhs_mapping.is_constant(plan.domain());
+    if (output_matches_lhs && rhs_is_constant)
+    {
+        kernel_type::contiguous_scalar(
+            output_data +
+                plan.output().span(plan.domain()).minimum(),
+            plan.domain().size(),
+            lhs_data +
+                lhs_mapping.span(plan.domain()).minimum(),
+            rhs_data[rhs_mapping.base_offset()]);
+        return;
+    }
+    if (output_matches_rhs && lhs_is_constant)
+    {
+        kernel_type::contiguous_lhs_scalar(
+            output_data +
+                plan.output().span(plan.domain()).minimum(),
+            plan.domain().size(),
+            lhs_data[lhs_mapping.base_offset()],
+            rhs_data +
+                rhs_mapping.span(plan.domain()).minimum());
+        return;
+    }
+
     if (plan.route() == ExecutionRoute::contiguous)
     {
         ssize_t const output_offset =
@@ -93,7 +133,8 @@ void ElementwiseExecutor<Array, T, Kernel>::execute(
         plan.output(), lhs_mapping, rhs_mapping};
     if (plan.route() == ExecutionRoute::inner_strided)
     {
-        InnerLoopPlan const inner(plan.domain(), mappings);
+        InnerLoopPlan const inner(
+            plan.domain(), mappings, plan.inner_axis());
         ssize_t const output_stride = inner.stride(0);
         ssize_t const lhs_stride = inner.stride(1);
         ssize_t const rhs_stride = inner.stride(2);
@@ -184,7 +225,8 @@ void ElementwiseExecutor<Array, T, Kernel>::execute_scalar(
         plan.output(), lhs_mapping};
     if (plan.route() == ExecutionRoute::inner_strided)
     {
-        InnerLoopPlan const inner(plan.domain(), mappings);
+        InnerLoopPlan const inner(
+            plan.domain(), mappings, plan.inner_axis());
         ssize_t const output_stride = inner.stride(0);
         ssize_t const lhs_stride = inner.stride(1);
         OffsetCursor cursor(inner.outer(), inner.outer_mappings());
@@ -222,15 +264,35 @@ Array ElementwiseExecutor<Array, T, Kernel>::transform(
     shape_type const & result_shape = result_domain.shape();
     OperandMapping const lhs_mapping =
         OperandMapping::exact(lhs.stride());
+    OperandMapping const rhs_mapping =
+        OperandMapping::exact(rhs.stride());
+    bool const result_matches_lhs =
+        std::ranges::equal(result_shape, lhs.shape());
+    bool const result_matches_rhs =
+        std::ranges::equal(result_shape, rhs.shape());
     bool const preserve_layout =
-        std::ranges::equal(result_shape, lhs.shape()) &&
-        std::ranges::equal(result_shape, rhs.shape()) &&
+        result_matches_lhs &&
+        result_matches_rhs &&
         std::ranges::equal(lhs.stride(), rhs.stride()) &&
         lhs_mapping.is_dense(result_domain);
-    Array output = preserve_layout
-                       ? allocate_layout<Array>(
-                             result_shape, lhs.stride())
-                       : Array(result_shape);
+    bool const preserve_lhs_layout =
+        result_matches_lhs &&
+        !result_matches_rhs &&
+        rhs.size() == 1 &&
+        lhs_mapping.is_dense(result_domain);
+    bool const preserve_rhs_layout =
+        result_matches_rhs &&
+        !result_matches_lhs &&
+        lhs.size() == 1 &&
+        rhs_mapping.is_dense(result_domain);
+    Array output =
+        preserve_layout || preserve_lhs_layout
+            ? allocate_layout<Array>(
+                  result_shape, lhs.stride())
+        : preserve_rhs_layout
+            ? allocate_layout<Array>(
+                  result_shape, rhs.stride())
+            : Array(result_shape);
     ElementwisePlan const plan =
         ElementwisePlan::make(output, lhs, rhs);
     execute(plan, output, lhs, rhs, kernel);

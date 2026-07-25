@@ -75,6 +75,18 @@ TEST(ElementwisePlan, DenseMappingRejectsOverlappingStride)
             shape, ew::stride_type{-1, 2}));
 }
 
+TEST(ElementwisePlan, ConstantMappingIgnoresSingletonAxes)
+{
+    ew::IterationDomain const domain(ew::shape_type{1, 3, 1});
+
+    EXPECT_TRUE(
+        ew::OperandMapping(ew::stride_type{7, 0, 1})
+            .is_constant(domain));
+    EXPECT_FALSE(
+        ew::OperandMapping(ew::stride_type{7, 1, 1})
+            .is_constant(domain));
+}
+
 TEST(ElementwisePlan, OuterBroadcastSelectsFixedInnerLoop)
 {
     solvcon::SimpleArray<double> lhs(ew::shape_type{5, 1});
@@ -85,8 +97,44 @@ TEST(ElementwisePlan, OuterBroadcastSelectsFixedInnerLoop)
         ew::ElementwisePlan::make(output, lhs, rhs);
 
     EXPECT_EQ(plan.route(), ew::ExecutionRoute::inner_strided);
+    EXPECT_EQ(plan.inner_axis(), 1);
     EXPECT_EQ(plan.input(0).strides(), (ew::stride_type{1, 0}));
     EXPECT_EQ(plan.input(1).strides(), (ew::stride_type{0, 1}));
+}
+
+TEST(ElementwisePlan, InnerAxisFollowsDensePermutedOutput)
+{
+    ew::shape_type const shape{5, 7};
+    ew::stride_type const column_major{1, 5};
+    solvcon::SimpleArray<double> lhs =
+        ew::allocate_layout<solvcon::SimpleArray<double>>(
+            shape, column_major);
+    solvcon::SimpleArray<double> rhs(ew::shape_type{1, 7});
+    solvcon::SimpleArray<double> output =
+        ew::allocate_layout<solvcon::SimpleArray<double>>(
+            shape, column_major);
+
+    ew::ElementwisePlan const plan =
+        ew::ElementwisePlan::make(output, lhs, rhs);
+
+    EXPECT_EQ(plan.route(), ew::ExecutionRoute::inner_strided);
+    EXPECT_EQ(plan.inner_axis(), 0);
+}
+
+TEST(ElementwisePlan, InnerAxisKeepsSmallOutputStride)
+{
+    ew::shape_type const shape{5, 7};
+    ew::stride_type const stepped_inner{14, 2};
+    solvcon::SimpleArray<double> lhs =
+        ew::allocate_layout<solvcon::SimpleArray<double>>(
+            shape, stepped_inner);
+    solvcon::SimpleArray<double> rhs(ew::shape_type{1, 7});
+
+    ew::ElementwisePlan const plan =
+        ew::ElementwisePlan::make(lhs, lhs, rhs);
+
+    EXPECT_EQ(plan.route(), ew::ExecutionRoute::inner_strided);
+    EXPECT_EQ(plan.inner_axis(), 1);
 }
 
 // vim: set ff=unix fenc=utf8 nobomb et sw=4 ts=4 sts=4:

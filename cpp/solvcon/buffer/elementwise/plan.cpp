@@ -123,11 +123,40 @@ bool OperandMapping::is_dense(
     return is_dense(domain.shape(), m_strides);
 }
 
-OperandMapping OperandMapping::without_last_axis() const
+bool OperandMapping::is_constant(
+    IterationDomain const & domain) const
 {
-    return OperandMapping(
-        stride_type(m_strides.begin(), m_strides.end() - 1),
-        m_base_offset);
+    if (domain.rank() != m_strides.size())
+    {
+        return false;
+    }
+    for (size_t axis = 0; axis < domain.rank(); ++axis)
+    {
+        if (domain.shape()[axis] > 1 && m_strides[axis] != 0)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+OperandMapping OperandMapping::without_axis(size_t axis) const
+{
+    if (axis >= m_strides.size())
+    {
+        throw std::out_of_range("mapping axis out of range");
+    }
+    stride_type strides;
+    for (size_t source_axis = 0;
+         source_axis < m_strides.size();
+         ++source_axis)
+    {
+        if (source_axis != axis)
+        {
+            strides.push_back(m_strides[source_axis]);
+        }
+    }
+    return OperandMapping(std::move(strides), m_base_offset);
 }
 
 MappingSpan OperandMapping::span(
@@ -283,18 +312,95 @@ void OffsetCursor::advance()
     m_valid = false;
 }
 
+size_t select_inner_axis(
+    IterationDomain const & domain,
+    OperandMapping const & output,
+    small_vector<OperandMapping> const & inputs)
+{
+    if (domain.rank() == 0)
+    {
+        throw std::invalid_argument(
+            "inner axis requires a positive-rank domain");
+    }
+
+    size_t selected_axis = domain.rank() - 1;
+    size_t selected_score = 0;
+    bool const has_nontrivial_axis = std::ranges::any_of(
+        domain.shape(),
+        [](ssize_t extent)
+        { return extent > 1; });
+    auto const magnitude = [](ssize_t stride)
+    {
+        return stride < 0
+                   ? static_cast<size_t>(-(stride + 1)) + 1
+                   : static_cast<size_t>(stride);
+    };
+    for (size_t axis = 0; axis < domain.rank(); ++axis)
+    {
+        if (has_nontrivial_axis && domain.shape()[axis] <= 1)
+        {
+            continue;
+        }
+        ssize_t const output_stride = output.stride(axis);
+        size_t score = output_stride == 1
+                           ? 1000
+                       : output_stride == -1
+                           ? 800
+                           : 400 / std::clamp(
+                                       magnitude(output_stride),
+                                       size_t{1},
+                                       size_t{400});
+        for (OperandMapping const & input : inputs)
+        {
+            ssize_t const stride = input.stride(axis);
+            if (stride == 0)
+            {
+                score += 200;
+            }
+            else if (stride == 1 || stride == -1)
+            {
+                score += 100;
+            }
+        }
+        if (domain.shape()[axis] > 1)
+        {
+            score += std::min(
+                static_cast<size_t>(domain.shape()[axis]),
+                size_t{99});
+        }
+        if (score > selected_score)
+        {
+            selected_axis = axis;
+            selected_score = score;
+        }
+    }
+    return selected_axis;
+}
+
 InnerLoopPlan::InnerLoopPlan(
     IterationDomain const & domain,
-    small_vector<OperandMapping> const & mappings)
+    small_vector<OperandMapping> const & mappings,
+    size_t inner_axis)
 {
     if (domain.rank() == 0)
     {
         throw std::invalid_argument(
             "inner loop requires a positive-rank domain");
     }
-    size_t const inner_axis = domain.rank() - 1;
-    m_outer = IterationDomain(shape_type(
-        domain.shape().begin(), domain.shape().end() - 1));
+    if (inner_axis >= domain.rank())
+    {
+        throw std::out_of_range("inner loop axis out of range");
+    }
+
+    shape_type outer_shape;
+    for (size_t axis = 0; axis < domain.rank(); ++axis)
+    {
+        if (axis != inner_axis)
+        {
+            outer_shape.push_back(domain.shape()[axis]);
+        }
+    }
+    m_outer = IterationDomain(std::move(outer_shape));
     m_size = static_cast<size_t>(domain.shape()[inner_axis]);
     m_strides = stride_type(mappings.size());
     m_outer_mappings =
@@ -308,7 +414,7 @@ InnerLoopPlan::InnerLoopPlan(
         }
         m_strides[operand] = mappings[operand].stride(inner_axis);
         m_outer_mappings[operand] =
-            mappings[operand].without_last_axis();
+            mappings[operand].without_axis(inner_axis);
     }
 }
 

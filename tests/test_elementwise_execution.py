@@ -82,7 +82,12 @@ class PlannedElementwiseTC(unittest.TestCase):
         source = np.arange(
             3 * 4, dtype="float64"
         ).reshape(3, 4)
-        for destination in (source[:, ::-1], make_stepped(source)):
+        destinations = (
+            source[:, ::-1],
+            make_stepped(source),
+            np.asfortranarray(source),
+        )
+        for destination in destinations:
             with self.subTest(strides=destination.strides):
                 expected_scalar = destination + 2.5
                 sarr = make_array(destination)
@@ -151,6 +156,19 @@ class PlannedElementwiseTC(unittest.TestCase):
         self.assertEqual(
             result.size * result.ndarray.itemsize, result.nbytes
         )
+
+    def test_singleton_broadcast_preserves_dense_expanded_layout(self):
+        values = np.asfortranarray(
+            np.arange(
+                3 * 4, dtype="float64"
+            ).reshape(3, 4)
+        )
+        rhs = np.array([2.0], dtype="float64")
+
+        result = make_array(values)._planned_add(make_array(rhs))
+
+        np.testing.assert_array_equal(result.ndarray, values + rhs)
+        self.assertTrue(result.ndarray.flags.f_contiguous)
 
 
 # vim: set ff=unix fenc=utf8 et sw=4 ts=4 sts=4:

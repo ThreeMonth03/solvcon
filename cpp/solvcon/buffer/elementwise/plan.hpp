@@ -77,7 +77,8 @@ public:
     MappingSpan span(IterationDomain const & domain) const;
     bool is_row_major(IterationDomain const & domain) const;
     bool is_dense(IterationDomain const & domain) const;
-    OperandMapping without_last_axis() const;
+    bool is_constant(IterationDomain const & domain) const;
+    OperandMapping without_axis(size_t axis) const;
 
     static MappingSpan span(shape_type const & shape,
                             stride_type const & strides,
@@ -120,7 +121,8 @@ class InnerLoopPlan
 {
 public:
     InnerLoopPlan(IterationDomain const & domain,
-                  small_vector<OperandMapping> const & mappings);
+                  small_vector<OperandMapping> const & mappings,
+                  size_t inner_axis);
 
     IterationDomain const & outer() const noexcept { return m_outer; }
     size_t size() const noexcept { return m_size; }
@@ -147,6 +149,11 @@ enum class ExecutionRoute : uint8_t
     mapped,
 }; /* end enum class ExecutionRoute */
 
+size_t select_inner_axis(
+    IterationDomain const & domain,
+    OperandMapping const & output,
+    small_vector<OperandMapping> const & inputs);
+
 class ElementwisePlan
 {
 public:
@@ -157,6 +164,7 @@ public:
         return m_inputs[index];
     }
     ExecutionRoute route() const noexcept { return m_route; }
+    size_t inner_axis() const noexcept { return m_inner_axis; }
 
     template <typename... Inputs>
     static shape_type broadcast_shape(Inputs const &... inputs);
@@ -174,6 +182,7 @@ private:
     OperandMapping m_output;
     small_vector<OperandMapping> m_inputs;
     ExecutionRoute m_route = ExecutionRoute::mapped;
+    size_t m_inner_axis = 0;
 }; /* end class ElementwisePlan */
 
 template <typename... Inputs>
@@ -204,6 +213,11 @@ ElementwisePlan ElementwisePlan::make(
     plan.m_inputs = small_vector<OperandMapping>{
         OperandMapping::broadcast(
             inputs.shape(), inputs.stride(), domain)...};
+    if (domain.rank() != 0)
+    {
+        plan.m_inner_axis = select_inner_axis(
+            domain, plan.m_output, plan.m_inputs);
+    }
 
     bool row_major = plan.m_output.is_row_major(domain);
     bool common_dense_layout = plan.m_output.is_dense(domain);
@@ -242,6 +256,11 @@ ElementwisePlan ElementwisePlan::make_scalar(
     plan.m_inputs = small_vector<OperandMapping>{
         OperandMapping::broadcast(
             input.shape(), input.stride(), plan.m_domain)};
+    if (plan.m_domain.rank() != 0)
+    {
+        plan.m_inner_axis = select_inner_axis(
+            plan.m_domain, plan.m_output, plan.m_inputs);
+    }
     bool const row_major =
         plan.m_output.is_row_major(plan.m_domain) &&
         plan.m_inputs[0].is_row_major(plan.m_domain);
