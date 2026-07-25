@@ -262,4 +262,36 @@ TEST(ElementwiseExecutor, PreservesDenseFullShapeLayoutForBroadcast)
     EXPECT_EQ(CountingAddKernel::calls(), 15);
 }
 
+TEST(ElementwiseExecutor, UpdatesStridedAliasWithConstantBroadcast)
+{
+    using array_type = solvcon::SimpleArray<double>;
+    array_type destination = ew::allocate_layout<array_type>(
+        ew::shape_type{3, 5}, ew::stride_type{10, 2});
+    array_type rhs(ew::shape_type{1});
+    rhs.fill(2.0);
+    for (ssize_t row = 0; row < 3; ++row)
+    {
+        for (ssize_t column = 0; column < 5; ++column)
+        {
+            destination.at(ew::shape_type{row, column}) = 1.0;
+        }
+    }
+
+    CountingAddKernel::reset();
+    ew::ElementwiseExecutor<
+        array_type,
+        double,
+        CountingAddKernel>::transform_into(destination, rhs, CountingAddKernel{});
+
+    for (ssize_t row = 0; row < 3; ++row)
+    {
+        for (ssize_t column = 0; column < 5; ++column)
+        {
+            EXPECT_DOUBLE_EQ(
+                destination.at(ew::shape_type{row, column}), 3.0);
+        }
+    }
+    EXPECT_EQ(CountingAddKernel::calls(), 15);
+}
+
 // vim: set ff=unix fenc=utf8 nobomb et sw=4 ts=4 sts=4:

@@ -275,6 +275,36 @@ void ElementwiseExecutor<Array, T, Kernel>::execute(
                 }
                 continue;
             }
+            if (selected_rhs_stride == 0 &&
+                output_data == lhs_data &&
+                output_offset == lhs_offset &&
+                selected_output_stride == selected_lhs_stride)
+            {
+                value_type const rhs_value =
+                    rhs_data[rhs_offset];
+                for (size_t index = 0; index < inner.size(); ++index)
+                {
+                    output_data[output_offset] =
+                        kernel(output_data[output_offset], rhs_value);
+                    output_offset += selected_output_stride;
+                }
+                continue;
+            }
+            if (selected_lhs_stride == 0 &&
+                output_data == rhs_data &&
+                output_offset == rhs_offset &&
+                selected_output_stride == selected_rhs_stride)
+            {
+                value_type const lhs_value =
+                    lhs_data[lhs_offset];
+                for (size_t index = 0; index < inner.size(); ++index)
+                {
+                    output_data[output_offset] =
+                        kernel(lhs_value, output_data[output_offset]);
+                    output_offset += selected_output_stride;
+                }
+                continue;
+            }
             for (size_t index = 0; index < inner.size(); ++index)
             {
                 output_data[output_offset] = kernel(
