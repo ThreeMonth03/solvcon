@@ -2,6 +2,7 @@
 # BSD 3-Clause License, see COPYING
 
 import functools
+import itertools
 import numpy as np
 import solvcon
 
@@ -60,6 +61,19 @@ def make_layout_cases(lhs, rhs):
         ("non_contiguous",
          np.flip(lhs, axis=1),
          np.flip(rhs, axis=0)),
+    )
+
+
+def make_batch_layouts(data):
+    if data.shape[0] == 1:
+        return (("c_contiguous", data),)
+
+    reversed_storage = np.ascontiguousarray(
+        np.flip(data, axis=0), dtype=data.dtype.name)
+    return (
+        ("c_contiguous", data),
+        ("negative_batch_stride",
+         np.flip(reversed_storage, axis=0)),
     )
 
 
@@ -123,11 +137,56 @@ def profile_matmul_operation(dtype, shapes, it=10):
             print()
 
 
+def profile_batched_matmul_operation(dtype, batches, side=32, it=10):
+    for batch in batches:
+        lhs = make_data(dtype, (batch, side, side))
+        rhs = make_data(dtype, (batch, side, side))
+        layouts = itertools.product(
+            make_batch_layouts(lhs),
+            make_batch_layouts(rhs),
+        )
+        for (lhs_layout, case_lhs), (rhs_layout, case_rhs) in layouts:
+            lhs_sa = make_container(case_lhs)
+            rhs_sa = make_container(case_rhs)
+            solvcon.call_profiler.reset()
+            for _ in range(it):
+                profile_matmul_np(case_lhs, case_rhs)
+                profile_matmul_planned_sa(lhs_sa, rhs_sa)
+
+            result = solvcon.call_profiler.result()["children"]
+            timings = {}
+            for item in result:
+                name = item["name"].replace("profile_matmul_", "")
+                timings[name] = item["total_time"] / item["count"]
+
+            print(f"## Equal batches: `{lhs_layout} @ {rhs_layout}` "
+                  f"dtype: `{np.dtype(dtype)}`\n")
+            print(f"- lhs shape: `{case_lhs.shape}`, element strides: "
+                  f"`{element_strides(case_lhs)}`")
+            print(f"- rhs shape: `{case_rhs.shape}`, element strides: "
+                  f"`{element_strides(case_rhs)}`\n")
+
+            print_profile_row("func", "per call (ms)", "cmp to np")
+            print_profile_row("-" * 20, "-" * 15, "-" * 15)
+            npbase = timings["np"]
+            for key in ("np", "planned_sa"):
+                value = timings[key]
+                print_profile_row(
+                    f"{key:8s}", f"{value:.3E}",
+                    f"{value / npbase:.3f}")
+            print()
+
+
 def main():
     shapes = [4, 16, 64, 256, 1024]
 
     for dtype in (np.float32, np.float64):
         profile_matmul_operation(dtype, shapes)
+
+    batches = (1, 4, 16, 64)
+
+    for dtype in (np.float32, np.float64):
+        profile_batched_matmul_operation(dtype, batches)
 
     shapes = [9, 27, 81, 243, 729]
 

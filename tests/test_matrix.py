@@ -61,6 +61,27 @@ class MatmulTestBase(sc.testing.TestBase):
     """Tests for matrix-matrix multiplication"""
 
     @staticmethod
+    def make_batch_layouts(data):
+        layouts = [('c_contiguous', data)]
+        for axis in range(data.ndim - 2):
+            reversed_storage = np.ascontiguousarray(
+                np.flip(data, axis=axis), dtype=data.dtype.name)
+            layouts.append((
+                f'negative_batch_axis_{axis}',
+                np.flip(reversed_storage, axis=axis),
+            ))
+
+            storage_shape = list(data.shape)
+            storage_shape[axis] *= 2
+            storage = np.empty(storage_shape, dtype=data.dtype.name)
+            selection = [slice(None)] * data.ndim
+            selection[axis] = slice(None, None, 2)
+            step_two = storage[tuple(selection)]
+            step_two[...] = data
+            layouts.append((f'step_two_batch_axis_{axis}', step_two))
+        return tuple(layouts)
+
+    @staticmethod
     def make_matrix_layouts(data, stride_axis):
         f_contiguous = np.array(
             data, dtype=data.dtype.name, order='F', copy=True)
@@ -369,12 +390,37 @@ class MatmulTestBase(sc.testing.TestBase):
             with self.subTest(lhs=lhs_case, rhs=rhs_case):
                 self.assert_matmul_planned(lhs, rhs, expected)
 
+    def test_equal_batch_layout_combinations(self):
+        """Equal matrix batches support runtime-rank strided traversal."""
+        dtype = np.dtype(self.dtype).name
+        shapes = (
+            ((3, 3, 4), (3, 4, 2)),
+            ((2, 3, 3, 4), (2, 3, 4, 2)),
+        )
+        for lhs_shape, rhs_shape in shapes:
+            lhs_data = np.arange(
+                np.prod(lhs_shape), dtype=dtype).reshape(lhs_shape)
+            rhs_data = np.arange(
+                np.prod(rhs_shape), dtype=dtype).reshape(rhs_shape)
+            lhs_layouts = self.make_batch_layouts(lhs_data)
+            rhs_layouts = self.make_batch_layouts(rhs_data)
+            layouts = itertools.product(lhs_layouts, rhs_layouts)
+            for (lhs_case, case_lhs), (rhs_case, case_rhs) in layouts:
+                lhs = self.SimpleArray(array=case_lhs)
+                rhs = self.SimpleArray(array=case_rhs)
+                expected = np.matmul(case_lhs, case_rhs)
+
+                with self.subTest(
+                        shape=lhs_shape, lhs=lhs_case, rhs=rhs_case):
+                    self.assert_matmul_planned(lhs, rhs, expected)
+
     def test_empty_matrix_dimensions(self):
         """Matrix multiplication preserves empty output and inner axes."""
         dtype = np.dtype(self.dtype).name
         shapes = (((0, 4), (4, 2)),
                   ((3, 0), (0, 2)),
-                  ((3, 4), (4, 0)))
+                  ((3, 4), (4, 0)),
+                  ((0, 3, 4), (0, 4, 2)))
         for lhs_shape, rhs_shape in shapes:
             lhs_data = np.zeros(lhs_shape, dtype=dtype)
             rhs_data = np.zeros(rhs_shape, dtype=dtype)
@@ -384,6 +430,19 @@ class MatmulTestBase(sc.testing.TestBase):
 
             with self.subTest(lhs=lhs_shape, rhs=rhs_shape):
                 self.assert_matmul_planned(lhs, rhs, expected)
+
+    def test_batch_shape_mismatch_error(self):
+        """Matrix multiplication reports incompatible batch shapes."""
+        dtype = np.dtype(self.dtype).name
+        lhs = self.SimpleArray(array=np.empty((2, 3, 4), dtype=dtype))
+        rhs = self.SimpleArray(array=np.empty((3, 4, 2), dtype=dtype))
+
+        with self.assertRaisesRegex(
+            ValueError,
+            r"SimpleArray::matmul_planned\(\): batch shape mismatch: "
+            r"this=\(2,3,4\) other=\(3,4,2\)"
+        ):
+            lhs.matmul_planned(rhs)
 
     def test_wrong_shape_error(self):
         """Test error handling for wrong shapes"""
