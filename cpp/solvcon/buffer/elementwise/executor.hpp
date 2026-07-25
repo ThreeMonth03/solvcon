@@ -406,12 +406,10 @@ Array ElementwiseExecutor<Array, T, Kernel>::transform(
     bool const preserve_lhs_layout =
         result_matches_lhs &&
         !result_matches_rhs &&
-        rhs.size() == 1 &&
         lhs_mapping.is_dense(result_domain);
     bool const preserve_rhs_layout =
         result_matches_rhs &&
         !result_matches_lhs &&
-        lhs.size() == 1 &&
         rhs_mapping.is_dense(result_domain);
     Array output =
         preserve_layout || preserve_lhs_layout

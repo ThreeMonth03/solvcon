@@ -243,4 +243,23 @@ TEST(ElementwiseExecutor, NormalizesReversedInnerLoop)
     EXPECT_EQ(CountingAddKernel::contiguous_scalar_calls(), 3);
 }
 
+TEST(ElementwiseExecutor, PreservesDenseFullShapeLayoutForBroadcast)
+{
+    using array_type = solvcon::SimpleArray<double>;
+    array_type lhs = ew::allocate_layout<array_type>(
+        ew::shape_type{3, 5}, ew::stride_type{1, 3});
+    array_type rhs(ew::shape_type{3, 1});
+    lhs.fill(1.0);
+    rhs.fill(2.0);
+
+    CountingAddKernel::reset();
+    array_type const result = ew::ElementwiseExecutor<
+        array_type,
+        double,
+        CountingAddKernel>::transform(lhs, rhs, CountingAddKernel{});
+
+    EXPECT_EQ(result.stride(), lhs.stride());
+    EXPECT_EQ(CountingAddKernel::calls(), 15);
+}
+
 // vim: set ff=unix fenc=utf8 nobomb et sw=4 ts=4 sts=4:
