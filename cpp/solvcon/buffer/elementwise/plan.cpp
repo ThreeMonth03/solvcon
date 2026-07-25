@@ -111,14 +111,22 @@ size_t select_inner_axis(
             continue;
         }
         ssize_t const output_stride = output.stride(axis);
-        size_t score = output_stride == 1
-                           ? 1000
-                       : output_stride == -1
-                           ? 800
-                           : 400 / std::clamp(
-                                       magnitude(output_stride),
-                                       size_t{1},
-                                       size_t{400});
+        size_t score = 0;
+        if (output_stride == 1)
+        {
+            score = 1000;
+        }
+        else if (output_stride == -1)
+        {
+            score = 800;
+        }
+        else
+        {
+            score = 400 / std::clamp(
+                              magnitude(output_stride),
+                              size_t{1},
+                              size_t{400});
+        }
         for (OperandMapping const & input : inputs)
         {
             ssize_t const stride = input.stride(axis);

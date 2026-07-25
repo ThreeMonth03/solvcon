@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cstdint>
 
 namespace solvcon
@@ -122,7 +123,7 @@ void ElementwiseExecutor<Array, T, Kernel>::normalize_reversed_inner(
         return;
     }
 
-    ssize_t const shift =
+    auto const shift =
         static_cast<ssize_t>(inner_size - 1);
     state.m_offset[OUTPUT_INDEX] -= shift;
     state.m_stride[OUTPUT_INDEX] = 1;
@@ -536,7 +537,7 @@ void ElementwiseExecutor<Array, T, Kernel>::execute_scalar(
                 (selected_lhs_stride == -1 ||
                  selected_lhs_stride == 0))
             {
-                ssize_t const shift =
+                auto const shift =
                     static_cast<ssize_t>(inner.size() - 1);
                 output_offset -= shift;
                 selected_output_stride = 1;
@@ -614,7 +615,7 @@ Array ElementwiseExecutor<Array, T, Kernel>::transform(
         OperandMapping const mapping(lhs.stride());
         if (mapping.is_dense(domain))
         {
-            Array output =
+            auto output =
                 allocate_layout<Array>(lhs.shape(), lhs.stride());
             ssize_t const offset = mapping.span(domain).minimum();
             kernel_type::contiguous(
@@ -668,14 +669,20 @@ Array ElementwiseExecutor<Array, T, Kernel>::transform(
         result_matches_rhs &&
         !result_matches_lhs &&
         rhs_mapping.is_dense(result_domain);
-    Array output =
-        preserve_layout || preserve_lhs_layout
-            ? allocate_layout<Array>(
-                  result_shape, lhs.stride())
-        : preserve_rhs_layout
-            ? allocate_layout<Array>(
-                  result_shape, rhs.stride())
-            : Array(result_shape);
+    auto output = [&]() -> Array
+    {
+        if (preserve_layout || preserve_lhs_layout)
+        {
+            return allocate_layout<Array>(
+                result_shape, lhs.stride());
+        }
+        if (preserve_rhs_layout)
+        {
+            return allocate_layout<Array>(
+                result_shape, rhs.stride());
+        }
+        return Array(result_shape);
+    }();
     ElementwisePlan const plan =
         ElementwisePlan::make(output, lhs, rhs);
     execute(plan, output, lhs, rhs, kernel);
@@ -702,7 +709,7 @@ Array ElementwiseExecutor<Array, T, Kernel>::transform(
     OperandMapping const mapping(lhs.stride());
     if (mapping.is_dense(domain))
     {
-        Array output =
+        auto output =
             allocate_layout<Array>(lhs.shape(), lhs.stride());
         ssize_t const offset = mapping.span(domain).minimum();
         kernel_type::contiguous_scalar(
@@ -752,13 +759,13 @@ bool ElementwiseExecutor<Array, T, Kernel>::storage_overlaps(
         return false;
     }
 
-    std::uintptr_t const lhs_storage_begin =
-        reinterpret_cast<std::uintptr_t>(lhs.data());
-    std::uintptr_t const lhs_storage_end =
+    auto const lhs_storage_begin =
+        std::bit_cast<std::uintptr_t>(lhs.data());
+    auto const lhs_storage_end =
         lhs_storage_begin + lhs.buffer().nbytes();
-    std::uintptr_t const rhs_storage_begin =
-        reinterpret_cast<std::uintptr_t>(rhs.data());
-    std::uintptr_t const rhs_storage_end =
+    auto const rhs_storage_begin =
+        std::bit_cast<std::uintptr_t>(rhs.data());
+    auto const rhs_storage_end =
         rhs_storage_begin + rhs.buffer().nbytes();
     if (lhs_storage_begin >= rhs_storage_end ||
         rhs_storage_begin >= lhs_storage_end)
@@ -770,17 +777,17 @@ bool ElementwiseExecutor<Array, T, Kernel>::storage_overlaps(
         OperandMapping::span(lhs.shape(), lhs.stride());
     MappingSpan const rhs_span =
         OperandMapping::span(rhs.shape(), rhs.stride());
-    std::uintptr_t const lhs_begin =
-        reinterpret_cast<std::uintptr_t>(
+    auto const lhs_begin =
+        std::bit_cast<std::uintptr_t>(
             lhs.logical_data() + lhs_span.minimum());
-    std::uintptr_t const lhs_end =
-        reinterpret_cast<std::uintptr_t>(
+    auto const lhs_end =
+        std::bit_cast<std::uintptr_t>(
             lhs.logical_data() + lhs_span.maximum() + 1);
-    std::uintptr_t const rhs_begin =
-        reinterpret_cast<std::uintptr_t>(
+    auto const rhs_begin =
+        std::bit_cast<std::uintptr_t>(
             rhs.logical_data() + rhs_span.minimum());
-    std::uintptr_t const rhs_end =
-        reinterpret_cast<std::uintptr_t>(
+    auto const rhs_end =
+        std::bit_cast<std::uintptr_t>(
             rhs.logical_data() + rhs_span.maximum() + 1);
     return lhs_begin < rhs_end && rhs_begin < lhs_end;
 }
