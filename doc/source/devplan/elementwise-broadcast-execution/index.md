@@ -143,9 +143,11 @@ The prototype adds:
 - `plan.hpp` and `plan.cpp` for broadcast mapping, inner-axis selection, and
   route selection;
 - `kernel.hpp` for operation-specific scalar, vector, and broadcast loops;
-- `executor.hpp` for allocation, alias safety, and dispatch;
+- `executor.hpp` for output allocation, alias safety, reused outputs, and
+  dispatch;
 - `SimpleArrayElementwise.hpp` for the operation-family facade;
-- private pybind11 methods for side-by-side measurement;
+- `wrap_SimpleArray_elementwise.hpp` for one-pass Python operand dispatch;
+- private pybind11 methods for normal and reused-output measurement;
 - focused Python and no-Python C++ tests;
 - catalog generation, execution, shard merging, and report rendering tools.
 
@@ -201,17 +203,36 @@ layouts.  After duplicate identifiers are removed, revision `bb0af292` has
 | Mixed-rank broadcast | 6,632 | 98.94% | 2.47x |
 | All cases | 33,368 | 98.62% | 2.38x |
 
+The first Apple M1 report at revision `a42d5049` had a 0.89x median over the
+same 33,368 case identifiers.  Paired cases separated the fixed cost from
+the kernel: normal planned output had a 0.842x median while in-place planned
+execution had a 1.024x median.  The loss was concentrated below 4,096 result
+elements, while results with at least 65,536 elements had a 1.234x median.
+The reused-output diagnostic now records `numpy_to` and `planned_to` beside
+the normal `numpy` and `planned` timings, so the next macOS run can test the
+allocation hypothesis directly across the complete layout and broadcast
+matrix.
+
 The original losses had two causes.  The benchmark's extra NumPy-view access
 cost about 0.35 to 0.40 microseconds per planned call.  The executor also
 built a broadcast plan for equal-shape dense arrays and scalar operations.
 Equal-shape contiguous and dense-layout operations now use direct loops.
 Rank-one signed-stride operations avoid a plan, disjoint backing storage is
-rejected before logical-span analysis, and Python scalar overloads are tried
-before array conversion.  A zero-stride scalar inner loop computes once and
-fills the destination.  Reversible negative inner loops use the contiguous
-kernels, dense full-shape operands keep their layout during broadcasting,
-contiguous outputs specialize the remaining strided input, and exact
-in-place aliases reuse one offset.
+rejected before logical-span analysis, and one Python binding dispatches
+array and scalar operands without pybind11 overload retries.  A zero-stride
+scalar inner loop computes once and fills the destination.  Reversible
+negative inner loops use the contiguous kernels, dense full-shape operands
+keep their layout during broadcasting, contiguous outputs specialize the
+remaining strided input, and exact in-place aliases reuse one offset.
+
+A 48-case x86-64 A/B run covered add, subtract, multiply, and divide for
+float32 and float64, sizes 1, 32, and 1,024, and both equal-shape and Python
+scalar operands.  The single-dispatch binding improved equal-shape medians by
+1.21x to 1.30x.  Small float32 scalar medians improved by 1.68x to 1.84x,
+and small float64 scalar medians improved by 1.03x.  AArch64 also treats NEON
+as a compile-time architectural capability, removing one runtime feature
+query from each contiguous kernel call.  Its effect remains to be measured
+on macOS.
 
 The broad sweep deliberately uses a one-millisecond timing target so tens of
 thousands of cases remain practical.  Its tail is sensitive to scheduling.
@@ -250,17 +271,21 @@ may optionally prefix each command with `taskset -c 2`; macOS should run them
 as written.
 
 ```bash
-python3 profiling/profile_elementwise_broadcast.py --catalog performance --size 32 --implementation planned --timing matched --record all --samples 5 --warmup 2 --target-ms 1 --progress-every 5000 --fail-on-benchmark-error --output /tmp/elementwise-layout.json
-python3 profiling/profile_elementwise_broadcast.py --catalog performance --lhs-layout c --rhs-layout c --rhs-layout scalar --implementation planned --timing matched --record all --samples 5 --warmup 2 --target-ms 1 --progress-every 5000 --fail-on-benchmark-error --output /tmp/elementwise-scaling-cc.json
-python3 profiling/profile_elementwise_broadcast.py --catalog performance --rhs-layout c --rhs-layout scalar --size 8 --size 128 --size 512 --implementation planned --timing matched --record all --samples 5 --warmup 2 --target-ms 1 --progress-every 5000 --fail-on-benchmark-error --output /tmp/elementwise-scaling-lhs.json
-python3 profiling/profile_elementwise_broadcast.py --catalog performance --lhs-layout c --size 8 --size 128 --size 512 --implementation planned --timing matched --record all --samples 5 --warmup 2 --target-ms 1 --progress-every 5000 --fail-on-benchmark-error --output /tmp/elementwise-scaling-rhs.json
-python3 profiling/profile_elementwise_broadcast.py --catalog performance --topology lhs-singleton-array --topology all-singleton-lhs --lhs-layout c --implementation planned --timing matched --record all --samples 5 --warmup 2 --target-ms 1 --progress-every 5000 --fail-on-benchmark-error --output /tmp/elementwise-singleton-lhs.json
-python3 profiling/profile_elementwise_broadcast.py --catalog performance --topology rhs-singleton-array --topology all-singleton-rhs --rhs-layout c --implementation planned --timing matched --record all --samples 5 --warmup 2 --target-ms 1 --progress-every 5000 --fail-on-benchmark-error --output /tmp/elementwise-singleton-rhs.json
+python3 profiling/profile_elementwise_broadcast.py --catalog performance --size 32 --implementation planned --timing matched --preallocated-output --record all --samples 5 --warmup 2 --target-ms 1 --progress-every 5000 --fail-on-benchmark-error --output /tmp/elementwise-layout.json
+python3 profiling/profile_elementwise_broadcast.py --catalog performance --lhs-layout c --rhs-layout c --rhs-layout scalar --implementation planned --timing matched --preallocated-output --record all --samples 5 --warmup 2 --target-ms 1 --progress-every 5000 --fail-on-benchmark-error --output /tmp/elementwise-scaling-cc.json
+python3 profiling/profile_elementwise_broadcast.py --catalog performance --rhs-layout c --rhs-layout scalar --size 8 --size 128 --size 512 --implementation planned --timing matched --preallocated-output --record all --samples 5 --warmup 2 --target-ms 1 --progress-every 5000 --fail-on-benchmark-error --output /tmp/elementwise-scaling-lhs.json
+python3 profiling/profile_elementwise_broadcast.py --catalog performance --lhs-layout c --size 8 --size 128 --size 512 --implementation planned --timing matched --preallocated-output --record all --samples 5 --warmup 2 --target-ms 1 --progress-every 5000 --fail-on-benchmark-error --output /tmp/elementwise-scaling-rhs.json
+python3 profiling/profile_elementwise_broadcast.py --catalog performance --topology lhs-singleton-array --topology all-singleton-lhs --lhs-layout c --implementation planned --timing matched --preallocated-output --record all --samples 5 --warmup 2 --target-ms 1 --progress-every 5000 --fail-on-benchmark-error --output /tmp/elementwise-singleton-lhs.json
+python3 profiling/profile_elementwise_broadcast.py --catalog performance --topology rhs-singleton-array --topology all-singleton-rhs --rhs-layout c --implementation planned --timing matched --preallocated-output --record all --samples 5 --warmup 2 --target-ms 1 --progress-every 5000 --fail-on-benchmark-error --output /tmp/elementwise-singleton-rhs.json
 ```
 
-Keep all six JSON files.  Each records the git revision, Python and NumPy
-versions, platform, thread variables, case specification, correctness status,
-and raw timing samples.
+Keep all six JSON files.  Each records the git revision, dirty-worktree state,
+Python and NumPy versions, platform, thread variables, case specification,
+correctness status, and raw timing samples.  Compare `numpy / planned` for the
+normal API and `numpy_to / planned_to` for reused output.  If only the normal
+API loses, the remaining gap is output allocation or return-object
+construction.  If both lose for the same case families, profile the selected
+executor route and kernel before changing allocation.
 
 ## Out of scope
 
@@ -277,12 +302,14 @@ and raw timing samples.
 
 - Branch: `codex/prototype-elementwise-broadcast`
 - Correctness catalog: complete
-- C++ tests: 241 passed
-- Python tests: 1,422 passed, 364 skipped, and 3 expected failures
+- C++ tests: 242 passed
+- Python tests: 1,426 passed, 364 skipped, and 3 expected failures
 - Performance specialization: complete for layout-selected inner loops,
   direct equal-shape and scalar loops, signed contiguous traversal, strided
-  inputs, dense broadcast layouts, and exact aliases
-- Benchmarked implementation revision: `cb577c80`
+  inputs, dense broadcast layouts, exact aliases, single Python operand
+  dispatch, and AArch64 feature resolution
+- Last clean broad benchmark revision: `bb0af292`
+- Reused-output macOS benchmark: pending
 - Commits: split into benchmark, implementation, and documentation concerns
 - CI: pending
 - Documentation preview: blocked locally because Doxygen is not installed
@@ -307,5 +334,7 @@ and raw timing samples.
    and prepare a draft pull request with reproduction instructions.
 8. The user plans to run the same six performance reports on a MacBook Air
    after the draft is ready.
+9. The user asked for a clean implementation and a profiling SOP that can be
+   handed to Codex on macOS.
 
 <!-- vim: set ft=markdown ff=unix fenc=utf8 et sw=2 ts=2 sts=2 tw=79: -->
