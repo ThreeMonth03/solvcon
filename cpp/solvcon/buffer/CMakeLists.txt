@@ -31,6 +31,7 @@ set(SOLVCON_BUFFER_PYMODHEADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/pymod/array_common.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/pymod/buffer_pymod.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/pymod/wrap_SimpleArray.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/pymod/wrap_SimpleArray_elementwise.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/pymod/TypeBroadcast.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/pymod/SimpleArrayCaster.hpp
     CACHE FILEPATH "" FORCE)

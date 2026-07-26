@@ -9,6 +9,7 @@
 
 #include <solvcon/buffer/elementwise/SimpleArrayElementwise.hpp>
 #include <solvcon/buffer/pymod/array_common.hpp>
+#include <solvcon/buffer/pymod/wrap_SimpleArray_elementwise.hpp>
 
 #include <cstdint>
 
@@ -513,98 +514,10 @@ class SOLVCON_PYTHON_WRAPPER_VISIBILITY WrapSimpleArray
 
     wrapper_type & wrap_elementwise()
     {
-        (*this)
-            .def(
-                "_planned_add",
-                pybind11::overload_cast<
-                    wrapped_type const &,
-                    value_type>(&elementwise_type::planned_add))
-            .def(
-                "_planned_add",
-                pybind11::overload_cast<
-                    wrapped_type const &,
-                    wrapped_type const &>(
-                    &elementwise_type::planned_add))
-            .def(
-                "_planned_sub",
-                pybind11::overload_cast<
-                    wrapped_type const &,
-                    value_type>(&elementwise_type::planned_sub))
-            .def(
-                "_planned_sub",
-                pybind11::overload_cast<
-                    wrapped_type const &,
-                    wrapped_type const &>(
-                    &elementwise_type::planned_sub))
-            .def(
-                "_planned_mul",
-                pybind11::overload_cast<
-                    wrapped_type const &,
-                    value_type>(&elementwise_type::planned_mul))
-            .def(
-                "_planned_mul",
-                pybind11::overload_cast<
-                    wrapped_type const &,
-                    wrapped_type const &>(
-                    &elementwise_type::planned_mul))
-            .def(
-                "_planned_div",
-                pybind11::overload_cast<
-                    wrapped_type const &,
-                    value_type>(&elementwise_type::planned_div))
-            .def(
-                "_planned_div",
-                pybind11::overload_cast<
-                    wrapped_type const &,
-                    wrapped_type const &>(
-                    &elementwise_type::planned_div))
-            .def(
-                "_planned_iadd",
-                pybind11::overload_cast<
-                    wrapped_type &,
-                    value_type>(&elementwise_type::planned_iadd))
-            .def(
-                "_planned_iadd",
-                pybind11::overload_cast<
-                    wrapped_type &,
-                    wrapped_type const &>(
-                    &elementwise_type::planned_iadd))
-            .def(
-                "_planned_isub",
-                pybind11::overload_cast<
-                    wrapped_type &,
-                    value_type>(&elementwise_type::planned_isub))
-            .def(
-                "_planned_isub",
-                pybind11::overload_cast<
-                    wrapped_type &,
-                    wrapped_type const &>(
-                    &elementwise_type::planned_isub))
-            .def(
-                "_planned_imul",
-                pybind11::overload_cast<
-                    wrapped_type &,
-                    value_type>(&elementwise_type::planned_imul))
-            .def(
-                "_planned_imul",
-                pybind11::overload_cast<
-                    wrapped_type &,
-                    wrapped_type const &>(
-                    &elementwise_type::planned_imul))
-            .def(
-                "_planned_idiv",
-                pybind11::overload_cast<
-                    wrapped_type &,
-                    value_type>(&elementwise_type::planned_idiv))
-            .def(
-                "_planned_idiv",
-                pybind11::overload_cast<
-                    wrapped_type &,
-                    wrapped_type const &>(
-                    &elementwise_type::planned_idiv))
-            //
-            ;
-        return *this;
+        return detail::bind_simple_array_elementwise<
+            wrapped_type,
+            value_type,
+            elementwise_type>(*this);
     }
 
     // NOLINTBEGIN(bugprone-easily-swappable-parameters)

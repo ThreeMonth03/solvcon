@@ -170,5 +170,77 @@ class PlannedElementwiseTC(unittest.TestCase):
         np.testing.assert_array_equal(result.ndarray, values + rhs)
         self.assertTrue(result.ndarray.flags.f_contiguous)
 
+    def test_preallocated_output_covers_broadcast_and_scalar(self):
+        lhs = np.arange(
+            1, 4, dtype="float64"
+        ).reshape(3, 1)
+        rhs = np.arange(
+            2, 6, dtype="float64"
+        ).reshape(1, 4)
+        operations = {
+            "add": np.add,
+            "sub": np.subtract,
+            "mul": np.multiply,
+            "div": np.divide,
+        }
+
+        lhs_array = make_array(lhs)
+        rhs_array = make_array(rhs)
+        for operation, reference in operations.items():
+            with self.subTest(operation=operation):
+                destination = np.empty(
+                    (3, 4), dtype="float64", order="F"
+                )
+                result = getattr(
+                    lhs_array, f"_planned_{operation}_to"
+                )(
+                    rhs_array, make_array(destination)
+                )
+
+                self.assertIsNone(result)
+                np.testing.assert_allclose(
+                    destination, reference(lhs, rhs)
+                )
+
+        scalar_destination = make_stepped(
+            np.empty_like(lhs, dtype="float64")
+        )
+        lhs_array._planned_mul_to(
+            2.5, make_array(scalar_destination)
+        )
+        np.testing.assert_allclose(
+            scalar_destination, lhs * 2.5
+        )
+
+    def test_preallocated_output_validates_shape(self):
+        lhs = make_array(
+            np.ones((2, 1), dtype="float64")
+        )
+        rhs = make_array(
+            np.ones((1, 3), dtype="float64")
+        )
+        destination = make_array(
+            np.empty((2, 1), dtype="float64")
+        )
+
+        with self.assertRaisesRegex(ValueError, "output shape"):
+            lhs._planned_add_to(rhs, destination)
+
+    def test_preallocated_output_snapshots_overlapping_input(self):
+        storage = np.arange(1, 7, dtype="float64")
+        lhs_values = storage[:-1]
+        destination_values = storage[1:]
+        rhs_values = np.arange(10, 15, dtype="float64")
+        expected = lhs_values.copy() + rhs_values
+
+        make_array(lhs_values)._planned_add_to(
+            make_array(rhs_values),
+            make_array(destination_values),
+        )
+
+        np.testing.assert_array_equal(
+            destination_values, expected
+        )
+
 
 # vim: set ff=unix fenc=utf8 et sw=4 ts=4 sts=4:
