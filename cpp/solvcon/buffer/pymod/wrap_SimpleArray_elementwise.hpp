@@ -65,11 +65,13 @@ Wrapper & bind_simple_array_elementwise(Wrapper & wrapper)
                         self,
                         cast_elementwise_scalar<Value>(operand));
                 }
-                if (py::isinstance<Array>(operand))
+                py::detail::make_caster<Array> array_caster;
+                if (array_caster.load(operand, false))
                 {
                     return array_function(
                         self,
-                        operand.cast<Array const &>());
+                        py::detail::cast_op<Array const &>(
+                            array_caster));
                 }
                 return scalar_function(
                     self,
@@ -96,11 +98,13 @@ Wrapper & bind_simple_array_elementwise(Wrapper & wrapper)
                         destination);
                     return;
                 }
-                if (py::isinstance<Array>(operand))
+                py::detail::make_caster<Array> array_caster;
+                if (array_caster.load(operand, false))
                 {
                     array_function(
                         self,
-                        operand.cast<Array const &>(),
+                        py::detail::cast_op<Array const &>(
+                            array_caster),
                         destination);
                     return;
                 }
@@ -128,11 +132,13 @@ Wrapper & bind_simple_array_elementwise(Wrapper & wrapper)
                         cast_elementwise_scalar<Value>(operand));
                     return;
                 }
-                if (py::isinstance<Array>(operand))
+                py::detail::make_caster<Array> array_caster;
+                if (array_caster.load(operand, false))
                 {
                     array_function(
                         self,
-                        operand.cast<Array const &>());
+                        py::detail::cast_op<Array const &>(
+                            array_caster));
                     return;
                 }
                 scalar_function(
