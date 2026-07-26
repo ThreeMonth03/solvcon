@@ -262,6 +262,33 @@ TEST(ElementwiseExecutor, PreservesDenseFullShapeLayoutForBroadcast)
     EXPECT_EQ(CountingAddKernel::calls(), 15);
 }
 
+TEST(ElementwiseExecutor, WritesBroadcastToPreallocatedOutput)
+{
+    using array_type = solvcon::SimpleArray<double>;
+    array_type lhs(ew::shape_type{2, 1});
+    array_type rhs(ew::shape_type{1, 3});
+    array_type destination(ew::shape_type{2, 3});
+    lhs.at(ew::shape_type{0, 0}) = 1.0;
+    lhs.at(ew::shape_type{1, 0}) = 2.0;
+    rhs.at(ew::shape_type{0, 0}) = 10.0;
+    rhs.at(ew::shape_type{0, 1}) = 20.0;
+    rhs.at(ew::shape_type{0, 2}) = 30.0;
+
+    ew::ElementwiseExecutor<
+        array_type,
+        double,
+        CountingAddKernel>::transform_to(destination, lhs, rhs, CountingAddKernel{});
+
+    EXPECT_DOUBLE_EQ(
+        destination.at(ew::shape_type{0, 0}), 11.0);
+    EXPECT_DOUBLE_EQ(
+        destination.at(ew::shape_type{0, 2}), 31.0);
+    EXPECT_DOUBLE_EQ(
+        destination.at(ew::shape_type{1, 0}), 12.0);
+    EXPECT_DOUBLE_EQ(
+        destination.at(ew::shape_type{1, 2}), 32.0);
+}
+
 TEST(ElementwiseExecutor, UpdatesStridedAliasWithConstantBroadcast)
 {
     using array_type = solvcon::SimpleArray<double>;

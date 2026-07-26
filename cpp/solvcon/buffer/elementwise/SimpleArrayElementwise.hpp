@@ -36,6 +36,31 @@ public:
                              Array const & other);
     static Array planned_div(Array const & self, value_type scalar);
 
+    static void planned_add_to(Array const & self,
+                               Array const & other,
+                               Array & destination);
+    static void planned_add_to(Array const & self,
+                               value_type scalar,
+                               Array & destination);
+    static void planned_sub_to(Array const & self,
+                               Array const & other,
+                               Array & destination);
+    static void planned_sub_to(Array const & self,
+                               value_type scalar,
+                               Array & destination);
+    static void planned_mul_to(Array const & self,
+                               Array const & other,
+                               Array & destination);
+    static void planned_mul_to(Array const & self,
+                               value_type scalar,
+                               Array & destination);
+    static void planned_div_to(Array const & self,
+                               Array const & other,
+                               Array & destination);
+    static void planned_div_to(Array const & self,
+                               value_type scalar,
+                               Array & destination);
+
     static void planned_iadd(Array & self, Array const & other);
     static void planned_iadd(Array & self, value_type scalar);
     static void planned_isub(Array & self, Array const & other);
@@ -146,6 +171,114 @@ Array SimpleArrayElementwise<Array, T>::planned_div(
     reject_boolean("div");
     return divide_executor_type::transform(
         self, scalar, elementwise::DivideKernel<value_type>{});
+}
+
+template <typename Array, typename T>
+void SimpleArrayElementwise<Array, T>::planned_add_to(
+    Array const & self,
+    Array const & other,
+    Array & destination)
+{
+    add_executor_type::transform_to(
+        destination,
+        self,
+        other,
+        elementwise::AddKernel<value_type>{});
+}
+
+template <typename Array, typename T>
+void SimpleArrayElementwise<Array, T>::planned_add_to(
+    Array const & self,
+    value_type scalar,
+    Array & destination)
+{
+    add_executor_type::transform_to(
+        destination,
+        self,
+        scalar,
+        elementwise::AddKernel<value_type>{});
+}
+
+template <typename Array, typename T>
+void SimpleArrayElementwise<Array, T>::planned_sub_to(
+    Array const & self,
+    Array const & other,
+    Array & destination)
+{
+    reject_boolean("sub_to");
+    subtract_executor_type::transform_to(
+        destination,
+        self,
+        other,
+        elementwise::SubtractKernel<value_type>{});
+}
+
+template <typename Array, typename T>
+void SimpleArrayElementwise<Array, T>::planned_sub_to(
+    Array const & self,
+    value_type scalar,
+    Array & destination)
+{
+    reject_boolean("sub_to");
+    subtract_executor_type::transform_to(
+        destination,
+        self,
+        scalar,
+        elementwise::SubtractKernel<value_type>{});
+}
+
+template <typename Array, typename T>
+void SimpleArrayElementwise<Array, T>::planned_mul_to(
+    Array const & self,
+    Array const & other,
+    Array & destination)
+{
+    multiply_executor_type::transform_to(
+        destination,
+        self,
+        other,
+        elementwise::MultiplyKernel<value_type>{});
+}
+
+template <typename Array, typename T>
+void SimpleArrayElementwise<Array, T>::planned_mul_to(
+    Array const & self,
+    value_type scalar,
+    Array & destination)
+{
+    multiply_executor_type::transform_to(
+        destination,
+        self,
+        scalar,
+        elementwise::MultiplyKernel<value_type>{});
+}
+
+template <typename Array, typename T>
+void SimpleArrayElementwise<Array, T>::planned_div_to(
+    Array const & self,
+    Array const & other,
+    Array & destination)
+{
+    reject_boolean("div_to");
+    divide_executor_type::transform_to(
+        destination,
+        self,
+        other,
+        elementwise::DivideKernel<value_type>{});
+}
+
+template <typename Array, typename T>
+void SimpleArrayElementwise<Array, T>::planned_div_to(
+    Array const & self,
+    value_type scalar,
+    Array & destination)
+{
+    reject_boolean("div_to");
+    divide_executor_type::transform_to(
+        destination,
+        self,
+        scalar,
+        elementwise::DivideKernel<value_type>{});
 }
 
 template <typename Array, typename T>
