@@ -191,17 +191,23 @@ valid under NumPy.  The release sweep covers every layout at size 32, every
 left and right layout at sizes 8, 128, and 512, every catalog size from 1
 through 1024 for C operands, and both singleton sides across all sizes and
 layouts.  After duplicate identifiers are removed, revision `bb0af292` has
-33,368 valid timed cases and all results match NumPy.
+33,368 valid timed cases.  Revision `9659db7e` repeats the same identifiers
+with `git_dirty` false, and all results match NumPy.
 
 | Topology family | Cases | Win rate | Median NumPy / planned |
 | --- | ---: | ---: | ---: |
-| Non-broadcast | 4,160 | 99.57% | 2.01x |
-| Python scalar | 672 | 97.02% | 2.25x |
-| Singleton broadcast | 9,952 | 96.78% | 2.25x |
-| Single-axis broadcast | 9,664 | 99.67% | 2.49x |
-| Outer broadcast | 2,288 | 100.00% | 2.56x |
-| Mixed-rank broadcast | 6,632 | 98.94% | 2.47x |
-| All cases | 33,368 | 98.62% | 2.38x |
+| Non-broadcast | 4,160 | 99.35% | 2.42x |
+| Python scalar | 672 | 97.17% | 2.97x |
+| Singleton broadcast | 9,952 | 96.75% | 2.56x |
+| Single-axis broadcast | 9,664 | 99.73% | 2.78x |
+| Outer broadcast | 2,288 | 100.00% | 2.91x |
+| Mixed-rank broadcast | 6,632 | 98.87% | 2.76x |
+| All cases | 33,368 | 98.59% | 2.68x |
+
+Every current case was paired with its `bb0af292` identifier.  The old/new
+planned-time median is 1.086x, and 81.22% of cases are faster.  Normalizing
+each planned timing by its paired NumPy timing gives a 1.114x median
+improvement, with 85.11% of cases improved.
 
 The first Apple M1 report at revision `a42d5049` had a 0.89x median over the
 same 33,368 case identifiers.  Paired cases separated the fixed cost from
@@ -233,6 +239,12 @@ and small float64 scalar medians improved by 1.03x.  AArch64 also treats NEON
 as a compile-time architectural capability, removing one runtime feature
 query from each contiguous kernel call.  Its effect remains to be measured
 on macOS.
+
+The clean WSL2 sweep includes 24,512 reusable-output cases.  Planned execution
+beats NumPy in 99.09% of them, with a 3.155x median NumPy/planned ratio.
+Reusing output saves a median 0.187 microseconds from planned execution and
+0.217 microseconds from NumPy.  These timings validate the diagnostic path;
+they do not remove allocation from the normal public result-returning API.
 
 The broad sweep deliberately uses a one-millisecond timing target so tens of
 thousands of cases remain practical.  Its tail is sensitive to scheduling.
@@ -308,7 +320,7 @@ executor route and kernel before changing allocation.
   direct equal-shape and scalar loops, signed contiguous traversal, strided
   inputs, dense broadcast layouts, exact aliases, single Python operand
   dispatch, and AArch64 feature resolution
-- Last clean broad benchmark revision: `bb0af292`
+- Last clean broad benchmark revision: `9659db7e`
 - Reused-output macOS benchmark: pending
 - Commits: split into benchmark, implementation, and documentation concerns
 - CI: pending
