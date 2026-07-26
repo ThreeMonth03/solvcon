@@ -277,6 +277,58 @@ class ElementwiseBenchmarkCatalogTC(unittest.TestCase):
         self.assertFalse(isinstance(result, np.ndarray))
         self.assertTrue(hasattr(result, "ndarray"))
 
+    def test_preallocated_timing_reuses_destination(self):
+        """Exercise the allocation-free planned diagnostic path."""
+        topology = benchmark_cases.Topology(
+            "outer",
+            (4, 1),
+            (1, 4),
+            (4, 4),
+        )
+        case = benchmark_cases.CaseSpec(
+            catalog="performance",
+            size=4,
+            topology=topology,
+            operation="add",
+            dtype="float64",
+            mode="out",
+            lhs_layout="c",
+            rhs_layout="c",
+        )
+        lhs = benchmark_cases.make_layout(
+            np.arange(4, dtype="float64").reshape(4, 1),
+            "c",
+        )
+        rhs = benchmark_cases.make_layout(
+            np.arange(4, dtype="float64").reshape(1, 4),
+            "c",
+        )
+        expected = lhs.view + rhs.view
+        audit = benchmark_profile.audit_preallocated_output(
+            case, lhs, rhs, expected
+        )
+        result = object()
+
+        def capture(function, *args):
+            nonlocal result
+            result = function()
+            return {}
+
+        arguments = types.SimpleNamespace(
+            samples=1, warmup=0, target_ms=1
+        )
+        with unittest.mock.patch.object(
+            benchmark_profile,
+            "timed_samples",
+            side_effect=capture,
+        ):
+            benchmark_profile.time_preallocated_output(
+                case, "planned", lhs, rhs, arguments
+            )
+
+        self.assertEqual("match", audit["status"])
+        self.assertIsNone(result)
+
     def test_smoke_case_identifiers_are_unique(self):
         """Keep command-line filtering unambiguous for reproductions."""
         identifiers = [
@@ -319,6 +371,10 @@ class ElementwiseBenchmarkCatalogTC(unittest.TestCase):
             merged["summary"]["implementation_statuses"]["legacy"],
         )
         self.assertEqual(
+            {"match": 2},
+            merged["summary"]["preallocated_output_statuses"],
+        )
+        self.assertEqual(
             ["case-0", "case-1"],
             [case["id"] for case in merged["cases"]],
         )
@@ -343,6 +399,7 @@ def _shard_report(index, identifier, legacy_status):
     return {
         "metadata": {
             "revision": "revision",
+            "git_dirty": False,
             "platform": "platform",
             "machine": "machine",
             "python": "python",
@@ -358,6 +415,7 @@ def _shard_report(index, identifier, legacy_status):
             "samples": 7,
             "warmup": 2,
             "target_ms": 20.0,
+            "preallocated_output": True,
             "filters": {},
         },
         "summary": {
@@ -379,6 +437,7 @@ def _shard_report(index, identifier, legacy_status):
                 "legacy_simd": {"match": 1},
                 "planned": {"unavailable": 1},
             },
+            "preallocated_output_statuses": {"match": 1},
         },
         "cases": [{"id": identifier}],
     }

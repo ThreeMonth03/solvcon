@@ -130,6 +130,7 @@ def append_summary(lines, report):
         "## Environment",
         "",
         f"- Revision: `{metadata['revision']}`",
+        f"- Git dirty: `{metadata.get('git_dirty', False)}`",
         f"- Platform: `{metadata['platform']}`",
         f"- Python: `{metadata['python']}`",
         f"- NumPy: `{metadata['numpy']}`",
@@ -155,6 +156,12 @@ def append_summary(lines, report):
             lines.append(
                 f"| {implementation} `{status}` | {count} |"
             )
+    for status, count in sorted(
+        summary.get("preallocated_output_statuses", {}).items()
+    ):
+        lines.append(
+            f"| preallocated output `{status}` | {count} |"
+        )
     lines.append("")
 
 
@@ -366,6 +373,30 @@ def append_timing(lines, rows):
             f"| `{row['id']}` | {numpy:.6g} | "
             f"{rendered[0]} | {rendered[1]} | {rendered[2]} | "
             f"{simd_speedup} | {planned_speedup} |"
+        )
+    lines.append("")
+
+    reused = [
+        row for row in timed
+        if row["timing"].get("planned_to")
+    ]
+    if not reused:
+        return
+    lines.extend([
+        "### Reused output timing",
+        "",
+        (
+            "| Case | NumPy (ms) | Planned (ms) | "
+            "NumPy / planned |"
+        ),
+        "| --- | ---: | ---: | ---: |",
+    ])
+    for row in reused:
+        numpy = row["timing"]["numpy_to"]["median_ms"]
+        planned = row["timing"]["planned_to"]["median_ms"]
+        lines.append(
+            f"| `{row['id']}` | {numpy:.6g} | "
+            f"{planned:.6g} | {numpy / planned:.3f} |"
         )
     lines.append("")
 

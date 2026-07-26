@@ -10,6 +10,7 @@ import pathlib
 
 COMPATIBLE_METADATA = (
     "revision",
+    "git_dirty",
     "platform",
     "machine",
     "python",
@@ -24,6 +25,7 @@ COMPATIBLE_METADATA = (
     "samples",
     "warmup",
     "target_ms",
+    "preallocated_output",
     "filters",
 )
 
@@ -46,7 +48,7 @@ def validate_reports(reports):
     for report in reports[1:]:
         metadata = report["metadata"]
         for field in COMPATIBLE_METADATA:
-            if metadata[field] != reference[field]:
+            if metadata.get(field) != reference.get(field):
                 raise ValueError(f"incompatible shard metadata: {field}")
     shard_count = reference["shard_count"]
     shard_indices = {
@@ -69,6 +71,7 @@ def merge_reports(reports):
     implementation_statuses = collections.defaultdict(
         collections.Counter
     )
+    preallocated_output_statuses = collections.Counter()
     coverage = collections.defaultdict(set)
     cases = []
     case_count = 0
@@ -80,6 +83,9 @@ def merge_reports(reports):
             summary["implementation_statuses"].items()
         ):
             implementation_statuses[implementation].update(counts)
+        preallocated_output_statuses.update(
+            summary.get("preallocated_output_statuses", {})
+        )
         for field, values in summary["coverage"].items():
             coverage[field].update(values)
         cases.extend(report["cases"])
@@ -104,6 +110,9 @@ def merge_reports(reports):
                     implementation_statuses.items()
                 )
             },
+            "preallocated_output_statuses": dict(
+                preallocated_output_statuses
+            ),
         },
         "cases": cases,
     }

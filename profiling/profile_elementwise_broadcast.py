@@ -129,6 +129,14 @@ def parse_arguments():
     parser.add_argument("--samples", type=int, default=7)
     parser.add_argument("--warmup", type=int, default=2)
     parser.add_argument("--target-ms", type=float, default=20.0)
+    parser.add_argument(
+        "--preallocated-output",
+        action="store_true",
+        help=(
+            "Also validate and time NumPy and planned execution into a "
+            "reused C-contiguous output."
+        ),
+    )
     parser.add_argument("--output", type=pathlib.Path)
     parser.add_argument("--fail-on-bug", action="store_true")
     parser.add_argument(
@@ -586,6 +594,104 @@ def simple_array_call(spec, implementation, lhs_array, rhs_operand):
     return result.ndarray
 
 
+def supports_preallocated_output(spec):
+    return (
+        spec.mode == "out"
+        and spec.alias == "none"
+        and spec.operation in ("add", "sub", "mul", "div")
+        and spec.topology.result_shape is not None
+    )
+
+
+def audit_preallocated_output(spec, lhs, rhs, expected):
+    destination = np.empty(
+        spec.topology.result_shape, dtype=spec.dtype
+    )
+    lhs_array = make_simple_array(lhs)
+    rhs_operand = rhs
+    if isinstance(rhs, benchmark_cases.LayoutData):
+        rhs_operand = make_simple_array(rhs)
+    else:
+        rhs_operand = make_simple_scalar(rhs)
+    destination_array = ARRAY_TYPES[spec.dtype](
+        array=destination
+    )
+    try:
+        getattr(
+            lhs_array, f"_planned_{spec.operation}_to"
+        )(rhs_operand, destination_array)
+    except Exception as error:
+        return {
+            "status": "unexpected-error",
+            "error_type": type(error).__name__,
+            "error": str(error),
+        }
+    status = compare_arrays(destination, expected)
+    details = {}
+    if status != "match":
+        details = {
+            "expected": array_preview(expected),
+            "actual": array_preview(destination),
+        }
+    return {
+        "status": status,
+        "error_type": "",
+        "error": "",
+        "details": details,
+    }
+
+
+def time_preallocated_output(
+    spec,
+    method,
+    lhs,
+    rhs,
+    args,
+):
+    destination = np.empty(
+        spec.topology.result_shape, dtype=spec.dtype
+    )
+    if method == "numpy":
+        operation = NUMPY_OPERATIONS[spec.operation]
+        rhs_operand = rhs if np.isscalar(rhs) else rhs.view
+
+        def function():
+            return operation(
+                lhs.view,
+                rhs_operand,
+                out=destination,
+                casting="unsafe",
+            )
+    else:
+        lhs_array = make_simple_array(lhs)
+        rhs_operand = rhs
+        if isinstance(rhs, benchmark_cases.LayoutData):
+            rhs_operand = make_simple_array(rhs)
+        else:
+            rhs_operand = make_simple_scalar(rhs)
+        destination_array = ARRAY_TYPES[spec.dtype](
+            array=destination
+        )
+        method_function = getattr(
+            lhs_array, f"_planned_{spec.operation}_to"
+        )
+
+        def planned_function():
+            return method_function(
+                rhs_operand, destination_array
+            )
+
+        function = planned_function
+    return timed_samples(
+        function,
+        None,
+        "out",
+        args.samples,
+        args.warmup,
+        args.target_ms,
+    )
+
+
 def timed_samples(
     function,
     reset,
@@ -756,6 +862,17 @@ def run_case(spec, args):
         )
         row["implementations"][implementation] = audit
 
+    if (
+        args.preallocated_output
+        and expected_valid
+        and supports_preallocated_output(spec)
+        and row["implementations"]["planned"]["status"] == "match"
+    ):
+        audit_lhs, audit_rhs = make_case_data(spec)
+        row["preallocated_output"] = audit_preallocated_output(
+            spec, audit_lhs, audit_rhs, expected
+        )
+
     if args.timing == "matched" and expected_valid:
         row["timing"]["numpy"] = time_case_method(
             spec,
@@ -776,10 +893,27 @@ def run_case(spec, args):
                 timed_rhs,
                 args,
             )
+        if (
+            row.get("preallocated_output", {}).get("status")
+            == "match"
+        ):
+            for method in ("numpy", "planned"):
+                timed_lhs, timed_rhs = make_case_data(spec)
+                row["timing"][f"{method}_to"] = (
+                    time_preallocated_output(
+                        spec,
+                        method,
+                        timed_lhs,
+                        timed_rhs,
+                        args,
+                    )
+                )
     statuses = [
         result["status"]
         for result in row["implementations"].values()
     ]
+    if "preallocated_output" in row:
+        statuses.append(row["preallocated_output"]["status"])
     row["status"] = (
         "bug" if any(status in BUG_STATUSES for status in statuses)
         else "ok"
@@ -927,9 +1061,20 @@ def git_revision():
     return result.stdout.strip()
 
 
+def git_dirty():
+    result = subprocess.run(
+        ["git", "status", "--porcelain"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return bool(result.stdout.strip())
+
+
 def build_metadata(args):
     return {
         "revision": git_revision(),
+        "git_dirty": git_dirty(),
         "platform": platform.platform(),
         "machine": platform.machine(),
         "python": platform.python_version(),
@@ -947,6 +1092,7 @@ def build_metadata(args):
         "samples": args.samples,
         "warmup": args.warmup,
         "target_ms": args.target_ms,
+        "preallocated_output": args.preallocated_output,
         "filters": {
             name: getattr(args, name)
             for name in (
@@ -1012,6 +1158,8 @@ def should_record(row, selected_statuses=None):
                 ).values()
             ),
         }
+        if "preallocated_output" in row:
+            statuses.add(row["preallocated_output"]["status"])
         return bool(statuses.intersection(selected_statuses))
     if row["status"] == "bug":
         return True
@@ -1019,7 +1167,15 @@ def should_record(row, selected_statuses=None):
         result["status"]
         for result in row.get("implementations", {}).values()
     )
-    return any(status.startswith("unsupported-") for status in statuses)
+    if any(
+        status.startswith("unsupported-") for status in statuses
+    ):
+        return True
+    return (
+        row.get("preallocated_output", {})
+        .get("status", "")
+        .startswith("unsupported-")
+    )
 
 
 def main():
@@ -1045,6 +1201,7 @@ def main():
         implementation: collections.Counter()
         for implementation in IMPLEMENTATIONS
     }
+    preallocated_output_statuses = collections.Counter()
     coverage = empty_coverage()
     benchmark_error_count = 0
     for index, case in enumerate(cases):
@@ -1076,6 +1233,10 @@ def main():
                 .get("status", "missing")
             )
             implementation_statuses[implementation][status] += 1
+        if "preallocated_output" in row:
+            preallocated_output_statuses[
+                row["preallocated_output"]["status"]
+            ] += 1
         if (
             args.record == "all"
             or (
@@ -1095,6 +1256,9 @@ def main():
                 name: dict(counts)
                 for name, counts in implementation_statuses.items()
             },
+            "preallocated_output_statuses": dict(
+                preallocated_output_statuses
+            ),
         },
         "cases": recorded_rows,
     }
