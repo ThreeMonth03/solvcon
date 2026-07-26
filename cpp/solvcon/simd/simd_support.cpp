@@ -26,6 +26,7 @@ namespace simd
 namespace detail
 {
 
+#ifndef __aarch64__
 SimdFeature detect_simd()
 {
     static SimdFeature CurrentFeature = SIMD_UNKNOWN;
@@ -66,6 +67,7 @@ SimdFeature detect_simd()
     }
     return CurrentFeature;
 }
+#endif
 
 } /* end namespace detail */
 

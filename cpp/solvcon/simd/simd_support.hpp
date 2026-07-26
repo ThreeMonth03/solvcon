@@ -32,7 +32,14 @@ enum SimdFeature : std::uint8_t
     SIMD_UNKNOWN
 };
 
+#ifdef __aarch64__
+inline constexpr SimdFeature detect_simd() noexcept
+{
+    return SIMD_NEON;
+}
+#else
 SimdFeature detect_simd();
+#endif
 
 } /* end namespace detail */
 
