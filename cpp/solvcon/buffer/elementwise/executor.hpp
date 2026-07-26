@@ -693,7 +693,11 @@ Array ElementwiseExecutor<Array, T, Kernel>::transform(
     if (lhs.is_c_contiguous())
     {
         Array output(lhs.shape());
-        execute_to(output, lhs, scalar, kernel);
+        kernel_type::contiguous_scalar(
+            output.logical_data(),
+            output.size(),
+            lhs.logical_data(),
+            scalar);
         return output;
     }
 
