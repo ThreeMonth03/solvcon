@@ -243,6 +243,27 @@ TEST(ElementwiseExecutor, NormalizesReversedInnerLoop)
     EXPECT_EQ(CountingAddKernel::contiguous_scalar_calls(), 3);
 }
 
+TEST(ElementwiseExecutor, RankOneConstantInputUsesContiguousScalar)
+{
+    using array_type = solvcon::SimpleArray<double>;
+    array_type lhs(ew::shape_type{8});
+    array_type rhs = ew::allocate_layout<array_type>(
+        ew::shape_type{8}, ew::stride_type{0});
+    array_type destination(ew::shape_type{8});
+    lhs.fill(1.0);
+    rhs.at(0) = 2.0;
+
+    CountingAddKernel::reset();
+    ew::ElementwiseExecutor<
+        array_type,
+        double,
+        CountingAddKernel>::transform_to(destination, lhs, rhs, CountingAddKernel{});
+
+    EXPECT_EQ(CountingAddKernel::contiguous_scalar_calls(), 1);
+    EXPECT_DOUBLE_EQ(destination.at(0), 3.0);
+    EXPECT_DOUBLE_EQ(destination.at(7), 3.0);
+}
+
 TEST(ElementwiseExecutor, PreservesDenseFullShapeLayoutForBroadcast)
 {
     using array_type = solvcon::SimpleArray<double>;

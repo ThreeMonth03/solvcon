@@ -821,23 +821,40 @@ void ElementwiseExecutor<Array, T, Kernel>::execute_to(
             destination.logical_data();
         value_type const * lhs_data = lhs.logical_data();
         value_type const * rhs_data = rhs.logical_data();
-        ssize_t destination_offset = 0;
-        ssize_t lhs_offset = 0;
-        ssize_t rhs_offset = 0;
-        ssize_t const destination_stride =
-            destination.stride()[0];
-        ssize_t const lhs_stride = lhs.stride()[0];
-        ssize_t const rhs_stride = rhs.stride()[0];
-        for (size_t index = 0;
-             index < destination.size();
-             ++index)
+        size_t const inner_size = destination.size();
+        InnerLoopState state{
+            {destination.stride()[0],
+             lhs.stride()[0],
+             rhs.stride()[0]},
+            {0, 0, 0}};
+        normalize_reversed_inner(inner_size, state);
+        if (try_execute_unit_stride_inner(
+                inner_size,
+                destination_data,
+                lhs_data,
+                rhs_data,
+                state,
+                kernel))
         {
-            destination_data[destination_offset] =
-                kernel(lhs_data[lhs_offset], rhs_data[rhs_offset]);
-            destination_offset += destination_stride;
-            lhs_offset += lhs_stride;
-            rhs_offset += rhs_stride;
+            return;
         }
+        if (try_execute_output_contiguous_inner(
+                inner_size,
+                destination_data,
+                lhs_data,
+                rhs_data,
+                state,
+                kernel))
+        {
+            return;
+        }
+        execute_generic_inner(
+            inner_size,
+            destination_data,
+            lhs_data,
+            rhs_data,
+            state,
+            kernel);
         return;
     }
 
