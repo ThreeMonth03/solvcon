@@ -37,8 +37,9 @@ That structure has three limitations:
 The elementwise-specific code lives in
 `cpp/solvcon/buffer/elementwise/`.  Runtime-rank traversal is separated into
 `cpp/solvcon/buffer/loop.hpp`, which owns the operation-independent domain,
-operand mapping, signed span, and mapped cursor.  The elementwise planner owns
-only broadcasting semantics, inner-axis selection, and execution routes.
+operand mapping, and mapped cursor.  The elementwise layer owns signed spans,
+layout classification, broadcasting semantics, inner-axis selection, and
+execution routes.
 
 ## Benchmark coverage
 
@@ -80,10 +81,10 @@ flowchart LR
 
 `LoopDomain` owns the broadcast result shape.  `OperandMapping` aligns
 each operand to that domain and represents broadcasting with zero strides.
-Its signed stride span also describes reversed layouts without changing the
-logical origin.  `MappedOffsetCursor` provides the common runtime-rank
-coordinate traversal.  None of these types knows about elementwise
-arithmetic.
+`MappedOffsetCursor` provides the common runtime-rank coordinate traversal.
+None of these types knows about elementwise arithmetic.  The private
+elementwise layout layer computes signed spans and classifies row-major,
+dense, and constant mappings.
 
 `ElementwisePlan` validates the fixed output shape and selects one of three
 routes:
@@ -138,8 +139,9 @@ maintaining duplicate loop state for stepped destinations.
 
 The prototype adds:
 
-- `loop.hpp` for operation-independent runtime-rank domains, mappings, spans,
-  and cursors;
+- `loop.hpp` for operation-independent runtime-rank domains, mappings, and
+  cursors;
+- `elementwise/layout.hpp` for signed spans and elementwise layout policy;
 - `plan.hpp` and `plan.cpp` for broadcast mapping, inner-axis selection, and
   route selection;
 - `kernel.hpp` for operation-specific scalar, vector, and broadcast loops;
@@ -190,18 +192,36 @@ The performance catalog contains 340,480 combinations, of which 233,128 are
 valid under NumPy.  The release sweep covers every layout at size 32, every
 left and right layout at sizes 8, 128, and 512, every catalog size from 1
 through 1024 for C operands, and both singleton sides across all sizes and
-layouts.  After duplicate identifiers are removed, clean revision
-`b988fdc3` has 33,368 valid regular-output timings.  All results match NumPy.
+layouts.  After duplicate identifiers are removed, the shared-loop-aligned
+prototype has 33,368 valid regular-output timings.  All results match NumPy.
 
 | Topology family | Cases | Win rate | Median NumPy / planned |
 | --- | ---: | ---: | ---: |
-| Non-broadcast | 4,160 | 99.42% | 2.67x |
-| Python scalar | 672 | 96.73% | 3.17x |
-| Singleton broadcast | 9,952 | 96.61% | 2.70x |
-| Single-axis broadcast | 9,664 | 99.79% | 2.93x |
-| Outer broadcast | 2,288 | 100.00% | 3.07x |
-| Mixed-rank broadcast | 6,632 | 98.63% | 2.87x |
-| All cases | 33,368 | 98.52% | 2.85x |
+| Non-broadcast | 4,160 | 99.38% | 2.69x |
+| Python scalar | 672 | 97.17% | 3.14x |
+| Singleton broadcast | 9,952 | 97.02% | 2.70x |
+| Single-axis broadcast | 9,664 | 99.74% | 2.97x |
+| Outer broadcast | 2,288 | 100.00% | 3.11x |
+| Mixed-rank broadcast | 6,632 | 98.64% | 2.89x |
+| All cases | 33,368 | 98.63% | 2.86x |
+
+The shared traversal header is byte-identical to upstream PR #1181 at
+revision `48e77b31`.  It contains only `LoopDomain`, `OperandMapping`, and
+`MappedOffsetCursor`.  Elementwise span and layout policy remains private in
+`elementwise/layout.hpp`.  A direct row-major classifier avoids constructing
+a temporary contiguous mapping and keeps the private policy inline.
+
+An interleaved WSL2 A/B run compared the aligned code with clean revision
+`b988fdc3` using matching Release builds.  The 288 regular cases and 168
+reused-output cases cover seven topology families, sizes 1, 32, and 1,024,
+four operations, and float32 and float64.  Median planned time improved by
+4.24% for regular output and 3.81% for reused output.  NumPy-normalized
+performance was 1.007x and 1.009x.
+
+The full 49,152-identifier sweep reached the same conclusion.  Across 33,368
+regular cases, median planned time improved by 2.0% and NumPy-normalized
+performance was 1.007x.  Across 24,512 reused-output cases, planned time
+improved by 2.5% and normalized performance was 1.010x.
 
 The first Apple M1 report at revision `a42d5049` had a 0.89x median over the
 same 33,368 case identifiers.  Paired cases separated the fixed cost from
@@ -240,10 +260,10 @@ for regular output and 1.050x for reusable output.  The 64 through 255 result
 element bucket is at measurement parity with a 0.998x median, so the evidence
 does not justify a platform-specific route.
 
-The clean WSL2 sweep includes 24,512 reusable-output cases.  Planned execution
-beats NumPy in 99.08% of them, with a 3.344x median NumPy/planned ratio.  These
-timings validate the diagnostic path; they do not add reusable output to the
-normal public result-returning API.
+The aligned WSL2 sweep includes 24,512 reusable-output cases.  Planned
+execution beats NumPy in 99.17% of them, with a 3.388x median NumPy/planned
+ratio.  These timings validate the diagnostic path; they do not add reusable
+output to the normal public result-returning API.
 
 The broad sweep deliberately uses a one-millisecond timing target so tens of
 thousands of cases remain practical.  Its tail is sensitive to scheduling.
