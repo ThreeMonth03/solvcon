@@ -523,6 +523,36 @@ class MatmulTestBase(sc.testing.TestBase):
                 self.assertEqual((1,), result.shape)
                 np.testing.assert_allclose(result.ndarray[0], expected)
 
+                planned = lhs.matmul_planned(rhs)
+                self.assertEqual((1,), planned.shape)
+                np.testing.assert_allclose(planned.ndarray[0], expected)
+
+    def test_planned_vector_matrix_roles(self):
+        """Planned matmul removes vector axes before batch broadcasting."""
+        dtype = np.dtype(self.dtype).name
+        vector = np.arange(4, dtype=dtype)
+        lhs_batch = np.arange(2 * 1 * 3 * 4, dtype=dtype)
+        lhs_batch = lhs_batch.reshape(2, 1, 3, 4)
+        rhs_batch = np.arange(2 * 1 * 4 * 3, dtype=dtype)
+        rhs_batch = rhs_batch.reshape(2, 1, 4, 3)
+        cases = (
+            (vector, rhs_batch),
+            (vector[::-1], rhs_batch[..., ::-1, :]),
+            (vector, self.make_matrix_layouts(rhs_batch, 2)[-1][1]),
+            (lhs_batch, vector),
+            (lhs_batch[..., ::-1], vector[::-1]),
+            (self.make_matrix_layouts(lhs_batch, 3)[-1][1], vector),
+        )
+        for lhs_data, rhs_data in cases:
+            lhs = self.SimpleArray(array=lhs_data)
+            rhs = self.SimpleArray(array=rhs_data)
+
+            with self.subTest(
+                    lhs_strides=lhs_data.strides,
+                    rhs_strides=rhs_data.strides):
+                self.assert_matmul_planned(
+                    lhs, rhs, np.matmul(lhs_data, rhs_data))
+
     def test_wrong_shape_error(self):
         """Test error handling for wrong shapes"""
 
