@@ -5,7 +5,6 @@
  * BSD 3-Clause License, see COPYING
  */
 
-#include <solvcon/base.hpp>
 #include <solvcon/buffer/small_vector.hpp>
 
 #include <algorithm>
@@ -38,9 +37,7 @@ class LoopDomain
 {
 public:
     using shape_type = small_vector<ssize_t>;
-    using stride_type = small_vector<ssize_t>;
 
-    LoopDomain() = default;
     explicit LoopDomain(shape_type shape)
         : m_shape(std::move(shape))
     {
@@ -49,37 +46,11 @@ public:
     shape_type const & shape() const noexcept { return m_shape; }
     ssize_t extent(size_t axis) const noexcept { return m_shape[axis]; }
     size_t rank() const noexcept { return m_shape.size(); }
-    size_t size() const noexcept;
-    bool empty() const noexcept { return size() == 0; }
-
-    static stride_type row_major_strides(
-        shape_type const & shape, ssize_t trailing_size = 1);
+    size_t size() const noexcept { return std::ranges::fold_left(m_shape, size_t{1}, std::multiplies<size_t>{}); }
 
 private:
     shape_type m_shape;
 }; /* end class LoopDomain */
-
-class MappingSpan
-{
-public:
-    MappingSpan() = default;
-    MappingSpan(ssize_t minimum, ssize_t maximum)
-        : m_minimum(minimum)
-        , m_maximum(maximum)
-    {
-    }
-
-    ssize_t minimum() const noexcept { return m_minimum; }
-    ssize_t maximum() const noexcept { return m_maximum; }
-    size_t size() const noexcept
-    {
-        return static_cast<size_t>(m_maximum - m_minimum + 1);
-    }
-
-private:
-    ssize_t m_minimum = 0;
-    ssize_t m_maximum = -1;
-}; /* end class MappingSpan */
 
 /**
  * @brief Describe how one operand advances over a LoopDomain.
@@ -97,37 +68,20 @@ private:
 class OperandMapping
 {
 public:
-    using stride_type = LoopDomain::stride_type;
+    using stride_type = small_vector<ssize_t>;
 
     OperandMapping() = default;
-    explicit OperandMapping(stride_type strides,
-                            ssize_t base_offset = 0)
-        : m_base_offset(base_offset)
-        , m_strides(std::move(strides))
+    explicit OperandMapping(stride_type strides)
+        : m_strides(std::move(strides))
     {
     }
 
     static OperandMapping contiguous_blocks(LoopDomain const & domain, ssize_t block_size);
 
     size_t rank() const noexcept { return m_strides.size(); }
-    ssize_t base_offset() const noexcept { return m_base_offset; }
-    stride_type const & strides() const noexcept { return m_strides; }
     ssize_t stride(size_t axis) const noexcept { return m_strides[axis]; }
 
-    MappingSpan span(LoopDomain const & domain) const;
-    bool is_row_major(LoopDomain const & domain) const;
-    bool is_dense(LoopDomain const & domain) const;
-    bool is_constant(LoopDomain const & domain) const;
-    OperandMapping without_axis(size_t axis) const;
-
-    static MappingSpan span(LoopDomain::shape_type const & shape,
-                            stride_type const & strides,
-                            ssize_t base_offset = 0);
-    static bool is_dense(LoopDomain::shape_type const & shape,
-                         stride_type const & strides);
-
 private:
-    ssize_t m_base_offset = 0;
     stride_type m_strides;
 }; /* end class OperandMapping */
 
@@ -151,14 +105,10 @@ class MappedOffsetCursor
 public:
     using mapping_type = small_vector<OperandMapping>;
 
-    MappedOffsetCursor(LoopDomain const & domain,
-                       mapping_type const & mappings);
+    MappedOffsetCursor(LoopDomain const & domain, mapping_type const & mappings);
 
     explicit operator bool() const noexcept { return m_valid; }
-    ssize_t offset(size_t operand) const noexcept
-    {
-        return m_offsets[operand];
-    }
+    ssize_t offset(size_t operand) const noexcept { return m_offsets[operand]; }
 
     template <typename Operand>
     ssize_t offset(Operand operand) const noexcept
@@ -170,234 +120,60 @@ public:
     void advance();
 
 private:
-    LoopDomain const * m_domain;
-    mapping_type const * m_mappings;
+    LoopDomain const & m_domain;
+    mapping_type const & m_mappings;
     LoopDomain::shape_type m_index;
-    LoopDomain::stride_type m_offsets;
+    small_vector<ssize_t> m_offsets;
     bool m_valid = false;
 }; /* end class MappedOffsetCursor */
 
-inline size_t LoopDomain::size() const noexcept
+inline OperandMapping OperandMapping::contiguous_blocks(LoopDomain const & domain, ssize_t block_size)
 {
-    size_t count = 1;
-    for (ssize_t const extent : m_shape)
+    stride_type strides(domain.rank(), block_size);
+    for (size_t axis = domain.rank(); axis > 1; --axis)
     {
-        count *= static_cast<size_t>(extent);
+        strides[axis - 2] = strides[axis - 1] * domain.extent(axis - 1);
     }
-    return count;
+    return OperandMapping(std::move(strides));
 }
 
-inline LoopDomain::stride_type LoopDomain::row_major_strides(
-    shape_type const & shape, ssize_t trailing_size)
-{
-    stride_type strides(shape.size(), trailing_size);
-    for (size_t axis = shape.size(); axis > 1; --axis)
-    {
-        strides[axis - 2] =
-            strides[axis - 1] * shape[axis - 1];
-    }
-    return strides;
-}
-
-inline OperandMapping OperandMapping::contiguous_blocks(
-    LoopDomain const & domain, ssize_t block_size)
-{
-    return OperandMapping(
-        LoopDomain::row_major_strides(
-            domain.shape(), block_size));
-}
-
-inline MappingSpan OperandMapping::span(
-    LoopDomain const & domain) const
-{
-    if (domain.empty())
-    {
-        return MappingSpan(0, -1);
-    }
-    return span(domain.shape(), m_strides, m_base_offset);
-}
-
-inline bool OperandMapping::is_row_major(
-    LoopDomain const & domain) const
-{
-    if (domain.rank() != rank())
-    {
-        return false;
-    }
-    stride_type const expected =
-        LoopDomain::row_major_strides(domain.shape());
-    for (size_t axis = 0; axis < domain.rank(); ++axis)
-    {
-        if (domain.shape()[axis] > 1 &&
-            stride(axis) != expected[axis])
-        {
-            return false;
-        }
-    }
-    return true;
-}
-
-inline bool OperandMapping::is_dense(
-    LoopDomain const & domain) const
-{
-    return is_dense(domain.shape(), m_strides);
-}
-
-inline bool OperandMapping::is_constant(
-    LoopDomain const & domain) const
-{
-    if (domain.rank() != rank())
-    {
-        return false;
-    }
-    for (size_t axis = 0; axis < domain.rank(); ++axis)
-    {
-        if (domain.shape()[axis] > 1 && stride(axis) != 0)
-        {
-            return false;
-        }
-    }
-    return true;
-}
-
-inline OperandMapping OperandMapping::without_axis(size_t axis) const
-{
-    if (axis >= rank())
-    {
-        throw std::out_of_range("mapping axis out of range");
-    }
-    stride_type strides;
-    for (size_t source_axis = 0; source_axis < rank(); ++source_axis)
-    {
-        if (source_axis != axis)
-        {
-            strides.push_back(m_strides[source_axis]);
-        }
-    }
-    return OperandMapping(std::move(strides), m_base_offset);
-}
-
-inline MappingSpan OperandMapping::span(
-    LoopDomain::shape_type const & shape,
-    stride_type const & strides,
-    ssize_t base_offset)
-{
-    if (shape.size() != strides.size())
-    {
-        throw std::invalid_argument(
-            "mapping rank does not match loop domain");
-    }
-
-    ssize_t minimum = base_offset;
-    ssize_t maximum = base_offset;
-    for (size_t axis = 0; axis < shape.size(); ++axis)
-    {
-        ssize_t const end = (shape[axis] - 1) * strides[axis];
-        if (end < 0)
-        {
-            minimum += end;
-        }
-        else
-        {
-            maximum += end;
-        }
-    }
-    return MappingSpan(minimum, maximum);
-}
-
-inline bool OperandMapping::is_dense(
-    LoopDomain::shape_type const & shape,
-    stride_type const & strides)
-{
-    if (shape.size() != strides.size())
-    {
-        return false;
-    }
-
-    auto const magnitude = [](ssize_t stride)
-    {
-        return stride < 0
-                   ? static_cast<size_t>(-(stride + 1)) + 1
-                   : static_cast<size_t>(stride);
-    };
-
-    small_vector<size_t> axes;
-    for (size_t axis = 0; axis < shape.size(); ++axis)
-    {
-        if (shape[axis] == 0)
-        {
-            return true;
-        }
-        if (shape[axis] > 1)
-        {
-            axes.push_back(axis);
-        }
-    }
-    std::ranges::sort(
-        axes,
-        {},
-        [&](size_t axis)
-        { return magnitude(strides[axis]); });
-
-    size_t expected_stride = 1;
-    for (size_t const axis : axes)
-    {
-        if (magnitude(strides[axis]) != expected_stride)
-        {
-            return false;
-        }
-        expected_stride *= static_cast<size_t>(shape[axis]);
-    }
-    return true;
-}
-
-inline MappedOffsetCursor::MappedOffsetCursor(
-    LoopDomain const & domain, mapping_type const & mappings)
-    : m_domain(&domain)
-    , m_mappings(&mappings)
+inline MappedOffsetCursor::MappedOffsetCursor(LoopDomain const & domain, mapping_type const & mappings)
+    : m_domain(domain)
+    , m_mappings(mappings)
     , m_index(domain.rank(), 0)
     , m_offsets(mappings.size(), 0)
-    , m_valid(!domain.empty())
+    , m_valid(domain.size() != 0)
 {
-    for (size_t operand = 0; operand < mappings.size(); ++operand)
+    for (OperandMapping const & mapping : mappings)
     {
-        if (mappings[operand].rank() != domain.rank())
+        if (mapping.rank() != domain.rank())
         {
             throw std::invalid_argument(
                 "operand mapping rank does not match its loop domain");
         }
-        m_offsets[operand] = mappings[operand].base_offset();
     }
 }
 
 inline void MappedOffsetCursor::advance()
 {
-    for (size_t axis_plus_one = m_domain->rank();
-         axis_plus_one > 0;
-         --axis_plus_one)
+    for (size_t axis_plus_one = m_domain.rank(); axis_plus_one > 0; --axis_plus_one)
     {
         size_t const axis = axis_plus_one - 1;
+        ssize_t const extent = m_domain.extent(axis);
         ++m_index[axis];
-        for (size_t operand = 0;
-             operand < m_mappings->size();
-             ++operand)
+        if (m_index[axis] < extent)
         {
-            m_offsets[operand] +=
-                (*m_mappings)[operand].stride(axis);
-        }
-        if (m_index[axis] < m_domain->shape()[axis])
-        {
+            for (size_t operand = 0; operand < m_mappings.size(); ++operand)
+            {
+                m_offsets[operand] += m_mappings[operand].stride(axis);
+            }
             return;
         }
 
         m_index[axis] = 0;
-        for (size_t operand = 0;
-             operand < m_mappings->size();
-             ++operand)
+        for (size_t operand = 0; operand < m_mappings.size(); ++operand)
         {
-            m_offsets[operand] -=
-                (*m_mappings)[operand].stride(axis) *
-                m_domain->shape()[axis];
+            m_offsets[operand] -= m_mappings[operand].stride(axis) * (extent - 1);
         }
     }
     m_valid = false;

@@ -84,6 +84,17 @@ void CountingAddKernel::contiguous_scalar(
         output, count, lhs, rhs);
 }
 
+void expect_mapping_strides(
+    OperandMapping const & mapping,
+    ew::stride_type const & expected)
+{
+    ASSERT_EQ(mapping.rank(), expected.size());
+    for (size_t axis = 0; axis < mapping.rank(); ++axis)
+    {
+        EXPECT_EQ(mapping.stride(axis), expected[axis]);
+    }
+}
+
 } /* end namespace */
 
 TEST(ElementwisePlan, BroadcastMappingsAlignTrailingAxes)
@@ -98,8 +109,8 @@ TEST(ElementwisePlan, BroadcastMappingsAlignTrailingAxes)
         rhs_shape, ew::stride_type{3, 1, 1}, domain);
 
     EXPECT_EQ(domain.shape(), (ew::shape_type{2, 3, 4}));
-    EXPECT_EQ(lhs.strides(), (ew::stride_type{4, 0, 1}));
-    EXPECT_EQ(rhs.strides(), (ew::stride_type{0, 1, 0}));
+    expect_mapping_strides(lhs, ew::stride_type{4, 0, 1});
+    expect_mapping_strides(rhs, ew::stride_type{0, 1, 0});
 }
 
 TEST(LoopTraversal, EmptyDomainHasNoCursorIteration)
@@ -109,7 +120,6 @@ TEST(LoopTraversal, EmptyDomainHasNoCursorIteration)
         OperandMapping(ew::stride_type{0, 4, 1})};
     MappedOffsetCursor cursor(domain, mappings);
 
-    EXPECT_TRUE(domain.empty());
     EXPECT_EQ(domain.size(), 0);
     EXPECT_FALSE(cursor);
 }
@@ -117,19 +127,19 @@ TEST(LoopTraversal, EmptyDomainHasNoCursorIteration)
 TEST(LoopTraversal, SignedOffsetsRetainLogicalOrigin)
 {
     LoopDomain const domain(ew::shape_type{2, 3});
-    OperandMapping const mapping(ew::stride_type{-3, 1}, 3);
+    OperandMapping const mapping(ew::stride_type{-3, 1});
     solvcon::small_vector<OperandMapping> const mappings{mapping};
-    std::array<ssize_t, 6> const expected{3, 4, 5, 0, 1, 2};
+    std::array<ssize_t, 6> const expected{0, 1, 2, -3, -2, -1};
 
     size_t index = 0;
     for (MappedOffsetCursor cursor(domain, mappings);
          cursor;
          cursor.advance(), ++index)
     {
-        EXPECT_EQ(cursor.offset(0), expected[index]);
+        EXPECT_EQ(cursor.offset(size_t{0}), expected[index]);
     }
     EXPECT_EQ(index, expected.size());
-    EXPECT_TRUE(mapping.is_dense(domain));
+    EXPECT_TRUE(ew::mapping_is_dense(domain, mapping));
 }
 
 TEST(LoopTraversal, DenseMappingRejectsOverlappingStride)
@@ -137,10 +147,10 @@ TEST(LoopTraversal, DenseMappingRejectsOverlappingStride)
     ew::shape_type const shape{2, 2};
 
     EXPECT_FALSE(
-        OperandMapping::is_dense(
+        ew::mapping_is_dense(
             shape, ew::stride_type{3, 0}));
     EXPECT_TRUE(
-        OperandMapping::is_dense(
+        ew::mapping_is_dense(
             shape, ew::stride_type{-1, 2}));
 }
 
@@ -149,11 +159,13 @@ TEST(LoopTraversal, ConstantMappingIgnoresSingletonAxes)
     LoopDomain const domain(ew::shape_type{1, 3, 1});
 
     EXPECT_TRUE(
-        OperandMapping(ew::stride_type{7, 0, 1})
-            .is_constant(domain));
+        ew::mapping_is_constant(
+            domain,
+            OperandMapping(ew::stride_type{7, 0, 1})));
     EXPECT_FALSE(
-        OperandMapping(ew::stride_type{7, 1, 1})
-            .is_constant(domain));
+        ew::mapping_is_constant(
+            domain,
+            OperandMapping(ew::stride_type{7, 1, 1})));
 }
 
 TEST(ElementwisePlan, OuterBroadcastSelectsFixedInnerLoop)
@@ -167,8 +179,10 @@ TEST(ElementwisePlan, OuterBroadcastSelectsFixedInnerLoop)
 
     EXPECT_EQ(plan.route(), ew::ExecutionRoute::inner_strided);
     EXPECT_EQ(plan.inner_axis(), 1);
-    EXPECT_EQ(plan.input(0).strides(), (ew::stride_type{1, 0}));
-    EXPECT_EQ(plan.input(1).strides(), (ew::stride_type{0, 1}));
+    expect_mapping_strides(
+        plan.input(0), ew::stride_type{1, 0});
+    expect_mapping_strides(
+        plan.input(1), ew::stride_type{0, 1});
 }
 
 TEST(ElementwisePlan, InnerAxisFollowsDensePermutedOutput)

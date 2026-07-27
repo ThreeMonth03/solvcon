@@ -5,12 +5,13 @@
  * BSD 3-Clause License, see COPYING
  */
 
-#include <solvcon/buffer/loop.hpp>
+#include <solvcon/buffer/elementwise/layout.hpp>
 
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>
+#include <utility>
 
 namespace solvcon
 {
@@ -20,9 +21,6 @@ namespace detail
 
 namespace elementwise
 {
-
-using shape_type = LoopDomain::shape_type;
-using stride_type = LoopDomain::stride_type;
 
 shape_type broadcast_shape(shape_type const & lhs,
                            shape_type const & rhs);
@@ -50,6 +48,9 @@ public:
     }
 
 private:
+    static shape_type make_outer_shape(
+        LoopDomain const & domain, size_t inner_axis);
+
     LoopDomain m_outer;
     size_t m_size = 0;
     stride_type m_strides;
@@ -92,6 +93,13 @@ public:
                                        Input const & input);
 
 private:
+    ElementwisePlan(
+        LoopDomain domain,
+        OperandMapping output,
+        small_vector<OperandMapping> inputs,
+        ExecutionRoute route,
+        size_t inner_axis);
+
     LoopDomain m_domain;
     OperandMapping m_output;
     small_vector<OperandMapping> m_inputs;
@@ -114,44 +122,51 @@ template <typename Output, typename... Inputs>
 ElementwisePlan ElementwisePlan::make(
     Output const & output, Inputs const &... inputs)
 {
-    LoopDomain const domain(broadcast_shape(inputs...));
+    LoopDomain domain(broadcast_shape(inputs...));
     if (!std::ranges::equal(output.shape(), domain.shape()))
     {
         throw std::invalid_argument(
             "elementwise output shape does not match result shape");
     }
 
-    ElementwisePlan plan;
-    plan.m_domain = domain;
-    plan.m_output = OperandMapping(output.stride());
-    plan.m_inputs = small_vector<OperandMapping>{
+    OperandMapping output_mapping(output.stride());
+    small_vector<OperandMapping> input_mappings{
         broadcast_mapping(
             inputs.shape(), inputs.stride(), domain)...};
+    size_t inner_axis = 0;
     if (domain.rank() != 0)
     {
-        plan.m_inner_axis = select_inner_axis(
-            domain, plan.m_output, plan.m_inputs);
+        inner_axis = select_inner_axis(
+            domain, output_mapping, input_mappings);
     }
 
-    bool row_major = plan.m_output.is_row_major(domain);
-    bool common_dense_layout = plan.m_output.is_dense(domain);
-    for (OperandMapping const & input : plan.m_inputs)
+    bool row_major =
+        mapping_is_row_major(domain, output_mapping);
+    bool common_dense_layout =
+        mapping_is_dense(domain, output_mapping);
+    for (OperandMapping const & input : input_mappings)
     {
-        row_major = row_major && input.is_row_major(domain);
+        row_major =
+            row_major && mapping_is_row_major(domain, input);
         common_dense_layout =
             common_dense_layout &&
-            std::ranges::equal(
-                plan.m_output.strides(), input.strides());
+            mapping_strides_equal(output_mapping, input);
     }
+    ExecutionRoute route = ExecutionRoute::mapped;
     if (row_major || common_dense_layout)
     {
-        plan.m_route = ExecutionRoute::contiguous;
+        route = ExecutionRoute::contiguous;
     }
     else if (domain.rank() != 0)
     {
-        plan.m_route = ExecutionRoute::inner_strided;
+        route = ExecutionRoute::inner_strided;
     }
-    return plan;
+    return ElementwisePlan(
+        std::move(domain),
+        std::move(output_mapping),
+        std::move(input_mappings),
+        route,
+        inner_axis);
 }
 
 template <typename Output, typename Input>
@@ -164,34 +179,39 @@ ElementwisePlan ElementwisePlan::make_scalar(
             "scalar elementwise output shape mismatch");
     }
 
-    ElementwisePlan plan;
-    plan.m_domain = LoopDomain(output.shape());
-    plan.m_output = OperandMapping(output.stride());
-    plan.m_inputs = small_vector<OperandMapping>{
+    LoopDomain domain(output.shape());
+    OperandMapping output_mapping(output.stride());
+    small_vector<OperandMapping> input_mappings{
         broadcast_mapping(
-            input.shape(), input.stride(), plan.m_domain)};
-    if (plan.m_domain.rank() != 0)
+            input.shape(), input.stride(), domain)};
+    size_t inner_axis = 0;
+    if (domain.rank() != 0)
     {
-        plan.m_inner_axis = select_inner_axis(
-            plan.m_domain, plan.m_output, plan.m_inputs);
+        inner_axis = select_inner_axis(
+            domain, output_mapping, input_mappings);
     }
     bool const row_major =
-        plan.m_output.is_row_major(plan.m_domain) &&
-        plan.m_inputs[0].is_row_major(plan.m_domain);
+        mapping_is_row_major(domain, output_mapping) &&
+        mapping_is_row_major(domain, input_mappings[0]);
     bool const common_dense_layout =
-        std::ranges::equal(
-            plan.m_output.strides(),
-            plan.m_inputs[0].strides()) &&
-        plan.m_output.is_dense(plan.m_domain);
+        mapping_strides_equal(
+            output_mapping, input_mappings[0]) &&
+        mapping_is_dense(domain, output_mapping);
+    ExecutionRoute route = ExecutionRoute::mapped;
     if (row_major || common_dense_layout)
     {
-        plan.m_route = ExecutionRoute::contiguous;
+        route = ExecutionRoute::contiguous;
     }
-    else if (plan.m_domain.rank() != 0)
+    else if (domain.rank() != 0)
     {
-        plan.m_route = ExecutionRoute::inner_strided;
+        route = ExecutionRoute::inner_strided;
     }
-    return plan;
+    return ElementwisePlan(
+        std::move(domain),
+        std::move(output_mapping),
+        std::move(input_mappings),
+        route,
+        inner_axis);
 }
 
 template <typename Array>
@@ -199,16 +219,31 @@ Array allocate_layout(shape_type const & shape,
                       stride_type const & strides)
 {
     LoopDomain const domain(shape);
-    if (domain.empty())
+    if (domain.size() == 0)
     {
         return Array(shape);
     }
-    MappingSpan const span = OperandMapping(strides).span(domain);
+    MappingSpan const span =
+        mapping_span(domain, OperandMapping(strides));
     auto buffer = Array::buffer_type::construct(
         span.size() * Array::ITEMSIZE);
     size_t const data_offset =
         static_cast<size_t>(-span.minimum()) * Array::ITEMSIZE;
     return Array(shape, strides, buffer, data_offset);
+}
+
+inline ElementwisePlan::ElementwisePlan(
+    LoopDomain domain,
+    OperandMapping output,
+    small_vector<OperandMapping> inputs,
+    ExecutionRoute route,
+    size_t inner_axis)
+    : m_domain(std::move(domain))
+    , m_output(std::move(output))
+    , m_inputs(std::move(inputs))
+    , m_route(route)
+    , m_inner_axis(inner_axis)
+{
 }
 
 } /* end namespace elementwise */

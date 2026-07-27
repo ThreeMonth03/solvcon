@@ -431,7 +431,7 @@ void ElementwiseExecutor<Array, T, Kernel>::execute(
     Array const & rhs,
     kernel_type kernel)
 {
-    if (plan.domain().empty())
+    if (plan.domain().size() == 0)
     {
         return;
     }
@@ -442,48 +442,56 @@ void ElementwiseExecutor<Array, T, Kernel>::execute(
     OperandMapping const & lhs_mapping = plan.input(0);
     OperandMapping const & rhs_mapping = plan.input(1);
     bool const output_matches_lhs =
-        std::ranges::equal(
-            plan.output().strides(), lhs_mapping.strides()) &&
-        plan.output().is_dense(plan.domain());
+        mapping_strides_equal(plan.output(), lhs_mapping) &&
+        mapping_is_dense(plan.domain(), plan.output());
     bool const output_matches_rhs =
-        std::ranges::equal(
-            plan.output().strides(), rhs_mapping.strides()) &&
-        plan.output().is_dense(plan.domain());
+        mapping_strides_equal(plan.output(), rhs_mapping) &&
+        mapping_is_dense(plan.domain(), plan.output());
     bool const lhs_is_constant =
-        lhs_mapping.is_constant(plan.domain());
+        mapping_is_constant(plan.domain(), lhs_mapping);
     bool const rhs_is_constant =
-        rhs_mapping.is_constant(plan.domain());
+        mapping_is_constant(plan.domain(), rhs_mapping);
     if (output_matches_lhs && rhs_is_constant)
     {
         kernel_type::contiguous_scalar(
             output_data +
-                plan.output().span(plan.domain()).minimum(),
+                mapping_span(
+                    plan.domain(), plan.output())
+                    .minimum(),
             plan.domain().size(),
             lhs_data +
-                lhs_mapping.span(plan.domain()).minimum(),
-            rhs_data[rhs_mapping.base_offset()]);
+                mapping_span(
+                    plan.domain(), lhs_mapping)
+                    .minimum(),
+            rhs_data[0]);
         return;
     }
     if (output_matches_rhs && lhs_is_constant)
     {
         kernel_type::contiguous_lhs_scalar(
             output_data +
-                plan.output().span(plan.domain()).minimum(),
+                mapping_span(
+                    plan.domain(), plan.output())
+                    .minimum(),
             plan.domain().size(),
-            lhs_data[lhs_mapping.base_offset()],
+            lhs_data[0],
             rhs_data +
-                rhs_mapping.span(plan.domain()).minimum());
+                mapping_span(
+                    plan.domain(), rhs_mapping)
+                    .minimum());
         return;
     }
 
     if (plan.route() == ExecutionRoute::contiguous)
     {
         ssize_t const output_offset =
-            plan.output().span(plan.domain()).minimum();
+            mapping_span(
+                plan.domain(), plan.output())
+                .minimum();
         ssize_t const lhs_offset =
-            lhs_mapping.span(plan.domain()).minimum();
+            mapping_span(plan.domain(), lhs_mapping).minimum();
         ssize_t const rhs_offset =
-            rhs_mapping.span(plan.domain()).minimum();
+            mapping_span(plan.domain(), rhs_mapping).minimum();
         kernel_type::contiguous(
             output_data + output_offset,
             plan.domain().size(),
@@ -505,9 +513,9 @@ void ElementwiseExecutor<Array, T, Kernel>::execute(
          cursor;
          cursor.advance())
     {
-        output_data[cursor.offset(0)] = kernel(
-            lhs_data[cursor.offset(1)],
-            rhs_data[cursor.offset(2)]);
+        output_data[cursor.offset(OUTPUT_INDEX)] = kernel(
+            lhs_data[cursor.offset(LHS_INDEX)],
+            rhs_data[cursor.offset(RHS_INDEX)]);
     }
 }
 
@@ -526,8 +534,11 @@ void ElementwiseExecutor<Array, T, Kernel>::execute_scalar(
     if (plan.route() == ExecutionRoute::contiguous)
     {
         output_data +=
-            plan.output().span(plan.domain()).minimum();
-        lhs_data += lhs_mapping.span(plan.domain()).minimum();
+            mapping_span(
+                plan.domain(), plan.output())
+                .minimum();
+        lhs_data +=
+            mapping_span(plan.domain(), lhs_mapping).minimum();
         kernel_type::contiguous_scalar(
             output_data, plan.domain().size(), lhs_data, scalar);
         return;
@@ -547,8 +558,10 @@ void ElementwiseExecutor<Array, T, Kernel>::execute_scalar(
         {
             ssize_t selected_output_stride = output_stride;
             ssize_t selected_lhs_stride = lhs_stride;
-            ssize_t output_offset = cursor.offset(0);
-            ssize_t lhs_offset = cursor.offset(1);
+            ssize_t output_offset =
+                cursor.offset(OUTPUT_INDEX);
+            ssize_t lhs_offset =
+                cursor.offset(LHS_INDEX);
             if (selected_output_stride == -1 &&
                 (selected_lhs_stride == -1 ||
                  selected_lhs_stride == 0))
@@ -599,8 +612,8 @@ void ElementwiseExecutor<Array, T, Kernel>::execute_scalar(
          cursor;
          cursor.advance())
     {
-        output_data[cursor.offset(0)] =
-            kernel(lhs_data[cursor.offset(1)], scalar);
+        output_data[cursor.offset(OUTPUT_INDEX)] =
+            kernel(lhs_data[cursor.offset(LHS_INDEX)], scalar);
     }
 }
 
@@ -629,7 +642,7 @@ Array ElementwiseExecutor<Array, T, Kernel>::transform(
     {
         LoopDomain const domain(lhs.shape());
         OperandMapping const mapping(lhs.stride());
-        if (mapping.is_dense(domain))
+        if (mapping_is_dense(domain, mapping))
         {
             auto output =
                 allocate_layout<Array>(lhs.shape(), lhs.stride());
@@ -658,15 +671,15 @@ Array ElementwiseExecutor<Array, T, Kernel>::transform(
         result_matches_lhs &&
         result_matches_rhs &&
         std::ranges::equal(lhs.stride(), rhs.stride()) &&
-        lhs_mapping.is_dense(result_domain);
+        mapping_is_dense(result_domain, lhs_mapping);
     bool const preserve_lhs_layout =
         result_matches_lhs &&
         !result_matches_rhs &&
-        lhs_mapping.is_dense(result_domain);
+        mapping_is_dense(result_domain, lhs_mapping);
     bool const preserve_rhs_layout =
         result_matches_rhs &&
         !result_matches_lhs &&
-        rhs_mapping.is_dense(result_domain);
+        mapping_is_dense(result_domain, rhs_mapping);
     auto output = [&]() -> Array
     {
         if (preserve_layout || preserve_lhs_layout)
@@ -703,7 +716,7 @@ Array ElementwiseExecutor<Array, T, Kernel>::transform(
 
     LoopDomain const domain(lhs.shape());
     OperandMapping const mapping(lhs.stride());
-    if (mapping.is_dense(domain))
+    if (mapping_is_dense(domain, mapping))
     {
         auto output =
             allocate_layout<Array>(lhs.shape(), lhs.stride());
@@ -810,9 +823,10 @@ void ElementwiseExecutor<Array, T, Kernel>::execute_to(
     {
         LoopDomain const domain(lhs.shape());
         OperandMapping const mapping(lhs.stride());
-        if (mapping.is_dense(domain))
+        if (mapping_is_dense(domain, mapping))
         {
-            ssize_t const offset = mapping.span(domain).minimum();
+            ssize_t const offset =
+                mapping_span(domain, mapping).minimum();
             kernel_type::contiguous(
                 destination.logical_data() + offset,
                 destination.size(),
@@ -895,9 +909,10 @@ void ElementwiseExecutor<Array, T, Kernel>::execute_to(
     {
         LoopDomain const domain(lhs.shape());
         OperandMapping const mapping(lhs.stride());
-        if (mapping.is_dense(domain))
+        if (mapping_is_dense(domain, mapping))
         {
-            ssize_t const offset = mapping.span(domain).minimum();
+            ssize_t const offset =
+                mapping_span(domain, mapping).minimum();
             kernel_type::contiguous_scalar(
                 destination.logical_data() + offset,
                 destination.size(),
@@ -960,9 +975,9 @@ bool ElementwiseExecutor<Array, T, Kernel>::storage_overlaps(
     }
 
     MappingSpan const lhs_span =
-        OperandMapping::span(lhs.shape(), lhs.stride());
+        mapping_span(lhs.shape(), lhs.stride());
     MappingSpan const rhs_span =
-        OperandMapping::span(rhs.shape(), rhs.stride());
+        mapping_span(rhs.shape(), rhs.stride());
     auto const lhs_begin =
         std::bit_cast<std::uintptr_t>(
             lhs.logical_data() + lhs_span.minimum());
@@ -1005,11 +1020,11 @@ void ElementwiseExecutor<Array, T, Kernel>::execute_into(
             destination.shape(), rhs.shape()) &&
         std::ranges::equal(
             destination.stride(), rhs.stride()) &&
-        OperandMapping::is_dense(
+        mapping_is_dense(
             destination.shape(), destination.stride()))
     {
         ssize_t const offset =
-            OperandMapping::span(
+            mapping_span(
                 destination.shape(), destination.stride())
                 .minimum();
         kernel_type::inplace(
@@ -1066,12 +1081,12 @@ void ElementwiseExecutor<Array, T, Kernel>::transform_into(
         return;
     }
 
-    if (OperandMapping::is_dense(
+    if (mapping_is_dense(
             destination.shape(), destination.stride()))
     {
         value_type * data =
             destination.logical_data() +
-            OperandMapping::span(
+            mapping_span(
                 destination.shape(), destination.stride())
                 .minimum();
         kernel_type::scalar(data, destination.size(), scalar);

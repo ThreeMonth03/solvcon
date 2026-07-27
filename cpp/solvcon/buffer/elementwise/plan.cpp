@@ -154,10 +154,8 @@ size_t select_inner_axis(
     return selected_axis;
 }
 
-InnerLoopPlan::InnerLoopPlan(
-    LoopDomain const & domain,
-    small_vector<OperandMapping> const & mappings,
-    size_t inner_axis)
+shape_type InnerLoopPlan::make_outer_shape(
+    LoopDomain const & domain, size_t inner_axis)
 {
     if (domain.rank() == 0)
     {
@@ -169,19 +167,26 @@ InnerLoopPlan::InnerLoopPlan(
         throw std::out_of_range("inner loop axis out of range");
     }
 
-    shape_type outer_shape;
+    shape_type shape;
     for (size_t axis = 0; axis < domain.rank(); ++axis)
     {
         if (axis != inner_axis)
         {
-            outer_shape.push_back(domain.shape()[axis]);
+            shape.push_back(domain.extent(axis));
         }
     }
-    m_outer = LoopDomain(std::move(outer_shape));
-    m_size = static_cast<size_t>(domain.shape()[inner_axis]);
-    m_strides = stride_type(mappings.size());
-    m_outer_mappings =
-        small_vector<OperandMapping>(mappings.size());
+    return shape;
+}
+
+InnerLoopPlan::InnerLoopPlan(
+    LoopDomain const & domain,
+    small_vector<OperandMapping> const & mappings,
+    size_t inner_axis)
+    : m_outer(make_outer_shape(domain, inner_axis))
+    , m_size(static_cast<size_t>(domain.extent(inner_axis)))
+    , m_strides(mappings.size())
+    , m_outer_mappings(mappings.size())
+{
     for (size_t operand = 0; operand < mappings.size(); ++operand)
     {
         if (mappings[operand].rank() != domain.rank())
@@ -191,7 +196,7 @@ InnerLoopPlan::InnerLoopPlan(
         }
         m_strides[operand] = mappings[operand].stride(inner_axis);
         m_outer_mappings[operand] =
-            mappings[operand].without_axis(inner_axis);
+            mapping_without_axis(mappings[operand], inner_axis);
     }
 }
 
