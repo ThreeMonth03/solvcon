@@ -190,34 +190,27 @@ The performance catalog contains 340,480 combinations, of which 233,128 are
 valid under NumPy.  The release sweep covers every layout at size 32, every
 left and right layout at sizes 8, 128, and 512, every catalog size from 1
 through 1024 for C operands, and both singleton sides across all sizes and
-layouts.  After duplicate identifiers are removed, revision `bb0af292` has
-33,368 valid timed cases.  Revision `9659db7e` repeats the same identifiers
-with `git_dirty` false, and all results match NumPy.
+layouts.  After duplicate identifiers are removed, clean revision
+`b988fdc3` has 33,368 valid regular-output timings.  All results match NumPy.
 
 | Topology family | Cases | Win rate | Median NumPy / planned |
 | --- | ---: | ---: | ---: |
-| Non-broadcast | 4,160 | 99.35% | 2.42x |
-| Python scalar | 672 | 97.17% | 2.97x |
-| Singleton broadcast | 9,952 | 96.75% | 2.56x |
-| Single-axis broadcast | 9,664 | 99.73% | 2.78x |
-| Outer broadcast | 2,288 | 100.00% | 2.91x |
-| Mixed-rank broadcast | 6,632 | 98.87% | 2.76x |
-| All cases | 33,368 | 98.59% | 2.68x |
-
-Every current case was paired with its `bb0af292` identifier.  The old/new
-planned-time median is 1.086x, and 81.22% of cases are faster.  Normalizing
-each planned timing by its paired NumPy timing gives a 1.114x median
-improvement, with 85.11% of cases improved.
+| Non-broadcast | 4,160 | 99.42% | 2.67x |
+| Python scalar | 672 | 96.73% | 3.17x |
+| Singleton broadcast | 9,952 | 96.61% | 2.70x |
+| Single-axis broadcast | 9,664 | 99.79% | 2.93x |
+| Outer broadcast | 2,288 | 100.00% | 3.07x |
+| Mixed-rank broadcast | 6,632 | 98.63% | 2.87x |
+| All cases | 33,368 | 98.52% | 2.85x |
 
 The first Apple M1 report at revision `a42d5049` had a 0.89x median over the
 same 33,368 case identifiers.  Paired cases separated the fixed cost from
 the kernel: normal planned output had a 0.842x median while in-place planned
 execution had a 1.024x median.  The loss was concentrated below 4,096 result
 elements, while results with at least 65,536 elements had a 1.234x median.
-The reused-output diagnostic now records `numpy_to` and `planned_to` beside
-the normal `numpy` and `planned` timings, so the next macOS run can test the
-allocation hypothesis directly across the complete layout and broadcast
-matrix.
+The reused-output diagnostic records `numpy_to` and `planned_to` beside the
+normal `numpy` and `planned` timings to separate allocation and return-object
+cost from execution.
 
 The original losses had two causes.  The benchmark's extra NumPy-view access
 cost about 0.35 to 0.40 microseconds per planned call.  The executor also
@@ -237,14 +230,20 @@ scalar operands.  The single-dispatch binding improved equal-shape medians by
 1.21x to 1.30x.  Small float32 scalar medians improved by 1.68x to 1.84x,
 and small float64 scalar medians improved by 1.03x.  AArch64 also treats NEON
 as a compile-time architectural capability, removing one runtime feature
-query from each contiguous kernel call.  Its effect remains to be measured
-on macOS.
+query from each contiguous kernel call.
+
+The final Apple M1 run uses the same clean `b988fdc3` revision.  The regular
+path beats NumPy in 72.23% of the 33,368 cases, with a 1.124x median ratio.
+The reusable-output path wins 87.33% of 24,512 cases, with a 1.193x median.
+Against revision `fd398e54`, NumPy-normalized performance improves by 1.037x
+for regular output and 1.050x for reusable output.  The 64 through 255 result
+element bucket is at measurement parity with a 0.998x median, so the evidence
+does not justify a platform-specific route.
 
 The clean WSL2 sweep includes 24,512 reusable-output cases.  Planned execution
-beats NumPy in 99.09% of them, with a 3.155x median NumPy/planned ratio.
-Reusing output saves a median 0.187 microseconds from planned execution and
-0.217 microseconds from NumPy.  These timings validate the diagnostic path;
-they do not remove allocation from the normal public result-returning API.
+beats NumPy in 99.08% of them, with a 3.344x median NumPy/planned ratio.  These
+timings validate the diagnostic path; they do not add reusable output to the
+normal public result-returning API.
 
 The broad sweep deliberately uses a one-millisecond timing target so tens of
 thousands of cases remain practical.  Its tail is sensitive to scheduling.
@@ -314,39 +313,15 @@ executor route and kernel before changing allocation.
 
 - Branch: `codex/prototype-elementwise-broadcast`
 - Correctness catalog: complete
-- C++ tests: 242 passed
-- Python tests: 1,426 passed, 364 skipped, and 3 expected failures
+- C++ tests: 243 passed
+- Python tests: 1,427 passed, 364 skipped, and 3 expected failures
 - Performance specialization: complete for layout-selected inner loops,
   direct equal-shape and scalar loops, signed contiguous traversal, strided
   inputs, dense broadcast layouts, exact aliases, single Python operand
   dispatch, and AArch64 feature resolution
-- Last clean broad benchmark revision: `9659db7e`
-- Reused-output macOS benchmark: pending
+- Last clean broad benchmark revision: `b988fdc3`
+- Cross-platform broad benchmarks: complete on WSL2 x86-64 and Apple M1
 - Commits: split into benchmark, implementation, and documentation concerns
-- CI: pending
-- Documentation preview: blocked locally because Doxygen is not installed
-
-## Chat history
-
-1. The user asked to study the existing elementwise benchmark notes and use a
-   broad benchmark, including broadcasting, before optimizing.
-2. The user required independent bugs to be separated from the optimization
-   work, following earlier shape and equality findings.
-3. The user asked for a prototype architecture analogous to the current
-   matrix-multiplication planner, followed by evidence before considering a
-   shared layer.
-4. The user approved implementing the architecture and asked for conditions
-   where the planned path beats NumPy.
-5. The user required performance evidence for non-broadcast execution and
-   different layouts, not only outer broadcasting.
-6. The user required investigation and optimization of the non-broadcast and
-   Python scalar losses.
-7. The user asked to align the prototype with the planner architecture used
-   by matrix multiplication, rerun all correctness and performance evidence,
-   and prepare a draft pull request with reproduction instructions.
-8. The user plans to run the same six performance reports on a MacBook Air
-   after the draft is ready.
-9. The user asked for a clean implementation and a profiling SOP that can be
-   handed to Codex on macOS.
+- Verification: full tests, focused elementwise tests, and `make lint` pass
 
 <!-- vim: set ft=markdown ff=unix fenc=utf8 et sw=2 ts=2 sts=2 tw=79: -->
