@@ -822,17 +822,27 @@ bool MatmulExecutor<Array>::can_execute_affine_vector_blas() const
 {
     Array const & matrix =
         m_plan.lhs_vector() ? m_rhs : m_lhs;
-    return matrix.is_c_contiguous() && m_output.is_c_contiguous();
+    return m_output.is_c_contiguous() &&
+           (matrix.is_c_contiguous() || m_plan.batch_rank() == 1);
 }
 
 template <typename Array>
 void MatmulExecutor<Array>::execute_affine_vector_blas(
     BlasMatrixLayout const & matrix_layout)
 {
+    Array const & matrix =
+        m_plan.lhs_vector() ? m_rhs : m_lhs;
     ssize_t const matrix_size =
         m_plan.rows() * m_plan.inner_size() * m_plan.columns();
     ssize_t const output_size = static_cast<ssize_t>(
         m_plan.lhs_vector() ? m_plan.columns() : m_plan.rows());
+    MatmulPlan::BatchOperand const matrix_operand =
+        m_plan.lhs_vector() ? MatmulPlan::BatchOperand::Rhs
+                            : MatmulPlan::BatchOperand::Lhs;
+    ssize_t const matrix_batch_stride =
+        matrix.is_c_contiguous()
+            ? matrix_size
+            : m_plan.batch_stride(matrix_operand, 0);
     if (m_plan.lhs_vector())
     {
         bool const transpose = !matrix_layout.transpose();
@@ -849,7 +859,7 @@ void MatmulExecutor<Array>::execute_affine_vector_blas(
             transpose,
             matrix_layout.leading_dimension(),
             m_plan.lhs_inner_stride(),
-            matrix_size,
+            matrix_batch_stride,
             output_size,
             m_plan.batch_size());
         return;
@@ -868,7 +878,7 @@ void MatmulExecutor<Array>::execute_affine_vector_blas(
         matrix_layout.transpose(),
         matrix_layout.leading_dimension(),
         m_plan.rhs_inner_stride(),
-        matrix_size,
+        matrix_batch_stride,
         output_size,
         m_plan.batch_size());
 }
