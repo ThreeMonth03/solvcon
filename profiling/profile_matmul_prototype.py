@@ -15,7 +15,6 @@ import profile_benchmark_environment  # noqa: F401
 import numpy as np
 import solvcon
 
-from profile_matmul_cartesian import make_combined_layout
 from profile_matmul_cartesian import matrix_axis_layouts
 from profile_matmul_cartesian import vector_layouts
 
