@@ -33,9 +33,8 @@ namespace detail
  * `LoopDomain({2,5})` for the ten result-batch coordinates. M=3, N=6, and
  * K=4 remain matrix metadata rather than becoming axes of this domain.
  *
- * @note The current consumer is MatmulPlan with equal leading batch shapes.
- * Batch broadcasting and plans for other operation families are follow-up
- * work.
+ * @note The current consumer is MatmulPlan with broadcast leading batch
+ * shapes. Plans for other operation families are follow-up work.
  */
 class LoopDomain
 {
@@ -66,8 +65,8 @@ private:
  * rhs mappings are `{90,18}`, `{12,0}`, and `{0,24}`. The zero lhs stride
  * reuses it across axis 1, and the zero rhs stride reuses it across axis 0.
  *
- * @note The current MatmulPlan constructs mappings for equal batch shapes,
- * so it does not create zero broadcast strides yet.
+ * @note The current MatmulPlan constructs signed and zero-stride batch
+ * mappings. Plans for other operation families are follow-up work.
  */
 class OperandMapping
 {
@@ -99,9 +98,9 @@ private:
  * output, lhs, and rhs offsets start at `(0,0,0)`. They advance to
  * `(18,0,24)` for coordinate `(0,1)` and `(90,12,0)` for coordinate `(1,0)`.
  *
- * @note The current consumer is MatmulExecutor with three equal-batch
- * mappings. The cursor borrows its domain and mappings, which must outlive
- * it. Broadcast and other operation executors are follow-up work.
+ * @note The current consumer is MatmulExecutor with three batch mappings.
+ * The cursor borrows its domain and mappings, which must outlive it. Other
+ * operation executors are follow-up work.
  */
 class MappedOffsetCursor
 {

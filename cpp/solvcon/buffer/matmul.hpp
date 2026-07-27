@@ -46,10 +46,10 @@ inline constexpr bool can_matmul_blas_v = std::is_same_v<T, float> ||
  * the broadcast axes. It does not allocate the output or evaluate the ten
  * matrix pairs.
  *
- * @note This implementation plans matrix-matrix operands with equal ranks
- * and equal leading batch shapes. It records the batch domain and mappings,
- * M, N, K, the output shape, and signed matrix strides. Vector roles and
- * broadcast batch axes are follow-up work.
+ * @note This implementation plans matrix-matrix operands with broadcast
+ * leading batch shapes. It records the batch domain and mappings, M, N, K,
+ * the output shape, and signed matrix strides. Vector roles are follow-up
+ * work.
  */
 class MatmulPlan
 {
@@ -105,6 +105,12 @@ private:
     template <typename Array>
     static BatchMappings make_batch_mappings(Array const & lhs, Array const & rhs, ssize_t output_matrix_size);
 
+    template <typename Array>
+    static shape_type make_batch_shape(Array const & lhs, Array const & rhs);
+
+    template <typename Array>
+    static OperandMapping make_batch_mapping(Array const & operand, LoopDomain const & domain);
+
     static shape_type make_output_shape(BatchMappings const & batch, Contraction const & contraction);
 
     template <typename Array>
@@ -130,8 +136,8 @@ private:
  * written into the allocated `(2,5,3,6)` output.
  *
  * @note This implementation provides the generic signed-stride
- * matrix-matrix route for equal batch shapes. Broadcast, optimized, and
- * vector routes are follow-up work.
+ * matrix-matrix route with broadcast batch shapes. Optimized and vector
+ * routes are follow-up work.
  */
 template <typename Array>
 class MatmulExecutor
@@ -225,41 +231,57 @@ MatmulPlan::BatchMappings MatmulPlan::make_batch_mappings(
     Array const & rhs,
     ssize_t output_matrix_size)
 {
-    if (lhs.ndim() != rhs.ndim())
-    {
-        throw std::invalid_argument(
-            std::format("SimpleArray::matmul_planned(): batch shape "
-                        "mismatch: this={} other={}",
-                        shape_string(lhs),
-                        shape_string(rhs)));
-    }
-
-    size_t const batch_rank = lhs.ndim() - 2;
-    auto const lhs_batch_shape = std::ranges::subrange(
-        lhs.shape().begin(), lhs.shape().begin() + batch_rank);
-    auto const rhs_batch_shape = std::ranges::subrange(
-        rhs.shape().begin(), rhs.shape().begin() + batch_rank);
-    if (!std::ranges::equal(lhs_batch_shape, rhs_batch_shape))
-    {
-        throw std::invalid_argument(
-            std::format("SimpleArray::matmul_planned(): batch shape "
-                        "mismatch: this={} other={}",
-                        shape_string(lhs),
-                        shape_string(rhs)));
-    }
-
-    LoopDomain domain{shape_type(lhs_batch_shape.begin(), lhs_batch_shape.end())};
-    batch_stride_type lhs_batch_strides(lhs.stride().begin(), lhs.stride().begin() + batch_rank);
-    batch_stride_type rhs_batch_strides(rhs.stride().begin(), rhs.stride().begin() + batch_rank);
+    LoopDomain domain{make_batch_shape(lhs, rhs)};
     mapping_type mappings{
         OperandMapping::contiguous(domain, output_matrix_size),
-        OperandMapping(std::move(lhs_batch_strides)),
-        OperandMapping(std::move(rhs_batch_strides)),
+        make_batch_mapping(lhs, domain),
+        make_batch_mapping(rhs, domain),
     };
     return BatchMappings{
         .m_domain = std::move(domain),
         .m_mappings = std::move(mappings),
     };
+}
+
+template <typename Array>
+MatmulPlan::shape_type MatmulPlan::make_batch_shape(Array const & lhs, Array const & rhs)
+{
+    size_t const lhs_batch_rank = lhs.ndim() - 2;
+    size_t const rhs_batch_rank = rhs.ndim() - 2;
+    size_t const batch_rank = std::max(lhs_batch_rank, rhs_batch_rank);
+    shape_type shape(batch_rank, 1);
+    for (size_t offset = 0; offset < batch_rank; ++offset)
+    {
+        ssize_t const lhs_extent = offset < lhs_batch_rank ? lhs.shape(lhs_batch_rank - offset - 1) : 1;
+        ssize_t const rhs_extent = offset < rhs_batch_rank ? rhs.shape(rhs_batch_rank - offset - 1) : 1;
+        if (lhs_extent != rhs_extent && lhs_extent != 1 && rhs_extent != 1)
+        {
+            throw std::invalid_argument(
+                std::format("SimpleArray::matmul_planned(): batch shape "
+                            "mismatch: this={} other={}",
+                            shape_string(lhs),
+                            shape_string(rhs)));
+        }
+        shape[batch_rank - offset - 1] = lhs_extent == 1 ? rhs_extent : lhs_extent;
+    }
+    return shape;
+}
+
+template <typename Array>
+OperandMapping MatmulPlan::make_batch_mapping(Array const & operand, LoopDomain const & domain)
+{
+    size_t const batch_rank = operand.ndim() - 2;
+    size_t const rank_delta = domain.rank() - batch_rank;
+    batch_stride_type strides(domain.rank(), 0);
+    for (size_t axis = 0; axis < batch_rank; ++axis)
+    {
+        size_t const domain_axis = rank_delta + axis;
+        if (operand.shape(axis) == domain.extent(domain_axis))
+        {
+            strides[domain_axis] = operand.stride(axis);
+        }
+    }
+    return OperandMapping(std::move(strides));
 }
 
 inline MatmulPlan::shape_type MatmulPlan::make_output_shape(
