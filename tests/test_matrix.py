@@ -61,6 +61,27 @@ class MatmulTestBase(sc.testing.TestBase):
     """Tests for matrix-matrix multiplication"""
 
     @staticmethod
+    def make_batch_layouts(data):
+        layouts = [('c_contiguous', data)]
+        for axis in range(data.ndim - 2):
+            reversed_storage = np.ascontiguousarray(
+                np.flip(data, axis=axis), dtype=data.dtype.name)
+            layouts.append((
+                f'negative_batch_axis_{axis}',
+                np.flip(reversed_storage, axis=axis),
+            ))
+
+            storage_shape = list(data.shape)
+            storage_shape[axis] *= 2
+            storage = np.empty(storage_shape, dtype=data.dtype.name)
+            selection = [slice(None)] * data.ndim
+            selection[axis] = slice(None, None, 2)
+            step_two = storage[tuple(selection)]
+            step_two[...] = data
+            layouts.append((f'step_two_batch_axis_{axis}', step_two))
+        return tuple(layouts)
+
+    @staticmethod
     def make_matrix_layouts(data, stride_axis):
         f_contiguous = np.array(
             data, dtype=data.dtype.name, order='F', copy=True)
@@ -369,12 +390,105 @@ class MatmulTestBase(sc.testing.TestBase):
             with self.subTest(lhs=lhs_case, rhs=rhs_case):
                 self.assert_matmul_planned(lhs, rhs, expected)
 
+    def test_equal_batch_layout_combinations(self):
+        """Equal matrix batches support runtime-rank strided traversal."""
+        dtype = np.dtype(self.dtype).name
+        shapes = (
+            ((3, 3, 4), (3, 4, 2)),
+            ((2, 3, 3, 4), (2, 3, 4, 2)),
+        )
+        for lhs_shape, rhs_shape in shapes:
+            lhs_data = np.arange(
+                np.prod(lhs_shape), dtype=dtype).reshape(lhs_shape)
+            rhs_data = np.arange(
+                np.prod(rhs_shape), dtype=dtype).reshape(rhs_shape)
+            lhs_layouts = self.make_batch_layouts(lhs_data)
+            rhs_layouts = self.make_batch_layouts(rhs_data)
+            layouts = itertools.product(lhs_layouts, rhs_layouts)
+            for (lhs_case, case_lhs), (rhs_case, case_rhs) in layouts:
+                lhs = self.SimpleArray(array=case_lhs)
+                rhs = self.SimpleArray(array=case_rhs)
+                expected = np.matmul(case_lhs, case_rhs)
+
+                with self.subTest(
+                        shape=lhs_shape, lhs=lhs_case, rhs=rhs_case):
+                    self.assert_matmul_planned(lhs, rhs, expected)
+
+    def test_broadcast_batch_layout_combinations(self):
+        """Broadcast matrix batches use zero and signed batch strides."""
+        dtype = np.dtype(self.dtype).name
+        lhs_data = np.arange(24, dtype=dtype).reshape(2, 1, 3, 4)
+        rhs_data = np.arange(40, dtype=dtype).reshape(1, 5, 4, 2)
+        layouts = itertools.product(
+            self.make_batch_layouts(lhs_data),
+            self.make_batch_layouts(rhs_data),
+        )
+        for (lhs_case, case_lhs), (rhs_case, case_rhs) in layouts:
+            lhs = self.SimpleArray(array=case_lhs)
+            rhs = self.SimpleArray(array=case_rhs)
+            expected = np.matmul(case_lhs, case_rhs)
+
+            with self.subTest(lhs=lhs_case, rhs=rhs_case):
+                self.assert_matmul_planned(lhs, rhs, expected)
+
+    def test_broadcast_matrix_layout_combinations(self):
+        """Broadcast matrix batches preserve signed matrix strides."""
+        dtype = np.dtype(self.dtype).name
+        lhs_data = np.arange(24, dtype=dtype).reshape(2, 1, 3, 4)
+        rhs_data = np.arange(40, dtype=dtype).reshape(1, 5, 4, 2)
+        layouts = itertools.product(
+            self.make_matrix_layouts(lhs_data, 3),
+            self.make_matrix_layouts(rhs_data, 2),
+        )
+        for (lhs_case, case_lhs), (rhs_case, case_rhs) in layouts:
+            lhs = self.SimpleArray(array=case_lhs)
+            rhs = self.SimpleArray(array=case_rhs)
+            expected = np.matmul(case_lhs, case_rhs)
+
+            with self.subTest(lhs=lhs_case, rhs=rhs_case):
+                self.assert_matmul_planned(lhs, rhs, expected)
+
+    def test_broadcast_batch_rank_alignment(self):
+        """Leading batch axes align from the right like NumPy matmul."""
+        dtype = np.dtype(self.dtype).name
+        shapes = (
+            ((3, 4), (2, 5, 4, 2)),
+            ((2, 5, 3, 4), (4, 2)),
+            ((1, 3, 4), (2, 5, 4, 2)),
+            ((2, 1, 3, 4), (5, 4, 2)),
+        )
+        for lhs_shape, rhs_shape in shapes:
+            lhs_data = np.arange(
+                np.prod(lhs_shape), dtype=dtype).reshape(lhs_shape)
+            rhs_data = np.arange(
+                np.prod(rhs_shape), dtype=dtype).reshape(rhs_shape)
+            lhs = self.SimpleArray(array=lhs_data)
+            rhs = self.SimpleArray(array=rhs_data)
+
+            with self.subTest(lhs=lhs_shape, rhs=rhs_shape):
+                self.assert_matmul_planned(
+                    lhs, rhs, np.matmul(lhs_data, rhs_data))
+
+    def test_broadcast_batch_mismatch(self):
+        """Incompatible leading batch axes report both operand shapes."""
+        lhs = self.SimpleArray(shape=(2, 3, 4), value=0)
+        rhs = self.SimpleArray(shape=(3, 4, 2), value=0)
+        with self.assertRaisesRegex(
+            ValueError,
+            r"SimpleArray::matmul_planned\(\): batch shape mismatch: "
+            r"this=\(2,3,4\) other=\(3,4,2\)"
+        ):
+            lhs.matmul_planned(rhs)
+
     def test_empty_matrix_dimensions(self):
         """Matrix multiplication preserves empty output and inner axes."""
         dtype = np.dtype(self.dtype).name
         shapes = (((0, 4), (4, 2)),
                   ((3, 0), (0, 2)),
-                  ((3, 4), (4, 0)))
+                  ((3, 4), (4, 0)),
+                  ((0, 3, 4), (0, 4, 2)),
+                  ((0, 1, 3, 4), (1, 5, 4, 2)),
+                  ((1, 3, 4), (0, 4, 2)))
         for lhs_shape, rhs_shape in shapes:
             lhs_data = np.zeros(lhs_shape, dtype=dtype)
             rhs_data = np.zeros(rhs_shape, dtype=dtype)
@@ -408,6 +522,115 @@ class MatmulTestBase(sc.testing.TestBase):
                 result = getattr(lhs, method)(rhs)
                 self.assertEqual((1,), result.shape)
                 np.testing.assert_allclose(result.ndarray[0], expected)
+
+                planned = lhs.matmul_planned(rhs)
+                self.assertEqual((1,), planned.shape)
+                np.testing.assert_allclose(planned.ndarray[0], expected)
+
+    def test_planned_vector_matrix_roles(self):
+        """Planned matmul removes vector axes before batch broadcasting."""
+        dtype = np.dtype(self.dtype).name
+        vector = np.arange(4, dtype=dtype)
+        lhs_batch = np.arange(2 * 1 * 3 * 4, dtype=dtype)
+        lhs_batch = lhs_batch.reshape(2, 1, 3, 4)
+        rhs_batch = np.arange(2 * 1 * 4 * 3, dtype=dtype)
+        rhs_batch = rhs_batch.reshape(2, 1, 4, 3)
+        cases = (
+            (vector, rhs_batch),
+            (vector[::-1], rhs_batch[..., ::-1, :]),
+            (vector, self.make_matrix_layouts(rhs_batch, 2)[-1][1]),
+            (lhs_batch, vector),
+            (lhs_batch[..., ::-1], vector[::-1]),
+            (self.make_matrix_layouts(lhs_batch, 3)[-1][1], vector),
+        )
+        for lhs_data, rhs_data in cases:
+            lhs = self.SimpleArray(array=lhs_data)
+            rhs = self.SimpleArray(array=rhs_data)
+
+            with self.subTest(
+                    lhs_strides=lhs_data.strides,
+                    rhs_strides=rhs_data.strides):
+                self.assert_matmul_planned(
+                    lhs, rhs, np.matmul(lhs_data, rhs_data))
+
+    def test_planned_blas_matrix_layouts(self):
+        """Planned matmul dispatches direct and packed matrix batches."""
+        dtype = np.dtype(self.dtype).name
+        rng = np.random.default_rng(20260728)
+        lhs = rng.random((2, 1, 17, 17), dtype=dtype)
+        rhs = rng.random((1, 3, 17, 17), dtype=dtype)
+        lhs_step_two = self.make_matrix_layouts(lhs, 3)[-1][1]
+        rhs_step_two = self.make_matrix_layouts(rhs, 2)[-1][1]
+        cases = (
+            (lhs, rhs),
+            (lhs.swapaxes(-1, -2), rhs.swapaxes(-1, -2)),
+            (lhs[..., ::-1], rhs),
+            (lhs_step_two, rhs),
+            (lhs, rhs_step_two),
+            (lhs_step_two, rhs_step_two),
+        )
+        for lhs_data, rhs_data in cases:
+            with self.subTest(
+                    lhs_strides=lhs_data.strides,
+                    rhs_strides=rhs_data.strides):
+                result = self.SimpleArray(
+                    array=lhs_data).matmul_planned(
+                        self.SimpleArray(array=rhs_data))
+                np.testing.assert_allclose(
+                    result.ndarray,
+                    np.matmul(lhs_data, rhs_data),
+                    rtol=1e-5,
+                    atol=1e-5)
+
+    def test_planned_blas_affine_batch_layouts(self):
+        """Rank-one batch mappings share one validated BLAS dispatch."""
+        dtype = np.dtype(self.dtype).name
+        rng = np.random.default_rng(20260728)
+        lhs_data = rng.random((8, 8, 8), dtype=dtype)
+        rhs_data = rng.random((8, 8, 8), dtype=dtype)
+        layouts = itertools.product(
+            self.make_batch_layouts(lhs_data),
+            self.make_batch_layouts(rhs_data),
+        )
+        for (lhs_case, lhs), (rhs_case, rhs) in layouts:
+            with self.subTest(lhs=lhs_case, rhs=rhs_case):
+                self.assert_matmul_planned(
+                    self.SimpleArray(array=lhs),
+                    self.SimpleArray(array=rhs),
+                    np.matmul(lhs, rhs),
+                )
+
+    def test_planned_blas_vector_layouts(self):
+        """Planned matmul dispatches strided DOT and batched GEMV."""
+        dtype = np.dtype(self.dtype).name
+        rng = np.random.default_rng(20260728)
+        vector = rng.random((64,), dtype=dtype)
+        matrix = rng.random((8, 64, 64), dtype=dtype)
+        vector_step_two = np.empty((128,), dtype=dtype)[::2]
+        vector_step_two[...] = vector
+        matrix_step_two = self.make_matrix_layouts(matrix, 2)[-1][1]
+        cases = (
+            (vector_step_two, vector_step_two),
+            (vector[::-1], vector[::-1]),
+            (vector_step_two, matrix),
+            (vector[::-1], matrix),
+            (vector, matrix_step_two),
+            (matrix, vector_step_two),
+            (matrix, vector[::-1]),
+            (matrix_step_two, vector),
+        )
+        for lhs_data, rhs_data in cases:
+            with self.subTest(
+                    lhs_strides=lhs_data.strides,
+                    rhs_strides=rhs_data.strides):
+                result = self.SimpleArray(
+                    array=lhs_data).matmul_planned(
+                        self.SimpleArray(array=rhs_data))
+                expected = np.matmul(lhs_data, rhs_data)
+                if expected.ndim == 0:
+                    expected = expected.reshape(1)
+                np.testing.assert_allclose(
+                    result.ndarray, expected, rtol=1e-5, atol=1e-5)
 
     def test_wrong_shape_error(self):
         """Test error handling for wrong shapes"""

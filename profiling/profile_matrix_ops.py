@@ -2,6 +2,7 @@
 # BSD 3-Clause License, see COPYING
 
 import functools
+import itertools
 import numpy as np
 import solvcon
 
@@ -61,6 +62,29 @@ def make_layout_cases(lhs, rhs):
          np.flip(lhs, axis=1),
          np.flip(rhs, axis=0)),
     )
+
+
+def make_batch_layout_cases(lhs, rhs):
+    return (
+        ("c_contiguous", lhs, rhs),
+        ("non_contiguous",
+         np.flip(lhs, axis=-1),
+         np.flip(rhs, axis=-2)),
+    )
+
+
+def make_batch_layouts(data):
+    layouts = [("c_contiguous", data)]
+    for axis in range(data.ndim - 2):
+        if data.shape[axis] == 1:
+            continue
+        reversed_storage = np.ascontiguousarray(
+            np.flip(data, axis=axis), dtype=data.dtype.name)
+        layouts.append((
+            f"negative_batch_axis_{axis}",
+            np.flip(reversed_storage, axis=axis),
+        ))
+    return tuple(layouts)
 
 
 def element_strides(data):
@@ -123,11 +147,125 @@ def profile_matmul_operation(dtype, shapes, it=10):
             print()
 
 
+def profile_batched_matmul_operation(
+        dtype, sides, batch, warmups, samples):
+    for side in sides:
+        lhs = make_data(dtype, (batch, side, side))
+        rhs = make_data(dtype, (batch, side, side))
+        for layout, case_lhs, case_rhs in make_batch_layout_cases(lhs, rhs):
+            lhs_sa = make_container(case_lhs)
+            rhs_sa = make_container(case_rhs)
+            for _ in range(warmups):
+                np.matmul(case_lhs, case_rhs)
+                lhs_sa.matmul_planned(rhs_sa)
+
+            solvcon.call_profiler.reset()
+            for _ in range(samples):
+                profile_matmul_np(case_lhs, case_rhs)
+                profile_matmul_planned_sa(lhs_sa, rhs_sa)
+
+            result = solvcon.call_profiler.result()["children"]
+            timings = {}
+            for item in result:
+                name = item["name"].replace("profile_matmul_", "")
+                timings[name] = item["total_time"] / item["count"]
+
+            print(f"## Equal batch: `{layout}`, "
+                  f"dtype: `{np.dtype(dtype)}`")
+            print(f"- lhs shape: `{case_lhs.shape}`, element strides: "
+                  f"`{element_strides(case_lhs)}`")
+            print(f"- rhs shape: `{case_rhs.shape}`, element strides: "
+                  f"`{element_strides(case_rhs)}`\n")
+
+            print_profile_row("func", "per call (ms)", "cmp to np")
+            print_profile_row("-" * 20, "-" * 15, "-" * 15)
+            npbase = timings["np"]
+            for method in ("np", "planned_sa"):
+                value = timings[method]
+                print_profile_row(
+                    f"{method:8s}", f"{value:.3E}",
+                    f"{value / npbase:.3f}")
+            print()
+
+
+def profile_batch_layouts(
+        title, dtype, lhs, rhs, warmups, samples):
+    layouts = itertools.product(
+        make_batch_layouts(lhs),
+        make_batch_layouts(rhs),
+    )
+    for (lhs_layout, case_lhs), (rhs_layout, case_rhs) in layouts:
+        lhs_sa = make_container(case_lhs)
+        rhs_sa = make_container(case_rhs)
+        for _ in range(warmups):
+            np.matmul(case_lhs, case_rhs)
+            lhs_sa.matmul_planned(rhs_sa)
+
+        solvcon.call_profiler.reset()
+        for _ in range(samples):
+            profile_matmul_np(case_lhs, case_rhs)
+            profile_matmul_planned_sa(lhs_sa, rhs_sa)
+
+        result = solvcon.call_profiler.result()["children"]
+        timings = {}
+        for item in result:
+            name = item["name"].replace("profile_matmul_", "")
+            timings[name] = item["total_time"] / item["count"]
+
+        print(f"## {title}: `{lhs_layout} @ {rhs_layout}`, "
+              f"dtype: `{np.dtype(dtype)}`")
+        print(f"- lhs shape: `{case_lhs.shape}`, element strides: "
+              f"`{element_strides(case_lhs)}`")
+        print(f"- rhs shape: `{case_rhs.shape}`, element strides: "
+              f"`{element_strides(case_rhs)}`\n")
+
+        print_profile_row("func", "per call (ms)", "cmp to np")
+        print_profile_row("-" * 20, "-" * 15, "-" * 15)
+        npbase = timings["np"]
+        for method in ("np", "planned_sa"):
+            value = timings[method]
+            print_profile_row(
+                f"{method:8s}", f"{value:.3E}",
+                f"{value / npbase:.3f}")
+        print()
+
+
+def profile_broadcast_matmul_operation(
+        dtype, batches, side, warmups, samples):
+    for batch in batches:
+        matrix = make_data(dtype, (side, side))
+        singleton = make_data(dtype, (1, side, side))
+        batched = make_data(dtype, (batch, side, side))
+        cases = (
+            ("2D @ ND", matrix, batched),
+            ("ND @ 2D", batched, matrix),
+            ("Singleton @ ND", singleton, batched),
+            ("ND @ singleton", batched, singleton),
+        )
+        for title, lhs, rhs in cases:
+            profile_batch_layouts(
+                title, dtype, lhs, rhs, warmups, samples)
+
+        lhs = make_data(dtype, (batch, 1, side, side))
+        rhs = make_data(dtype, (1, batch, side, side))
+        profile_batch_layouts(
+            "Cross broadcast", dtype, lhs, rhs, warmups, samples)
+
+
 def main():
     shapes = [4, 16, 64, 256, 1024]
 
     for dtype in (np.float32, np.float64):
         profile_matmul_operation(dtype, shapes)
+
+    batch_sides = (4, 9, 16, 27, 64, 81)
+    broadcast_batches = (1, 4, 16, 64)
+
+    for dtype in (np.float32, np.float64):
+        profile_batched_matmul_operation(
+            dtype, batch_sides, batch=10, warmups=2, samples=15)
+        profile_broadcast_matmul_operation(
+            dtype, broadcast_batches, side=16, warmups=2, samples=15)
 
     shapes = [9, 27, 81, 243, 729]
 

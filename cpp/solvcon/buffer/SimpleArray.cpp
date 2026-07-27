@@ -28,60 +28,22 @@ static inline void copy_one(int8_t * dst, int8_t const * src)
 }
 
 template <size_t N>
-static void tiled_2d_impl(
-    int8_t * const dst_body, int8_t const * const src_body, ssize_t const n0, ssize_t const n1, ssize_t const ss0, ssize_t const ss1, ssize_t const os0, ssize_t const os1)
-{
-    constexpr ssize_t BLOCK = 32;
-    for (ssize_t i0 = 0; i0 < n0; i0 += BLOCK)
-    {
-        ssize_t const i_end = std::min(i0 + BLOCK, n0);
-        for (ssize_t j0 = 0; j0 < n1; j0 += BLOCK)
-        {
-            ssize_t const j_end = std::min(j0 + BLOCK, n1);
-            for (ssize_t i = i0; i < i_end; ++i)
-            {
-                int8_t const * src_row = src_body + i * ss0;
-                int8_t * dst_row = dst_body + i * os0;
-                for (ssize_t j = j0; j < j_end; ++j)
-                {
-                    copy_one<N>(dst_row + j * os1, src_row + j * ss1);
-                }
-            }
-        }
-    }
-}
-
-/**
- * Generic per-itemsize 2-D kernel that falls back to memcpy.  Used only for
- * itemsizes that are not in the specialized {1, 2, 4, 8, 16} set.
- */
-static inline void tiled_2d_generic(
-    int8_t * const dst_body, int8_t const * const src_body, ssize_t const n0, ssize_t const n1, ssize_t const ss0, ssize_t const ss1, ssize_t const os0, ssize_t const os1, size_t const itemsize)
-{
-    constexpr ssize_t BLOCK = 32;
-    for (ssize_t i0 = 0; i0 < n0; i0 += BLOCK)
-    {
-        ssize_t const i_end = std::min(i0 + BLOCK, n0);
-        for (ssize_t j0 = 0; j0 < n1; j0 += BLOCK)
-        {
-            ssize_t const j_end = std::min(j0 + BLOCK, n1);
-            for (ssize_t i = i0; i < i_end; ++i)
-            {
-                int8_t const * src_row = src_body + i * ss0;
-                int8_t * dst_row = dst_body + i * os0;
-                for (ssize_t j = j0; j < j_end; ++j)
-                {
-                    std::memcpy(dst_row + j * os1, src_row + j * ss1, itemsize);
-                }
-            }
-        }
-    }
-}
-
-template <size_t N>
 static void tiled_nd_inner(
     int8_t * const dst_body, int8_t const * const src_body, ssize_t const n_a, ssize_t const n_b, ssize_t const ss_a, ssize_t const ss_b, ssize_t const os_a, ssize_t const os_b)
 {
+    if (os_b == static_cast<ssize_t>(N))
+    {
+        for (ssize_t i = 0; i < n_a; ++i)
+        {
+            int8_t const * src_row = src_body + i * ss_a;
+            int8_t * dst_row = dst_body + i * os_a;
+            for (ssize_t j = 0; j < n_b; ++j)
+            {
+                copy_one<N>(dst_row + j * os_b, src_row + j * ss_b);
+            }
+        }
+        return;
+    }
     constexpr ssize_t BLOCK = 32;
     for (ssize_t a0 = 0; a0 < n_a; a0 += BLOCK)
     {
@@ -132,6 +94,19 @@ static inline void tiled_nd_inner_generic(
 static inline void dispatch_tile_inner(
     int8_t * const dst_body, int8_t const * const src_body, ssize_t const n_a, ssize_t const n_b, ssize_t const ss_a, ssize_t const ss_b, ssize_t const os_a, ssize_t const os_b, size_t const itemsize)
 {
+    auto const signed_itemsize = static_cast<ssize_t>(itemsize);
+    if (ss_b == signed_itemsize && os_b == signed_itemsize)
+    {
+        size_t const row_nbytes = static_cast<size_t>(n_b) * itemsize;
+        for (ssize_t i = 0; i < n_a; ++i)
+        {
+            std::memcpy(
+                dst_body + i * os_a,
+                src_body + i * ss_a,
+                row_nbytes);
+        }
+        return;
+    }
     switch (itemsize)
     {
     case 1: tiled_nd_inner<1>(dst_body, src_body, n_a, n_b, ss_a, ss_b, os_a, os_b); break;
@@ -202,15 +177,8 @@ void SimpleArrayCopier::tiled_2d() const
     ssize_t const ss1 = m_src_stride[1] * itemsize;
     ssize_t const os0 = m_dst_stride[0] * itemsize;
     ssize_t const os1 = m_dst_stride[1] * itemsize;
-    switch (m_itemsize)
-    {
-    case 1: tiled_2d_impl<1>(m_dst, m_src, n0, n1, ss0, ss1, os0, os1); break;
-    case 2: tiled_2d_impl<2>(m_dst, m_src, n0, n1, ss0, ss1, os0, os1); break;
-    case 4: tiled_2d_impl<4>(m_dst, m_src, n0, n1, ss0, ss1, os0, os1); break;
-    case 8: tiled_2d_impl<8>(m_dst, m_src, n0, n1, ss0, ss1, os0, os1); break;
-    case 16: tiled_2d_impl<16>(m_dst, m_src, n0, n1, ss0, ss1, os0, os1); break;
-    default: tiled_2d_generic(m_dst, m_src, n0, n1, ss0, ss1, os0, os1, m_itemsize); break;
-    }
+    dispatch_tile_inner(
+        m_dst, m_src, n0, n1, ss0, ss1, os0, os1, m_itemsize);
 }
 
 /**
