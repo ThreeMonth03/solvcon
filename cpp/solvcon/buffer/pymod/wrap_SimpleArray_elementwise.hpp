@@ -41,11 +41,16 @@ Value cast_elementwise_scalar(pybind11::handle operand)
 }
 
 template <typename Array>
-Array const &
-cast_elementwise_array(pybind11::handle operand)
+Array const * try_cast_elementwise_array(pybind11::handle operand)
 {
+    static auto const * type_info =
+        pybind11::detail::get_type_info(typeid(Array), true);
+    if (!PyObject_TypeCheck(operand.ptr(), type_info->type))
+    {
+        return nullptr;
+    }
     auto * instance = reinterpret_cast<pybind11::detail::instance *>(operand.ptr());
-    return *instance->get_value_and_holder().value_ptr<Array>();
+    return instance->get_value_and_holder(type_info).value_ptr<Array>();
 }
 
 template <typename Array,
@@ -73,11 +78,12 @@ Wrapper & bind_simple_array_elementwise(Wrapper & wrapper)
                         self,
                         cast_elementwise_scalar<Value>(operand));
                 }
-                if (py::isinstance<Array>(operand))
+                if (auto const * array =
+                        try_cast_elementwise_array<Array>(operand))
                 {
                     return array_function(
                         self,
-                        cast_elementwise_array<Array>(operand));
+                        *array);
                 }
                 return scalar_function(
                     self,
@@ -104,11 +110,12 @@ Wrapper & bind_simple_array_elementwise(Wrapper & wrapper)
                         destination);
                     return;
                 }
-                if (py::isinstance<Array>(operand))
+                if (auto const * array =
+                        try_cast_elementwise_array<Array>(operand))
                 {
                     array_function(
                         self,
-                        cast_elementwise_array<Array>(operand),
+                        *array,
                         destination);
                     return;
                 }
@@ -136,11 +143,12 @@ Wrapper & bind_simple_array_elementwise(Wrapper & wrapper)
                         cast_elementwise_scalar<Value>(operand));
                     return;
                 }
-                if (py::isinstance<Array>(operand))
+                if (auto const * array =
+                        try_cast_elementwise_array<Array>(operand))
                 {
                     array_function(
                         self,
-                        cast_elementwise_array<Array>(operand));
+                        *array);
                     return;
                 }
                 scalar_function(

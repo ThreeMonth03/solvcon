@@ -121,6 +121,39 @@ class PlannedElementwiseTC(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "broadcast"):
             lhs._planned_add(rhs)
 
+    def test_array_dispatch_selects_matching_inherited_holder(self):
+        float32_array_type = solvcon.SimpleArrayFloat32
+        float64_array_type = solvcon.SimpleArrayFloat64
+
+        class MixedArray(float32_array_type, float64_array_type):
+
+            def __init__(self, shape):
+                float32_array_type.__init__(self, shape)
+                float64_array_type.__init__(self, shape)
+
+        operand = MixedArray((2,))
+        float32_values = float32_array_type.ndarray.__get__(
+            operand, MixedArray
+        )
+        float32_values.fill(0)
+        operand_values = float64_array_type.ndarray.__get__(
+            operand, MixedArray
+        )
+        operand_values[:] = np.array([10.0, 20.0], dtype="float64")
+        lhs_values = np.array([1.0, 2.0], dtype="float64")
+        expected = lhs_values + operand_values
+
+        lhs = make_array(lhs_values)
+        result = float64_array_type._planned_add(lhs, operand)
+        destination = make_array(np.empty((2,), dtype="float64"))
+        float64_array_type._planned_add_to(lhs, operand, destination)
+        inplace = make_array(lhs_values.copy())
+        float64_array_type._planned_iadd(inplace, operand)
+
+        np.testing.assert_array_equal(result.ndarray, expected)
+        np.testing.assert_array_equal(destination.ndarray, expected)
+        np.testing.assert_array_equal(inplace.ndarray, expected)
+
     def test_partial_overlap_reads_from_a_snapshot(self):
         cases = (
             (slice(1, None), slice(None, -1)),
