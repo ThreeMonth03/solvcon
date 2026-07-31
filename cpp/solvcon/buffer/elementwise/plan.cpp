@@ -155,7 +155,27 @@ size_t select_inner_axis(
 }
 
 shape_type InnerLoopPlan::make_outer_shape(
-    LoopDomain const & domain, size_t inner_axis)
+    LoopDomain const & domain,
+    small_vector<size_t> const & outer_axes)
+{
+    if (domain.rank() == 0)
+    {
+        throw std::invalid_argument(
+            "inner loop requires a positive-rank domain");
+    }
+
+    shape_type shape;
+    for (size_t const axis : outer_axes)
+    {
+        shape.push_back(domain.extent(axis));
+    }
+    return shape;
+}
+
+InnerLoopPlan::AxisPartition InnerLoopPlan::partition_axes(
+    LoopDomain const & domain,
+    small_vector<OperandMapping> const & mappings,
+    size_t inner_axis)
 {
     if (domain.rank() == 0)
     {
@@ -166,37 +186,134 @@ shape_type InnerLoopPlan::make_outer_shape(
     {
         throw std::out_of_range("inner loop axis out of range");
     }
-
-    shape_type shape;
-    for (size_t axis = 0; axis < domain.rank(); ++axis)
+    if (mappings.empty())
     {
-        if (axis != inner_axis)
+        throw std::invalid_argument(
+            "inner loop requires an output mapping");
+    }
+    for (OperandMapping const & mapping : mappings)
+    {
+        if (mapping.rank() != domain.rank())
         {
-            shape.push_back(domain.extent(axis));
+            throw std::invalid_argument(
+                "inner loop mapping rank does not match domain");
         }
     }
-    return shape;
+
+    AxisPartition partition{
+        .m_inner = {inner_axis},
+        .m_outer = {}};
+    size_t inner_size =
+        static_cast<size_t>(domain.extent(inner_axis));
+    while (partition.m_inner.size() < domain.rank())
+    {
+        bool extended = false;
+        for (size_t axis = 0; axis < domain.rank(); ++axis)
+        {
+            if (std::ranges::find(
+                    partition.m_inner, axis) !=
+                partition.m_inner.end())
+            {
+                continue;
+            }
+            if (domain.extent(axis) == 1)
+            {
+                partition.m_inner.push_back(axis);
+                extended = true;
+                break;
+            }
+
+            bool compatible = true;
+            for (OperandMapping const & mapping : mappings)
+            {
+                compatible =
+                    compatible &&
+                    mapping.stride(axis) ==
+                        mapping.stride(inner_axis) *
+                            static_cast<ssize_t>(inner_size);
+            }
+            if (compatible)
+            {
+                partition.m_inner.push_back(axis);
+                inner_size *=
+                    static_cast<size_t>(domain.extent(axis));
+                extended = true;
+                break;
+            }
+        }
+        if (!extended)
+        {
+            break;
+        }
+    }
+
+    for (size_t axis = 0; axis < domain.rank(); ++axis)
+    {
+        if (std::ranges::find(
+                partition.m_inner, axis) ==
+            partition.m_inner.end())
+        {
+            partition.m_outer.push_back(axis);
+        }
+    }
+    OperandMapping const & output = mappings[0];
+    std::ranges::sort(
+        partition.m_outer,
+        [&](size_t lhs_axis, size_t rhs_axis)
+        {
+            size_t const lhs_stride =
+                stride_magnitude(output.stride(lhs_axis));
+            size_t const rhs_stride =
+                stride_magnitude(output.stride(rhs_axis));
+            return lhs_stride != rhs_stride
+                       ? lhs_stride > rhs_stride
+                       : lhs_axis < rhs_axis;
+        });
+    return partition;
 }
 
 InnerLoopPlan::InnerLoopPlan(
     LoopDomain const & domain,
     small_vector<OperandMapping> const & mappings,
     size_t inner_axis)
-    : m_outer(make_outer_shape(domain, inner_axis))
+    : InnerLoopPlan(
+          domain,
+          mappings,
+          inner_axis,
+          partition_axes(domain, mappings, inner_axis))
+{
+}
+
+InnerLoopPlan::InnerLoopPlan(
+    LoopDomain const & domain,
+    small_vector<OperandMapping> const & mappings,
+    size_t inner_axis,
+    AxisPartition const & axes)
+    : m_outer(make_outer_shape(domain, axes.m_outer))
     , m_size(static_cast<size_t>(domain.extent(inner_axis)))
     , m_strides(mappings.size())
     , m_outer_mappings(mappings.size())
 {
+    for (size_t const axis : axes.m_inner)
+    {
+        if (axis != inner_axis)
+        {
+            m_size *=
+                static_cast<size_t>(domain.extent(axis));
+        }
+    }
+
     for (size_t operand = 0; operand < mappings.size(); ++operand)
     {
-        if (mappings[operand].rank() != domain.rank())
-        {
-            throw std::invalid_argument(
-                "inner loop mapping rank does not match domain");
-        }
         m_strides[operand] = mappings[operand].stride(inner_axis);
+        stride_type outer_strides;
+        for (size_t const axis : axes.m_outer)
+        {
+            outer_strides.push_back(
+                mappings[operand].stride(axis));
+        }
         m_outer_mappings[operand] =
-            mapping_without_axis(mappings[operand], inner_axis);
+            OperandMapping(std::move(outer_strides));
     }
 }
 

@@ -10,6 +10,14 @@
 #include <concepts>
 #include <cstddef>
 
+#if defined(__ELF__) && defined(__x86_64__) && \
+    (defined(__GNUC__) || defined(__clang__))
+#define SOLVCON_ELEMENTWISE_TARGETS \
+    [[gnu::target_clones("default", "avx2")]]
+#else
+#define SOLVCON_ELEMENTWISE_TARGETS
+#endif
+
 namespace solvcon
 {
 
@@ -36,7 +44,7 @@ public:
 }; /* end class BinaryKernelBase */
 
 template <typename Derived, typename T>
-void BinaryKernelBase<Derived, T>::scalar(
+SOLVCON_ELEMENTWISE_TARGETS void BinaryKernelBase<Derived, T>::scalar(
     T * output, size_t count, T rhs)
 {
     Derived const kernel;
@@ -49,7 +57,7 @@ void BinaryKernelBase<Derived, T>::scalar(
 }
 
 template <typename Derived, typename T>
-void BinaryKernelBase<Derived, T>::inplace(
+SOLVCON_ELEMENTWISE_TARGETS void BinaryKernelBase<Derived, T>::inplace(
     T * output, size_t count, T const * rhs)
 {
     Derived const kernel;
@@ -63,7 +71,7 @@ void BinaryKernelBase<Derived, T>::inplace(
 }
 
 template <typename Derived, typename T>
-void BinaryKernelBase<Derived, T>::contiguous_scalar(
+SOLVCON_ELEMENTWISE_TARGETS void BinaryKernelBase<Derived, T>::contiguous_scalar(
     T * output, size_t count, T const * lhs, T rhs)
 {
     Derived const kernel;
@@ -74,7 +82,7 @@ void BinaryKernelBase<Derived, T>::contiguous_scalar(
 }
 
 template <typename Derived, typename T>
-void BinaryKernelBase<Derived, T>::contiguous_lhs_scalar(
+SOLVCON_ELEMENTWISE_TARGETS void BinaryKernelBase<Derived, T>::contiguous_lhs_scalar(
     T * output, size_t count, T lhs, T const * rhs)
 {
     Derived const kernel;
@@ -167,5 +175,7 @@ concept ArithmeticKernel = requires(Kernel kernel,
 } /* end namespace detail */
 
 } /* end namespace solvcon */
+
+#undef SOLVCON_ELEMENTWISE_TARGETS
 
 // vim: set ff=unix fenc=utf8 nobomb et sw=4 ts=4 sts=4:

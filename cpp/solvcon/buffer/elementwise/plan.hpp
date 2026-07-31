@@ -48,8 +48,24 @@ public:
     }
 
 private:
+    struct AxisPartition
+    {
+        small_vector<size_t> m_inner;
+        small_vector<size_t> m_outer;
+    }; /* end struct AxisPartition */
+
+    InnerLoopPlan(
+        LoopDomain const & domain,
+        small_vector<OperandMapping> const & mappings,
+        size_t inner_axis,
+        AxisPartition const & axes);
     static shape_type make_outer_shape(
-        LoopDomain const & domain, size_t inner_axis);
+        LoopDomain const & domain,
+        small_vector<size_t> const & outer_axes);
+    static AxisPartition partition_axes(
+        LoopDomain const & domain,
+        small_vector<OperandMapping> const & mappings,
+        size_t inner_axis);
 
     LoopDomain m_outer;
     size_t m_size = 0;

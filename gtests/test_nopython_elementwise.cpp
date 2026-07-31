@@ -41,6 +41,12 @@ public:
                                   size_t count,
                                   double const * lhs,
                                   double rhs);
+    static void scalar(double * output,
+                       size_t count,
+                       double rhs);
+    static void inplace(double * output,
+                        size_t count,
+                        double const * rhs);
 
     static void reset() noexcept;
     static size_t calls() noexcept { return m_calls; }
@@ -48,16 +54,22 @@ public:
     {
         return m_contiguous_scalar_calls;
     }
+    static size_t scalar_calls() noexcept { return m_scalar_calls; }
+    static size_t inplace_calls() noexcept { return m_inplace_calls; }
 
 private:
     inline static size_t m_calls = 0;
     inline static size_t m_contiguous_scalar_calls = 0;
+    inline static size_t m_scalar_calls = 0;
+    inline static size_t m_inplace_calls = 0;
 }; /* end class CountingAddKernel */
 
 void CountingAddKernel::reset() noexcept
 {
     m_calls = 0;
     m_contiguous_scalar_calls = 0;
+    m_scalar_calls = 0;
+    m_inplace_calls = 0;
 }
 
 void CountingAddKernel::contiguous(
@@ -82,6 +94,20 @@ void CountingAddKernel::contiguous_scalar(
     ++m_contiguous_scalar_calls;
     BinaryKernelBase::contiguous_scalar(
         output, count, lhs, rhs);
+}
+
+void CountingAddKernel::scalar(
+    double * output, size_t count, double rhs)
+{
+    ++m_scalar_calls;
+    BinaryKernelBase::scalar(output, count, rhs);
+}
+
+void CountingAddKernel::inplace(
+    double * output, size_t count, double const * rhs)
+{
+    ++m_inplace_calls;
+    BinaryKernelBase::inplace(output, count, rhs);
 }
 
 void expect_mapping_strides(
@@ -254,7 +280,7 @@ TEST(ElementwiseExecutor, NormalizesReversedInnerLoop)
         double,
         CountingAddKernel>::transform_into(destination, rhs, CountingAddKernel{});
 
-    EXPECT_EQ(CountingAddKernel::contiguous_scalar_calls(), 3);
+    EXPECT_EQ(CountingAddKernel::scalar_calls(), 3);
 }
 
 TEST(ElementwiseExecutor, RankOneConstantInputUsesContiguousScalar)
@@ -354,6 +380,84 @@ TEST(ElementwiseExecutor, UpdatesStridedAliasWithConstantBroadcast)
         }
     }
     EXPECT_EQ(CountingAddKernel::calls(), 15);
+}
+
+TEST(ElementwiseExecutor, UpdatesDenseAliasWithConstantBroadcast)
+{
+    using array_type = solvcon::SimpleArray<double>;
+    array_type destination(ew::shape_type{2, 3, 5});
+    array_type rhs(ew::shape_type{1, 1, 1});
+    destination.fill(1.0);
+    rhs.fill(2.0);
+
+    CountingAddKernel::reset();
+    ew::ElementwiseExecutor<
+        array_type,
+        double,
+        CountingAddKernel>::transform_into(destination, rhs, CountingAddKernel{});
+
+    EXPECT_EQ(CountingAddKernel::scalar_calls(), 1);
+    EXPECT_DOUBLE_EQ(
+        destination.at(ew::shape_type{0, 0, 0}), 3.0);
+    EXPECT_DOUBLE_EQ(
+        destination.at(ew::shape_type{1, 2, 4}), 3.0);
+}
+
+TEST(ElementwiseExecutor, CoalescesContiguousTrailingAxes)
+{
+    using array_type = solvcon::SimpleArray<double>;
+    array_type destination(ew::shape_type{2, 3, 5});
+    array_type rhs(ew::shape_type{1, 3, 5});
+    solvcon::small_vector<OperandMapping> const mappings{
+        OperandMapping(destination.stride()),
+        OperandMapping(destination.stride()),
+        ew::broadcast_mapping(
+            rhs.shape(),
+            rhs.stride(),
+            LoopDomain(destination.shape()))};
+    ew::InnerLoopPlan const inner(
+        LoopDomain(destination.shape()), mappings, 2);
+
+    EXPECT_EQ(inner.size(), 15);
+    EXPECT_EQ(inner.outer().shape(), (ew::shape_type{2}));
+}
+
+TEST(ElementwiseExecutor, UpdatesCoalescedInplaceBlocks)
+{
+    using array_type = solvcon::SimpleArray<double>;
+    array_type destination(ew::shape_type{2, 3, 5});
+    array_type rhs(ew::shape_type{1, 3, 5});
+    destination.fill(1.0);
+    rhs.fill(2.0);
+
+    CountingAddKernel::reset();
+    ew::ElementwiseExecutor<
+        array_type,
+        double,
+        CountingAddKernel>::transform_into(destination, rhs, CountingAddKernel{});
+
+    EXPECT_EQ(CountingAddKernel::inplace_calls(), 2);
+    EXPECT_DOUBLE_EQ(
+        destination.at(ew::shape_type{0, 0, 0}), 3.0);
+    EXPECT_DOUBLE_EQ(
+        destination.at(ew::shape_type{1, 2, 4}), 3.0);
+}
+
+TEST(ElementwiseExecutor, TraversesOuterAxesInPhysicalOrder)
+{
+    LoopDomain const domain(ew::shape_type{2, 3, 5});
+    solvcon::small_vector<OperandMapping> const mappings{
+        OperandMapping(ew::stride_type{1, 2, 6}),
+        OperandMapping(ew::stride_type{0, 1, 3}),
+        OperandMapping(ew::stride_type{1, 2, 6})};
+    ew::InnerLoopPlan const inner(domain, mappings, 0);
+
+    EXPECT_EQ(inner.size(), 2);
+    EXPECT_EQ(inner.outer().shape(), (ew::shape_type{5, 3}));
+    expect_mapping_strides(
+        inner.outer_mappings()[0], ew::stride_type{6, 2});
+    expect_mapping_strides(
+        inner.outer_mappings()[1], ew::stride_type{3, 1});
 }
 
 // vim: set ff=unix fenc=utf8 nobomb et sw=4 ts=4 sts=4:

@@ -292,21 +292,41 @@ bool ElementwiseExecutor<Array, T, Kernel>::
         InnerLoopState const & state,
         kernel_type kernel)
 {
-    if (state.m_stride[RHS_INDEX] == 0 &&
-        output_data == lhs_data &&
+    if (output_data == lhs_data &&
         state.m_offset[OUTPUT_INDEX] ==
             state.m_offset[LHS_INDEX] &&
         state.m_stride[OUTPUT_INDEX] ==
             state.m_stride[LHS_INDEX])
     {
-        value_type const rhs_value =
-            rhs_data[state.m_offset[RHS_INDEX]];
+        if (state.m_stride[OUTPUT_INDEX] == 1 &&
+            state.m_stride[RHS_INDEX] == 1)
+        {
+            kernel_type::inplace(
+                output_data + state.m_offset[OUTPUT_INDEX],
+                inner_size,
+                rhs_data + state.m_offset[RHS_INDEX]);
+            return true;
+        }
+        if (state.m_stride[OUTPUT_INDEX] == 1 &&
+            state.m_stride[RHS_INDEX] == 0)
+        {
+            kernel_type::scalar(
+                output_data + state.m_offset[OUTPUT_INDEX],
+                inner_size,
+                rhs_data[state.m_offset[RHS_INDEX]]);
+            return true;
+        }
+
         ssize_t output_offset = state.m_offset[OUTPUT_INDEX];
+        ssize_t rhs_offset = state.m_offset[RHS_INDEX];
         for (size_t index = 0; index < inner_size; ++index)
         {
             output_data[output_offset] =
-                kernel(output_data[output_offset], rhs_value);
+                kernel(
+                    output_data[output_offset],
+                    rhs_data[rhs_offset]);
             output_offset += state.m_stride[OUTPUT_INDEX];
+            rhs_offset += state.m_stride[RHS_INDEX];
         }
         return true;
     }
@@ -382,6 +402,16 @@ void ElementwiseExecutor<Array, T, Kernel>::execute_inner_strided(
              cursor.offset(LHS_INDEX),
              cursor.offset(RHS_INDEX)}};
         normalize_reversed_inner(inner.size(), state);
+        if (try_execute_inplace_inner(
+                inner.size(),
+                output_data,
+                lhs_data,
+                rhs_data,
+                state,
+                kernel))
+        {
+            continue;
+        }
         if (try_execute_unit_stride_inner(
                 inner.size(),
                 output_data,
@@ -393,16 +423,6 @@ void ElementwiseExecutor<Array, T, Kernel>::execute_inner_strided(
             continue;
         }
         if (try_execute_output_contiguous_inner(
-                inner.size(),
-                output_data,
-                lhs_data,
-                rhs_data,
-                state,
-                kernel))
-        {
-            continue;
-        }
-        if (try_execute_inplace_inner(
                 inner.size(),
                 output_data,
                 lhs_data,
@@ -453,17 +473,25 @@ void ElementwiseExecutor<Array, T, Kernel>::execute(
         mapping_is_constant(plan.domain(), rhs_mapping);
     if (output_matches_lhs && rhs_is_constant)
     {
-        kernel_type::contiguous_scalar(
-            output_data +
-                mapping_span(
-                    plan.domain(), plan.output())
-                    .minimum(),
-            plan.domain().size(),
-            lhs_data +
-                mapping_span(
-                    plan.domain(), lhs_mapping)
-                    .minimum(),
-            rhs_data[0]);
+        ssize_t const offset =
+            mapping_span(
+                plan.domain(), plan.output())
+                .minimum();
+        if (output_data == lhs_data)
+        {
+            kernel_type::scalar(
+                output_data + offset,
+                plan.domain().size(),
+                rhs_data[0]);
+        }
+        else
+        {
+            kernel_type::contiguous_scalar(
+                output_data + offset,
+                plan.domain().size(),
+                lhs_data + offset,
+                rhs_data[0]);
+        }
         return;
     }
     if (output_matches_rhs && lhs_is_constant)
@@ -661,8 +689,12 @@ Array ElementwiseExecutor<Array, T, Kernel>::transform(
     LoopDomain const result_domain(
         ElementwisePlan::broadcast_shape(lhs, rhs));
     shape_type const & result_shape = result_domain.shape();
-    OperandMapping const lhs_mapping(lhs.stride());
-    OperandMapping const rhs_mapping(rhs.stride());
+    OperandMapping const lhs_mapping =
+        broadcast_mapping(
+            lhs.shape(), lhs.stride(), result_domain);
+    OperandMapping const rhs_mapping =
+        broadcast_mapping(
+            rhs.shape(), rhs.stride(), result_domain);
     bool const result_matches_lhs =
         std::ranges::equal(result_shape, lhs.shape());
     bool const result_matches_rhs =
@@ -675,11 +707,13 @@ Array ElementwiseExecutor<Array, T, Kernel>::transform(
     bool const preserve_lhs_layout =
         result_matches_lhs &&
         !result_matches_rhs &&
-        mapping_is_dense(result_domain, lhs_mapping);
+        mapping_follows_layout(
+            result_domain, lhs_mapping, rhs_mapping);
     bool const preserve_rhs_layout =
         result_matches_rhs &&
         !result_matches_lhs &&
-        mapping_is_dense(result_domain, rhs_mapping);
+        mapping_follows_layout(
+            result_domain, rhs_mapping, lhs_mapping);
     auto output = [&]() -> Array
     {
         if (preserve_layout || preserve_lhs_layout)

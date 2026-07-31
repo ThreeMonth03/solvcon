@@ -45,6 +45,13 @@ private:
     ssize_t m_maximum;
 }; /* end class MappingSpan */
 
+inline size_t stride_magnitude(ssize_t stride)
+{
+    return stride < 0
+               ? static_cast<size_t>(-(stride + 1)) + 1
+               : static_cast<size_t>(stride);
+}
+
 inline MappingSpan mapping_span(
     shape_type const & shape, stride_type const & strides)
 {
@@ -138,13 +145,6 @@ inline bool mapping_is_dense(
         return false;
     }
 
-    auto const magnitude = [](ssize_t stride)
-    {
-        return stride < 0
-                   ? static_cast<size_t>(-(stride + 1)) + 1
-                   : static_cast<size_t>(stride);
-    };
-
     small_vector<size_t> axes;
     for (size_t axis = 0; axis < shape.size(); ++axis)
     {
@@ -161,12 +161,12 @@ inline bool mapping_is_dense(
         axes,
         {},
         [&](size_t axis)
-        { return magnitude(strides[axis]); });
+        { return stride_magnitude(strides[axis]); });
 
     size_t expected_stride = 1;
     for (size_t const axis : axes)
     {
-        if (magnitude(strides[axis]) != expected_stride)
+        if (stride_magnitude(strides[axis]) != expected_stride)
         {
             return false;
         }
@@ -182,13 +182,6 @@ inline bool mapping_is_dense(
     {
         return false;
     }
-
-    auto const magnitude = [](ssize_t stride)
-    {
-        return stride < 0
-                   ? static_cast<size_t>(-(stride + 1)) + 1
-                   : static_cast<size_t>(stride);
-    };
 
     small_vector<size_t> axes;
     for (size_t axis = 0; axis < domain.rank(); ++axis)
@@ -206,12 +199,60 @@ inline bool mapping_is_dense(
         axes,
         {},
         [&](size_t axis)
-        { return magnitude(mapping.stride(axis)); });
+        { return stride_magnitude(mapping.stride(axis)); });
 
     size_t expected_stride = 1;
     for (size_t const axis : axes)
     {
-        if (magnitude(mapping.stride(axis)) != expected_stride)
+        if (stride_magnitude(mapping.stride(axis)) != expected_stride)
+        {
+            return false;
+        }
+        expected_stride *=
+            static_cast<size_t>(domain.extent(axis));
+    }
+    return true;
+}
+
+inline bool mapping_follows_layout(
+    LoopDomain const & domain,
+    OperandMapping const & layout,
+    OperandMapping const & input)
+{
+    if (domain.rank() != layout.rank() ||
+        domain.rank() != input.rank() ||
+        !mapping_is_dense(domain, layout))
+    {
+        return false;
+    }
+
+    small_vector<size_t> axes;
+    for (size_t axis = 0; axis < domain.rank(); ++axis)
+    {
+        if (domain.extent(axis) > 1)
+        {
+            axes.push_back(axis);
+        }
+    }
+    std::ranges::sort(
+        axes,
+        {},
+        [&](size_t axis)
+        { return stride_magnitude(layout.stride(axis)); });
+
+    size_t expected_stride = 1;
+    for (size_t const axis : axes)
+    {
+        ssize_t const input_stride = input.stride(axis);
+        if (input_stride == 0)
+        {
+            continue;
+        }
+        bool const same_direction =
+            (layout.stride(axis) < 0) ==
+            (input_stride < 0);
+        if (!same_direction ||
+            stride_magnitude(input_stride) != expected_stride)
         {
             return false;
         }
@@ -254,27 +295,6 @@ inline bool mapping_strides_equal(
         }
     }
     return true;
-}
-
-inline OperandMapping mapping_without_axis(
-    OperandMapping const & mapping, size_t axis)
-{
-    if (axis >= mapping.rank())
-    {
-        throw std::out_of_range("mapping axis out of range");
-    }
-
-    stride_type strides;
-    for (size_t source_axis = 0;
-         source_axis < mapping.rank();
-         ++source_axis)
-    {
-        if (source_axis != axis)
-        {
-            strides.push_back(mapping.stride(source_axis));
-        }
-    }
-    return OperandMapping(std::move(strides));
 }
 
 } /* end namespace elementwise */
