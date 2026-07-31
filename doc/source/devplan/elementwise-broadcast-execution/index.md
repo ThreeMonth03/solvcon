@@ -283,6 +283,42 @@ A shared AVX2 array-and-scalar prototype was 1.8% slower in aggregate over 64
 large C-layout cases, so it was removed rather than adding an unproven SIMD
 layer.
 
+### NumPy 2.5.1 refresh
+
+The Apple M1 sweep was refreshed on 2026-07-31 after rebasing the measurements
+on the updated prototype.  The clean `fdc3f567` revision used macOS 26.5.1
+arm64, Python 3.14.6, NumPy 2.5.1, and one thread for every supported numerical
+library variable.  The six reports contain 54,432 raw cases.  Deduplication
+leaves 49,152 identifiers and 33,368 valid regular-output timings.  Every
+valid result matches NumPy.
+
+| Scope | Cases | Win rate | Median NumPy / planned | 10th percentile |
+| --- | ---: | ---: | ---: | ---: |
+| All regular output | 33,368 | 90.62% | 1.435x | 1.011x |
+| Broadcast regular output | 29,208 | 93.20% | 1.454x | 1.065x |
+| All reused output | 24,512 | 96.64% | 1.810x | 1.093x |
+| Broadcast reused output | 22,240 | 97.36% | 1.836x | 1.250x |
+| Size-32 regular output | 16,472 | 94.38% | 1.467x | 1.170x |
+| Size-32 reused output | 12,384 | 97.69% | 1.823x | 1.395x |
+
+Every topology has a median ratio above 1.0.  Against the `229960f1` size-32
+baseline, the regular-output median increases from 1.139x to 1.467x and the
+win rate increases from 85.02% to 94.38%.  The reused-output median increases
+from 1.242x to 1.823x and the win rate increases from 95.88% to 97.69%.
+
+The improvement comes from direct C- and Fortran-layout broadcast routes,
+trailing-axis coalescing, standard contiguous result allocation, NEON scalar
+kernels, and direct dense singleton-array updates.  The singleton path reads
+an aliased value before mutation and recognizes a row-major destination with a
+reversed inner axis, so it avoids overlap analysis and generic plan
+construction without changing logical results.
+
+The broad one-millisecond sweep recorded several scheduler-interrupted tail
+samples.  The six lowest ratios were repeated sequentially with 31 samples,
+seven warmups, and a 30-millisecond target.  Their NumPy/planned ratios range
+from 1.242x to 2.146x.  These longer measurements confirm that the reported
+extremes are timing noise rather than executor regressions.
+
 ### Reproduction
 
 Build the extension and set every supported numerical library to one thread:
@@ -333,13 +369,15 @@ executor route and kernel before changing allocation.
 
 - Branch: `codex/prototype-elementwise-broadcast`
 - Correctness catalog: complete
-- C++ tests: 243 passed
-- Python tests: 1,427 passed, 364 skipped, and 3 expected failures
+- C++ tests: 247 passed
+- Python tests: 1,289 passed, 363 skipped, 3 expected failures, and 573
+  subtests passed; seven unrelated files require the unavailable `jsonschema`
+  dependency
 - Performance specialization: complete for layout-selected inner loops,
   direct equal-shape and scalar loops, signed contiguous traversal, strided
   inputs, dense broadcast layouts, exact aliases, single Python operand
-  dispatch, and AArch64 feature resolution
-- Last clean broad benchmark revision: `b988fdc3`
+  dispatch, AArch64 feature resolution, and dense singleton-array updates
+- Last clean broad benchmark revision: `fdc3f567`
 - Cross-platform broad benchmarks: complete on WSL2 x86-64 and Apple M1
 - Commits: split into benchmark, implementation, and documentation concerns
 - Verification: full tests, focused elementwise tests, and `make lint` pass
