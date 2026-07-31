@@ -104,6 +104,11 @@ private:
         value_type const * rhs_data,
         InnerLoopState const & state,
         kernel_type kernel);
+    static bool try_execute_row_major_broadcast(
+        Array & output,
+        Array const & lhs,
+        Array const & rhs,
+        kernel_type kernel);
     static void execute_scalar(ElementwisePlan const & plan,
                                Array & output,
                                Array const & lhs,
@@ -237,6 +242,24 @@ bool ElementwiseExecutor<Array, T, Kernel>::
     if (state.m_stride[RHS_INDEX] == 0)
     {
         value_type const rhs_value = rhs_data[rhs_offset];
+        value_type const * selected_lhs = lhs_data + lhs_offset;
+        switch (state.m_stride[LHS_INDEX])
+        {
+        case 2:
+            kernel_type::template strided_scalar<2>(
+                selected_output, inner_size, selected_lhs, rhs_value);
+            return true;
+        case 3:
+            kernel_type::template strided_scalar<3>(
+                selected_output, inner_size, selected_lhs, rhs_value);
+            return true;
+        case 4:
+            kernel_type::template strided_scalar<4>(
+                selected_output, inner_size, selected_lhs, rhs_value);
+            return true;
+        default:
+            break;
+        }
         for (size_t index = 0; index < inner_size; ++index)
         {
             selected_output[index] =
@@ -248,6 +271,24 @@ bool ElementwiseExecutor<Array, T, Kernel>::
     if (state.m_stride[LHS_INDEX] == 0)
     {
         value_type const lhs_value = lhs_data[lhs_offset];
+        value_type const * selected_rhs = rhs_data + rhs_offset;
+        switch (state.m_stride[RHS_INDEX])
+        {
+        case 2:
+            kernel_type::template strided_lhs_scalar<2>(
+                selected_output, inner_size, lhs_value, selected_rhs);
+            return true;
+        case 3:
+            kernel_type::template strided_lhs_scalar<3>(
+                selected_output, inner_size, lhs_value, selected_rhs);
+            return true;
+        case 4:
+            kernel_type::template strided_lhs_scalar<4>(
+                selected_output, inner_size, lhs_value, selected_rhs);
+            return true;
+        default:
+            break;
+        }
         for (size_t index = 0; index < inner_size; ++index)
         {
             selected_output[index] =
@@ -372,6 +413,108 @@ void ElementwiseExecutor<Array, T, Kernel>::execute_generic_inner(
         lhs_offset += state.m_stride[LHS_INDEX];
         rhs_offset += state.m_stride[RHS_INDEX];
     }
+}
+
+template <typename Array, typename T, typename Kernel>
+requires ArithmeticKernel<Kernel, T>
+bool ElementwiseExecutor<Array, T, Kernel>::
+    try_execute_row_major_broadcast(
+        Array & output,
+        Array const & lhs,
+        Array const & rhs,
+        kernel_type kernel)
+{
+    if (!output.is_c_contiguous() ||
+        output.shape().size() <= 1)
+    {
+        return false;
+    }
+
+    size_t const rank = output.shape().size();
+    stride_type lhs_strides(rank, 0);
+    stride_type rhs_strides(rank, 0);
+    size_t const lhs_delta = rank - lhs.shape().size();
+    size_t const rhs_delta = rank - rhs.shape().size();
+    for (size_t axis = 0; axis < lhs.shape().size(); ++axis)
+    {
+        if (lhs.shape()[axis] == output.shape()[lhs_delta + axis])
+        {
+            lhs_strides[lhs_delta + axis] = lhs.stride()[axis];
+        }
+    }
+    for (size_t axis = 0; axis < rhs.shape().size(); ++axis)
+    {
+        if (rhs.shape()[axis] == output.shape()[rhs_delta + axis])
+        {
+            rhs_strides[rhs_delta + axis] = rhs.stride()[axis];
+        }
+    }
+
+    size_t const inner_size =
+        static_cast<size_t>(output.shape()[rank - 1]);
+    if (inner_size == 0)
+    {
+        return true;
+    }
+
+    value_type * output_data = output.logical_data();
+    value_type const * lhs_data = lhs.logical_data();
+    value_type const * rhs_data = rhs.logical_data();
+    shape_type outer_index(rank - 1, 0);
+    size_t const outer_size = output.size() / inner_size;
+    ssize_t lhs_offset = 0;
+    ssize_t rhs_offset = 0;
+    for (size_t outer = 0; outer < outer_size; ++outer)
+    {
+        InnerLoopState const state{
+            {1, lhs_strides[rank - 1], rhs_strides[rank - 1]},
+            {static_cast<ssize_t>(outer * inner_size),
+             lhs_offset,
+             rhs_offset}};
+        if (!try_execute_unit_stride_inner(
+                inner_size,
+                output_data,
+                lhs_data,
+                rhs_data,
+                state,
+                kernel) &&
+            !try_execute_output_contiguous_inner(
+                inner_size,
+                output_data,
+                lhs_data,
+                rhs_data,
+                state,
+                kernel))
+        {
+            execute_generic_inner(
+                inner_size,
+                output_data,
+                lhs_data,
+                rhs_data,
+                state,
+                kernel);
+        }
+
+        for (size_t axis_plus_one = rank - 1;
+             axis_plus_one > 0;
+             --axis_plus_one)
+        {
+            size_t const axis = axis_plus_one - 1;
+            ++outer_index[axis];
+            lhs_offset += lhs_strides[axis];
+            rhs_offset += rhs_strides[axis];
+            if (outer_index[axis] < output.shape()[axis])
+            {
+                break;
+            }
+            outer_index[axis] = 0;
+            lhs_offset -=
+                lhs_strides[axis] * output.shape()[axis];
+            rhs_offset -=
+                rhs_strides[axis] * output.shape()[axis];
+        }
+    }
+    return true;
 }
 
 template <typename Array, typename T, typename Kernel>
@@ -699,6 +842,10 @@ Array ElementwiseExecutor<Array, T, Kernel>::transform(
         std::ranges::equal(result_shape, lhs.shape());
     bool const result_matches_rhs =
         std::ranges::equal(result_shape, rhs.shape());
+    bool const lhs_is_constant =
+        mapping_is_constant(result_domain, lhs_mapping);
+    bool const rhs_is_constant =
+        mapping_is_constant(result_domain, rhs_mapping);
     bool const preserve_layout =
         result_matches_lhs &&
         result_matches_rhs &&
@@ -707,11 +854,13 @@ Array ElementwiseExecutor<Array, T, Kernel>::transform(
     bool const preserve_lhs_layout =
         result_matches_lhs &&
         !result_matches_rhs &&
+        rhs_is_constant &&
         mapping_follows_layout(
             result_domain, lhs_mapping, rhs_mapping);
     bool const preserve_rhs_layout =
         result_matches_rhs &&
         !result_matches_lhs &&
+        lhs_is_constant &&
         mapping_follows_layout(
             result_domain, rhs_mapping, lhs_mapping);
     auto output = [&]() -> Array
@@ -911,6 +1060,12 @@ void ElementwiseExecutor<Array, T, Kernel>::execute_to(
             rhs_data,
             state,
             kernel);
+        return;
+    }
+
+    if (try_execute_row_major_broadcast(
+            destination, lhs, rhs, kernel))
+    {
         return;
     }
 

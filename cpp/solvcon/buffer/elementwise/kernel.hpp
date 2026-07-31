@@ -41,6 +41,16 @@ public:
                                       size_t count,
                                       T lhs,
                                       T const * rhs);
+    template <ssize_t Stride>
+    static void strided_scalar(T * output,
+                               size_t count,
+                               T const * lhs,
+                               T rhs);
+    template <ssize_t Stride>
+    static void strided_lhs_scalar(T * output,
+                                   size_t count,
+                                   T lhs,
+                                   T const * rhs);
 }; /* end class BinaryKernelBase */
 
 template <typename Derived, typename T>
@@ -89,6 +99,31 @@ SOLVCON_ELEMENTWISE_TARGETS void BinaryKernelBase<Derived, T>::contiguous_lhs_sc
     for (size_t index = 0; index < count; ++index)
     {
         output[index] = kernel(lhs, rhs[index]);
+    }
+}
+
+template <typename Derived, typename T>
+template <ssize_t Stride>
+SOLVCON_ELEMENTWISE_TARGETS void BinaryKernelBase<Derived, T>::strided_scalar(
+    T * output, size_t count, T const * lhs, T rhs)
+{
+    Derived const kernel;
+    for (size_t index = 0; index < count; ++index)
+    {
+        output[index] = kernel(lhs[index * Stride], rhs);
+    }
+}
+
+template <typename Derived, typename T>
+template <ssize_t Stride>
+SOLVCON_ELEMENTWISE_TARGETS void BinaryKernelBase<Derived, T>::
+    strided_lhs_scalar(
+        T * output, size_t count, T lhs, T const * rhs)
+{
+    Derived const kernel;
+    for (size_t index = 0; index < count; ++index)
+    {
+        output[index] = kernel(lhs, rhs[index * Stride]);
     }
 }
 

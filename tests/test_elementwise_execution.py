@@ -218,6 +218,23 @@ class PlannedElementwiseTC(unittest.TestCase):
         np.testing.assert_array_equal(result.ndarray, lhs + rhs)
         self.assertTrue(result.ndarray.flags.c_contiguous)
 
+    def test_nonconstant_broadcast_uses_compact_output(self):
+        lhs = np.asfortranarray(
+            np.arange(
+                1 * 3 * 4, dtype="float64"
+            ).reshape(1, 3, 4)
+        )
+        rhs = np.asfortranarray(
+            np.arange(
+                2 * 3 * 4, dtype="float64"
+            ).reshape(2, 3, 4)
+        )
+
+        result = make_array(lhs)._planned_add(make_array(rhs))
+
+        np.testing.assert_array_equal(result.ndarray, lhs + rhs)
+        self.assertTrue(result.ndarray.flags.c_contiguous)
+
     def test_preallocated_output_covers_broadcast_and_scalar(self):
         lhs = np.arange(
             1, 4, dtype="float64"

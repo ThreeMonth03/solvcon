@@ -304,12 +304,12 @@ TEST(ElementwiseExecutor, RankOneConstantInputUsesContiguousScalar)
     EXPECT_DOUBLE_EQ(destination.at(7), 3.0);
 }
 
-TEST(ElementwiseExecutor, PreservesDenseFullShapeLayoutForBroadcast)
+TEST(ElementwiseExecutor, PreservesDenseFullShapeLayoutForConstantBroadcast)
 {
     using array_type = solvcon::SimpleArray<double>;
     array_type lhs = ew::allocate_layout<array_type>(
         ew::shape_type{3, 5}, ew::stride_type{1, 3});
-    array_type rhs(ew::shape_type{3, 1});
+    array_type rhs(ew::shape_type{1});
     lhs.fill(1.0);
     rhs.fill(2.0);
 
@@ -320,6 +320,7 @@ TEST(ElementwiseExecutor, PreservesDenseFullShapeLayoutForBroadcast)
         CountingAddKernel>::transform(lhs, rhs, CountingAddKernel{});
 
     EXPECT_EQ(result.stride(), lhs.stride());
+    EXPECT_EQ(CountingAddKernel::contiguous_scalar_calls(), 1);
     EXPECT_EQ(CountingAddKernel::calls(), 15);
 }
 
