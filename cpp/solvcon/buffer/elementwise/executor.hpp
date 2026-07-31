@@ -104,11 +104,22 @@ private:
         value_type const * rhs_data,
         InnerLoopState const & state,
         kernel_type kernel);
+    static stride_type aligned_strides(
+        Array const & output,
+        Array const & operand);
     static bool try_execute_row_major_broadcast(
         Array & output,
         Array const & lhs,
         Array const & rhs,
         kernel_type kernel);
+    static bool try_execute_column_major_broadcast(
+        Array & output,
+        Array const & lhs,
+        Array const & rhs,
+        kernel_type kernel);
+    static bool dense_inner_is_competitive(
+        LoopDomain const & domain,
+        OperandMapping const & mapping);
     static void execute_scalar(ElementwisePlan const & plan,
                                Array & output,
                                Array const & lhs,
@@ -417,6 +428,25 @@ void ElementwiseExecutor<Array, T, Kernel>::execute_generic_inner(
 
 template <typename Array, typename T, typename Kernel>
 requires ArithmeticKernel<Kernel, T>
+auto ElementwiseExecutor<Array, T, Kernel>::aligned_strides(
+    Array const & output,
+    Array const & operand) -> stride_type
+{
+    size_t const rank = output.shape().size();
+    stride_type strides(rank, 0);
+    size_t const delta = rank - operand.shape().size();
+    for (size_t axis = 0; axis < operand.shape().size(); ++axis)
+    {
+        if (operand.shape()[axis] == output.shape()[delta + axis])
+        {
+            strides[delta + axis] = operand.stride()[axis];
+        }
+    }
+    return strides;
+}
+
+template <typename Array, typename T, typename Kernel>
+requires ArithmeticKernel<Kernel, T>
 bool ElementwiseExecutor<Array, T, Kernel>::
     try_execute_row_major_broadcast(
         Array & output,
@@ -431,36 +461,44 @@ bool ElementwiseExecutor<Array, T, Kernel>::
     }
 
     size_t const rank = output.shape().size();
-    stride_type lhs_strides(rank, 0);
-    stride_type rhs_strides(rank, 0);
-    size_t const lhs_delta = rank - lhs.shape().size();
-    size_t const rhs_delta = rank - rhs.shape().size();
-    for (size_t axis = 0; axis < lhs.shape().size(); ++axis)
-    {
-        if (lhs.shape()[axis] == output.shape()[lhs_delta + axis])
-        {
-            lhs_strides[lhs_delta + axis] = lhs.stride()[axis];
-        }
-    }
-    for (size_t axis = 0; axis < rhs.shape().size(); ++axis)
-    {
-        if (rhs.shape()[axis] == output.shape()[rhs_delta + axis])
-        {
-            rhs_strides[rhs_delta + axis] = rhs.stride()[axis];
-        }
-    }
+    stride_type const lhs_strides =
+        aligned_strides(output, lhs);
+    stride_type const rhs_strides =
+        aligned_strides(output, rhs);
 
-    size_t const inner_size =
+    size_t inner_size =
         static_cast<size_t>(output.shape()[rank - 1]);
     if (inner_size == 0)
     {
         return true;
     }
+    size_t outer_rank = rank - 1;
+    while (outer_rank > 0)
+    {
+        size_t const axis = outer_rank - 1;
+        bool const singleton = output.shape()[axis] == 1;
+        bool const lhs_compatible =
+            lhs_strides[axis] ==
+            lhs_strides[rank - 1] *
+                static_cast<ssize_t>(inner_size);
+        bool const rhs_compatible =
+            rhs_strides[axis] ==
+            rhs_strides[rank - 1] *
+                static_cast<ssize_t>(inner_size);
+        if (!singleton &&
+            (!lhs_compatible || !rhs_compatible))
+        {
+            break;
+        }
+        inner_size *=
+            static_cast<size_t>(output.shape()[axis]);
+        --outer_rank;
+    }
 
     value_type * output_data = output.logical_data();
     value_type const * lhs_data = lhs.logical_data();
     value_type const * rhs_data = rhs.logical_data();
-    shape_type outer_index(rank - 1, 0);
+    shape_type outer_index(outer_rank, 0);
     size_t const outer_size = output.size() / inner_size;
     ssize_t lhs_offset = 0;
     ssize_t rhs_offset = 0;
@@ -471,7 +509,14 @@ bool ElementwiseExecutor<Array, T, Kernel>::
             {static_cast<ssize_t>(outer * inner_size),
              lhs_offset,
              rhs_offset}};
-        if (!try_execute_unit_stride_inner(
+        if (!try_execute_inplace_inner(
+                inner_size,
+                output_data,
+                lhs_data,
+                rhs_data,
+                state,
+                kernel) &&
+            !try_execute_unit_stride_inner(
                 inner_size,
                 output_data,
                 lhs_data,
@@ -495,7 +540,7 @@ bool ElementwiseExecutor<Array, T, Kernel>::
                 kernel);
         }
 
-        for (size_t axis_plus_one = rank - 1;
+        for (size_t axis_plus_one = outer_rank;
              axis_plus_one > 0;
              --axis_plus_one)
         {
@@ -512,6 +557,195 @@ bool ElementwiseExecutor<Array, T, Kernel>::
                 lhs_strides[axis] * output.shape()[axis];
             rhs_offset -=
                 rhs_strides[axis] * output.shape()[axis];
+        }
+    }
+    return true;
+}
+
+template <typename Array, typename T, typename Kernel>
+requires ArithmeticKernel<Kernel, T>
+bool ElementwiseExecutor<Array, T, Kernel>::
+    try_execute_column_major_broadcast(
+        Array & output,
+        Array const & lhs,
+        Array const & rhs,
+        kernel_type kernel)
+{
+    if (output.shape().size() <= 1 ||
+        !output.is_f_contiguous() ||
+        output.stride()[0] != 1)
+    {
+        return false;
+    }
+
+    size_t const inner_size =
+        static_cast<size_t>(output.shape()[0]);
+    if (inner_size == 0)
+    {
+        return true;
+    }
+
+    size_t const rank = output.shape().size();
+    stride_type const lhs_strides =
+        aligned_strides(output, lhs);
+    stride_type const rhs_strides =
+        aligned_strides(output, rhs);
+
+    size_t inner_rank = 1;
+    size_t selected_inner_size = inner_size;
+    while (inner_rank < rank)
+    {
+        bool const singleton =
+            output.shape()[inner_rank] == 1;
+        bool const lhs_compatible =
+            lhs_strides[inner_rank] ==
+            lhs_strides[0] *
+                static_cast<ssize_t>(selected_inner_size);
+        bool const rhs_compatible =
+            rhs_strides[inner_rank] ==
+            rhs_strides[0] *
+                static_cast<ssize_t>(selected_inner_size);
+        if (!singleton &&
+            (!lhs_compatible || !rhs_compatible))
+        {
+            break;
+        }
+        selected_inner_size *=
+            static_cast<size_t>(
+                output.shape()[inner_rank]);
+        ++inner_rank;
+    }
+
+    value_type * output_data = output.logical_data();
+    value_type const * lhs_data = lhs.logical_data();
+    value_type const * rhs_data = rhs.logical_data();
+    if (output_data == lhs_data)
+    {
+        size_t repeat = 1;
+        size_t rhs_axis = 0;
+        while (rhs_axis < rank &&
+               rhs_strides[rhs_axis] == 0)
+        {
+            repeat *= static_cast<size_t>(
+                output.shape()[rhs_axis]);
+            ++rhs_axis;
+        }
+
+        bool rhs_is_compact = repeat > 1;
+        ssize_t expected_stride = 1;
+        for (size_t axis = rhs_axis;
+             axis < rank;
+             ++axis)
+        {
+            if (output.shape()[axis] > 1 &&
+                rhs_strides[axis] != expected_stride)
+            {
+                rhs_is_compact = false;
+                break;
+            }
+            expected_stride *= output.shape()[axis];
+        }
+        if (rhs_is_compact)
+        {
+            size_t const rhs_size = output.size() / repeat;
+            for (size_t index = 0;
+                 index < rhs_size;
+                 ++index)
+            {
+                kernel_type::scalar(
+                    output_data + index * repeat,
+                    repeat,
+                    rhs_data[index]);
+            }
+            return true;
+        }
+    }
+
+    shape_type outer_index(rank, 0);
+    size_t const outer_size =
+        output.size() / selected_inner_size;
+    ssize_t lhs_offset = 0;
+    ssize_t rhs_offset = 0;
+    for (size_t outer = 0; outer < outer_size; ++outer)
+    {
+        InnerLoopState const state{
+            {1, lhs_strides[0], rhs_strides[0]},
+            {static_cast<ssize_t>(
+                 outer * selected_inner_size),
+             lhs_offset,
+             rhs_offset}};
+        if (!try_execute_inplace_inner(
+                selected_inner_size,
+                output_data,
+                lhs_data,
+                rhs_data,
+                state,
+                kernel) &&
+            !try_execute_unit_stride_inner(
+                selected_inner_size,
+                output_data,
+                lhs_data,
+                rhs_data,
+                state,
+                kernel) &&
+            !try_execute_output_contiguous_inner(
+                selected_inner_size,
+                output_data,
+                lhs_data,
+                rhs_data,
+                state,
+                kernel))
+        {
+            execute_generic_inner(
+                selected_inner_size,
+                output_data,
+                lhs_data,
+                rhs_data,
+                state,
+                kernel);
+        }
+
+        for (size_t axis = inner_rank;
+             axis < rank;
+             ++axis)
+        {
+            ++outer_index[axis];
+            lhs_offset += lhs_strides[axis];
+            rhs_offset += rhs_strides[axis];
+            if (outer_index[axis] < output.shape()[axis])
+            {
+                break;
+            }
+            outer_index[axis] = 0;
+            lhs_offset -=
+                lhs_strides[axis] * output.shape()[axis];
+            rhs_offset -=
+                rhs_strides[axis] * output.shape()[axis];
+        }
+    }
+    return true;
+}
+
+template <typename Array, typename T, typename Kernel>
+requires ArithmeticKernel<Kernel, T>
+bool ElementwiseExecutor<Array, T, Kernel>::
+    dense_inner_is_competitive(
+        LoopDomain const & domain,
+        OperandMapping const & mapping)
+{
+    if (domain.rank() == 0)
+    {
+        return true;
+    }
+
+    ssize_t const row_inner = domain.extent(domain.rank() - 1);
+    for (size_t axis = 0; axis < domain.rank(); ++axis)
+    {
+        if (domain.extent(axis) > 1 &&
+            stride_magnitude(mapping.stride(axis)) == 1)
+        {
+            return domain.extent(axis) >=
+                   (row_inner + 1) / 2;
         }
     }
     return true;
@@ -829,19 +1063,26 @@ Array ElementwiseExecutor<Array, T, Kernel>::transform(
         return output;
     }
 
-    LoopDomain const result_domain(
-        ElementwisePlan::broadcast_shape(lhs, rhs));
-    shape_type const & result_shape = result_domain.shape();
+    shape_type const result_shape =
+        ElementwisePlan::broadcast_shape(lhs, rhs);
+    bool const result_matches_lhs =
+        std::ranges::equal(result_shape, lhs.shape());
+    bool const result_matches_rhs =
+        std::ranges::equal(result_shape, rhs.shape());
+    if (!result_matches_lhs && !result_matches_rhs)
+    {
+        Array output(result_shape);
+        execute_to(output, lhs, rhs, kernel);
+        return output;
+    }
+
+    LoopDomain const result_domain(result_shape);
     OperandMapping const lhs_mapping =
         broadcast_mapping(
             lhs.shape(), lhs.stride(), result_domain);
     OperandMapping const rhs_mapping =
         broadcast_mapping(
             rhs.shape(), rhs.stride(), result_domain);
-    bool const result_matches_lhs =
-        std::ranges::equal(result_shape, lhs.shape());
-    bool const result_matches_rhs =
-        std::ranges::equal(result_shape, rhs.shape());
     bool const lhs_is_constant =
         mapping_is_constant(result_domain, lhs_mapping);
     bool const rhs_is_constant =
@@ -854,13 +1095,17 @@ Array ElementwiseExecutor<Array, T, Kernel>::transform(
     bool const preserve_lhs_layout =
         result_matches_lhs &&
         !result_matches_rhs &&
-        rhs_is_constant &&
+        (rhs_is_constant ||
+         dense_inner_is_competitive(
+             result_domain, lhs_mapping)) &&
         mapping_follows_layout(
             result_domain, lhs_mapping, rhs_mapping);
     bool const preserve_rhs_layout =
         result_matches_rhs &&
         !result_matches_lhs &&
-        lhs_is_constant &&
+        (lhs_is_constant ||
+         dense_inner_is_competitive(
+             result_domain, rhs_mapping)) &&
         mapping_follows_layout(
             result_domain, rhs_mapping, lhs_mapping);
     auto output = [&]() -> Array
@@ -1069,6 +1314,12 @@ void ElementwiseExecutor<Array, T, Kernel>::execute_to(
         return;
     }
 
+    if (try_execute_column_major_broadcast(
+            destination, lhs, rhs, kernel))
+    {
+        return;
+    }
+
     ElementwisePlan const plan =
         ElementwisePlan::make(destination, lhs, rhs);
     execute(plan, destination, lhs, rhs, kernel);
@@ -1245,6 +1496,43 @@ void ElementwiseExecutor<Array, T, Kernel>::execute_into(
             destination_offset += destination_stride;
             rhs_offset += rhs_stride;
         }
+        return;
+    }
+
+    bool valid_result_shape =
+        rhs.shape().size() <= destination.shape().size();
+    if (valid_result_shape)
+    {
+        size_t const delta =
+            destination.shape().size() - rhs.shape().size();
+        for (size_t axis = 0;
+             axis < rhs.shape().size();
+             ++axis)
+        {
+            if (rhs.shape()[axis] != 1 &&
+                rhs.shape()[axis] !=
+                    destination.shape()[delta + axis])
+            {
+                valid_result_shape = false;
+                break;
+            }
+        }
+    }
+    if (!valid_result_shape)
+    {
+        throw std::invalid_argument(
+            "elementwise output shape does not match result shape");
+    }
+
+    if (try_execute_row_major_broadcast(
+            destination, destination, rhs, kernel))
+    {
+        return;
+    }
+
+    if (try_execute_column_major_broadcast(
+            destination, destination, rhs, kernel))
+    {
         return;
     }
 

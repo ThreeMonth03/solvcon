@@ -114,6 +114,25 @@ class PlannedElementwiseTC(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "output shape"):
             destination._planned_iadd(rhs)
 
+    def test_fortran_inplace_leading_broadcast(self):
+        destination = np.asfortranarray(
+            np.arange(
+                2 * 17 * 32, dtype="float64"
+            ).reshape(2, 17, 32)
+        )
+        rhs = np.asfortranarray(
+            np.arange(
+                17 * 32, dtype="float64"
+            ).reshape(1, 17, 32)
+        )
+        expected = destination + rhs
+        result = make_array(destination)
+
+        result._planned_iadd(make_array(rhs))
+
+        np.testing.assert_array_equal(result.ndarray, expected)
+        self.assertTrue(result.ndarray.flags.f_contiguous)
+
     def test_invalid_trailing_dimensions_are_rejected(self):
         lhs = make_array(np.zeros((2, 3), dtype="float64"))
         rhs = make_array(np.zeros((4,), dtype="float64"))
@@ -221,13 +240,13 @@ class PlannedElementwiseTC(unittest.TestCase):
     def test_nonconstant_broadcast_uses_compact_output(self):
         lhs = np.asfortranarray(
             np.arange(
-                1 * 3 * 4, dtype="float64"
-            ).reshape(1, 3, 4)
+                1 * 3 * 8, dtype="float64"
+            ).reshape(1, 3, 8)
         )
         rhs = np.asfortranarray(
             np.arange(
-                2 * 3 * 4, dtype="float64"
-            ).reshape(2, 3, 4)
+                2 * 3 * 8, dtype="float64"
+            ).reshape(2, 3, 8)
         )
 
         result = make_array(lhs)._planned_add(make_array(rhs))

@@ -239,6 +239,24 @@ Array allocate_layout(shape_type const & shape,
     {
         return Array(shape);
     }
+
+    stride_type f_strides(shape.size());
+    ssize_t f_stride = 1;
+    for (size_t axis = 0; axis < shape.size(); ++axis)
+    {
+        f_strides[axis] = f_stride;
+        f_stride *= shape[axis];
+    }
+    if (std::ranges::equal(strides, f_strides))
+    {
+        shape_type reversed_shape(shape);
+        std::reverse(
+            reversed_shape.begin(), reversed_shape.end());
+        Array output(reversed_shape);
+        output.transpose();
+        return output;
+    }
+
     MappingSpan const span =
         mapping_span(domain, OperandMapping(strides));
     auto buffer = Array::buffer_type::construct(
