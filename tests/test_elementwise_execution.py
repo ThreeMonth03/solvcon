@@ -114,6 +114,21 @@ class PlannedElementwiseTC(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "output shape"):
             destination._planned_iadd(rhs)
 
+    def test_inplace_singleton_aliases_reversed_destination(self):
+        storage = np.arange(
+            2 * 3 * 4, dtype="float64"
+        ).reshape(2, 3, 4)
+        destination_values = storage[:, :, ::-1]
+        rhs_values = destination_values[:1, :1, :1]
+        expected = destination_values.copy() + rhs_values.item()
+        destination = make_array(destination_values)
+
+        destination._planned_iadd(make_array(rhs_values))
+
+        np.testing.assert_array_equal(
+            destination.ndarray, expected
+        )
+
     def test_fortran_inplace_leading_broadcast(self):
         destination = np.asfortranarray(
             np.arange(

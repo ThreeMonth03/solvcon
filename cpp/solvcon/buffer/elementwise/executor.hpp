@@ -1381,6 +1381,62 @@ void ElementwiseExecutor<Array, T, Kernel>::transform_into(
     Array const & rhs,
     kernel_type kernel)
 {
+    if (rhs.size() == 1 &&
+        rhs.shape().size() <= destination.shape().size())
+    {
+        bool reversed_inner_dense =
+            !destination.shape().empty();
+        ssize_t expected_stride = 1;
+        for (size_t axis_plus_one =
+                 destination.shape().size();
+             reversed_inner_dense && axis_plus_one > 0;
+             --axis_plus_one)
+        {
+            size_t const axis = axis_plus_one - 1;
+            ssize_t const selected_stride =
+                axis_plus_one == destination.shape().size()
+                    ? -destination.stride()[axis]
+                    : destination.stride()[axis];
+            if (destination.shape()[axis] > 1 &&
+                selected_stride != expected_stride)
+            {
+                reversed_inner_dense = false;
+            }
+            expected_stride *= destination.shape()[axis];
+        }
+
+        if (reversed_inner_dense ||
+            mapping_is_dense(
+                destination.shape(), destination.stride()))
+        {
+            if (destination.size() == 0)
+            {
+                return;
+            }
+            value_type const rhs_value = rhs.logical_data()[0];
+            ssize_t offset = 0;
+            if (reversed_inner_dense)
+            {
+                size_t const inner_axis =
+                    destination.shape().size() - 1;
+                offset = -static_cast<ssize_t>(
+                    destination.shape()[inner_axis] - 1);
+            }
+            else
+            {
+                offset = mapping_span(
+                             destination.shape(),
+                             destination.stride())
+                             .minimum();
+            }
+            kernel_type::scalar(
+                destination.logical_data() + offset,
+                destination.size(),
+                rhs_value);
+            return;
+        }
+    }
+
     bool const exact_alias =
         destination.logical_data() == rhs.logical_data() &&
         std::ranges::equal(
@@ -1528,6 +1584,11 @@ void ElementwiseExecutor<Array, T, Kernel>::execute_into(
     {
         throw std::invalid_argument(
             "elementwise output shape does not match result shape");
+    }
+
+    if (destination.size() == 0)
+    {
+        return;
     }
 
     if (try_execute_row_major_broadcast(
