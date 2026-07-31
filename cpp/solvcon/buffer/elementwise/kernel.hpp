@@ -133,6 +133,30 @@ class AddKernel : public BinaryKernelBase<AddKernel<T>, T>
 public:
     T operator()(T lhs, T rhs) const { return lhs + rhs; }
 
+    static void scalar(T * output, size_t count, T rhs)
+    {
+        simd::add_scalar<T>(
+            output, output + count, output, rhs);
+    }
+
+    static void contiguous_scalar(T * output,
+                                  size_t count,
+                                  T const * lhs,
+                                  T rhs)
+    {
+        simd::add_scalar<T>(
+            output, output + count, lhs, rhs);
+    }
+
+    static void contiguous_lhs_scalar(T * output,
+                                      size_t count,
+                                      T lhs,
+                                      T const * rhs)
+    {
+        simd::add_lhs_scalar<T>(
+            output, output + count, lhs, rhs);
+    }
+
     static void contiguous(T * output,
                            size_t count,
                            T const * lhs,
@@ -147,6 +171,30 @@ class SubtractKernel : public BinaryKernelBase<SubtractKernel<T>, T>
 {
 public:
     T operator()(T lhs, T rhs) const { return lhs - rhs; }
+
+    static void scalar(T * output, size_t count, T rhs)
+    {
+        simd::sub_scalar<T>(
+            output, output + count, output, rhs);
+    }
+
+    static void contiguous_scalar(T * output,
+                                  size_t count,
+                                  T const * lhs,
+                                  T rhs)
+    {
+        simd::sub_scalar<T>(
+            output, output + count, lhs, rhs);
+    }
+
+    static void contiguous_lhs_scalar(T * output,
+                                      size_t count,
+                                      T lhs,
+                                      T const * rhs)
+    {
+        simd::sub_lhs_scalar<T>(
+            output, output + count, lhs, rhs);
+    }
 
     static void contiguous(T * output,
                            size_t count,
@@ -163,6 +211,30 @@ class MultiplyKernel : public BinaryKernelBase<MultiplyKernel<T>, T>
 public:
     T operator()(T lhs, T rhs) const { return lhs * rhs; }
 
+    static void scalar(T * output, size_t count, T rhs)
+    {
+        simd::mul_scalar<T>(
+            output, output + count, output, rhs);
+    }
+
+    static void contiguous_scalar(T * output,
+                                  size_t count,
+                                  T const * lhs,
+                                  T rhs)
+    {
+        simd::mul_scalar<T>(
+            output, output + count, lhs, rhs);
+    }
+
+    static void contiguous_lhs_scalar(T * output,
+                                      size_t count,
+                                      T lhs,
+                                      T const * rhs)
+    {
+        simd::mul_lhs_scalar<T>(
+            output, output + count, lhs, rhs);
+    }
+
     static void contiguous(T * output,
                            size_t count,
                            T const * lhs,
@@ -177,6 +249,30 @@ class DivideKernel : public BinaryKernelBase<DivideKernel<T>, T>
 {
 public:
     T operator()(T lhs, T rhs) const { return lhs / rhs; }
+
+    static void scalar(T * output, size_t count, T rhs)
+    {
+        simd::div_scalar<T>(
+            output, output + count, output, rhs);
+    }
+
+    static void contiguous_scalar(T * output,
+                                  size_t count,
+                                  T const * lhs,
+                                  T rhs)
+    {
+        simd::div_scalar<T>(
+            output, output + count, lhs, rhs);
+    }
+
+    static void contiguous_lhs_scalar(T * output,
+                                      size_t count,
+                                      T lhs,
+                                      T const * rhs)
+    {
+        simd::div_lhs_scalar<T>(
+            output, output + count, lhs, rhs);
+    }
 
     static void contiguous(T * output,
                            size_t count,

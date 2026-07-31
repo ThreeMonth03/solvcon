@@ -43,6 +43,21 @@ inline void transform_binary(T * dest, T const * dest_end, T const * src1, T con
     }
 }
 
+template <typename T, std::invocable<T, T> ScalarOp>
+inline void transform_scalar(T * dest,
+                             T const * dest_end,
+                             T const * src,
+                             T scalar,
+                             ScalarOp scalar_op)
+{
+    while (dest < dest_end)
+    {
+        *dest = scalar_op(*src, scalar);
+        ++dest;
+        ++src;
+    }
+}
+
 template <typename T>
 inline void add(T * dest, T const * dest_end, T const * src1, T const * src2)
 {
@@ -65,6 +80,76 @@ template <typename T>
 inline void div(T * dest, T const * dest_end, T const * src1, T const * src2)
 {
     transform_binary<T>(dest, dest_end, src1, src2, std::divides<T>{});
+}
+
+template <typename T>
+inline void add_scalar(T * dest, T const * dest_end, T const * src, T rhs)
+{
+    transform_scalar<T>(
+        dest, dest_end, src, rhs, std::plus<T>{});
+}
+
+template <typename T>
+inline void add_lhs_scalar(T * dest, T const * dest_end, T lhs, T const * src)
+{
+    transform_scalar<T>(
+        dest, dest_end, src, lhs, std::plus<T>{});
+}
+
+template <typename T>
+inline void sub_scalar(T * dest, T const * dest_end, T const * src, T rhs)
+{
+    transform_scalar<T>(
+        dest, dest_end, src, rhs, std::minus<T>{});
+}
+
+template <typename T>
+inline void sub_lhs_scalar(T * dest, T const * dest_end, T lhs, T const * src)
+{
+    transform_scalar<T>(
+        dest,
+        dest_end,
+        src,
+        lhs,
+        [](T rhs, T scalar)
+        {
+            return scalar - rhs;
+        });
+}
+
+template <typename T>
+inline void mul_scalar(T * dest, T const * dest_end, T const * src, T rhs)
+{
+    transform_scalar<T>(
+        dest, dest_end, src, rhs, std::multiplies<T>{});
+}
+
+template <typename T>
+inline void mul_lhs_scalar(T * dest, T const * dest_end, T lhs, T const * src)
+{
+    transform_scalar<T>(
+        dest, dest_end, src, lhs, std::multiplies<T>{});
+}
+
+template <typename T>
+inline void div_scalar(T * dest, T const * dest_end, T const * src, T rhs)
+{
+    transform_scalar<T>(
+        dest, dest_end, src, rhs, std::divides<T>{});
+}
+
+template <typename T>
+inline void div_lhs_scalar(T * dest, T const * dest_end, T lhs, T const * src)
+{
+    transform_scalar<T>(
+        dest,
+        dest_end,
+        src,
+        lhs,
+        [](T rhs, T scalar)
+        {
+            return scalar / rhs;
+        });
 }
 
 template <typename T>
