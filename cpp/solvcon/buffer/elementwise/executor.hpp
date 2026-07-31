@@ -1091,10 +1091,14 @@ Array ElementwiseExecutor<Array, T, Kernel>::transform(
         result_matches_lhs &&
         result_matches_rhs &&
         std::ranges::equal(lhs.stride(), rhs.stride()) &&
+        (lhs.is_c_contiguous() ||
+         lhs.is_f_contiguous()) &&
         mapping_is_dense(result_domain, lhs_mapping);
     bool const preserve_lhs_layout =
         result_matches_lhs &&
         !result_matches_rhs &&
+        (lhs.is_c_contiguous() ||
+         lhs.is_f_contiguous()) &&
         (rhs_is_constant ||
          dense_inner_is_competitive(
              result_domain, lhs_mapping)) &&
@@ -1103,6 +1107,8 @@ Array ElementwiseExecutor<Array, T, Kernel>::transform(
     bool const preserve_rhs_layout =
         result_matches_rhs &&
         !result_matches_lhs &&
+        (rhs.is_c_contiguous() ||
+         rhs.is_f_contiguous()) &&
         (lhs_is_constant ||
          dense_inner_is_competitive(
              result_domain, rhs_mapping)) &&
