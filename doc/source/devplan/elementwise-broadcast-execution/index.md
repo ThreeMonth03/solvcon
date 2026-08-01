@@ -229,14 +229,61 @@ samples, seven warmups, and a 30-millisecond target.  Their normal-path
 ratios range from 0.804x to 1.593x.  Three remain slightly or materially
 below 1.0, so the issue must not claim that every case beats NumPy.
 
-### Superseded Apple data
+### Current Apple Silicon performance evidence
 
-The earlier Apple M1 NumPy 2.5.1 report used pre-rebase revision `fdc3f567`.
-It is historical evidence only.  It must not be copied into the final issue
-or compared directly with the current WSL2 result.  Apple data is pending a
-fresh run from the rebased fork draft PR.
+The authoritative Apple run used clean revision `c9752b52`.  The relevant
+source tree is byte-identical to benchmark anchor `2310734c`.  The native
+Apple M1 environment used macOS 26.5.1 arm64, Python 3.14.6, NumPy 2.5.1
+with Accelerate, AC power, and one thread for every recorded numerical
+library variable.  Each short-sweep case used five samples, two warmups,
+and a one-millisecond timing target.
 
-### Reproduction and macOS handoff
+The six reports contain 54,432 raw rows in the documented order: 24,320,
+4,928, 8,448, 9,120, 4,032, and 3,584.  First-occurrence deduplication
+removes 5,280 overlaps and leaves 49,152 unique identifiers, all with
+overall status `ok`.  There are 33,368 valid normal-path timings and 24,512
+valid reused-output timings.
+
+| Scope | Cases | Win rate | Median NumPy / planned | 10th percentile | Minimum |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| All normal paths | 33,368 | 90.89% | 1.439x | 1.019x | 0.051x |
+| Broadcast normal paths | 29,208 | 93.46% | 1.458x | 1.083x | 0.051x |
+| All reused outputs | 24,512 | 96.34% | 1.803x | 1.090x | 0.199x |
+| Broadcast reused outputs | 22,240 | 96.55% | 1.822x | 1.228x | 0.199x |
+| Size-32 normal paths | 16,472 | 95.64% | 1.487x | 1.190x | 0.439x |
+| Size-32 reused outputs | 12,384 | 99.54% | 1.815x | 1.426x | 0.250x |
+
+| Topology family | Path | Cases | Win rate | Median | 10th percentile | Minimum |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Non-broadcast | Normal | 4,160 | 72.86% | 1.334x | 0.901x | 0.663x |
+| Non-broadcast | Reused | 2,272 | 94.32% | 1.119x | 1.020x | 0.525x |
+| Python scalar | Normal | 672 | 80.06% | 1.355x | 0.826x | 0.500x |
+| Python scalar | Reused | 368 | 91.58% | 1.540x | 1.010x | 0.654x |
+| Singleton broadcast | Normal | 9,952 | 86.70% | 1.339x | 0.940x | 0.140x |
+| Singleton broadcast | Reused | 7,104 | 92.05% | 1.713x | 1.015x | 0.199x |
+| Single-axis broadcast | Normal | 9,664 | 97.26% | 1.500x | 1.201x | 0.439x |
+| Single-axis broadcast | Reused | 6,816 | 99.03% | 1.880x | 1.418x | 0.662x |
+| Outer broadcast | Normal | 2,288 | 99.13% | 1.671x | 1.460x | 0.847x |
+| Outer broadcast | Reused | 2,272 | 99.82% | 2.076x | 1.767x | 0.660x |
+| Mixed-rank broadcast | Normal | 6,632 | 97.48% | 1.517x | 1.143x | 0.051x |
+| Mixed-rank broadcast | Reused | 5,680 | 98.20% | 1.798x | 1.306x | 0.250x |
+
+The six lowest short-sweep normal ratios were rerun sequentially, one exact
+case at a time, with 31 samples, seven warmups, and a 30-millisecond target.
+Their long-sample ratios are 1.243x, 1.822x, 0.910x, 0.760x, 1.318x, and
+2.000x.  Four short-sweep extremes were timing interruptions.  Two in-place
+singleton-broadcast cases remain below NumPy, so the Apple result supports a
+broad performance advantage, not a universal one.
+
+The complete correctness catalog also passes all 3,134,108 cases with the
+expected planned classifications.  The same environment passes all 256 C++
+tests, 89 focused Python tests with 783 subtests, and `make lint`.  The full
+non-GUI Python command stops during collection because the authorized
+devenv flavor does not contain `jsonschema`; no dependency was installed.
+Raw JSON and generated summaries remain under the ignored local results
+directory and are not part of the branch.
+
+### Reproduction
 
 Start from the fork draft PR branch.  Do not start from a similarly named
 local branch or from the old Apple revision.  Before building, fetch upstream
@@ -300,7 +347,7 @@ reports and the selected tail reports for review.
 Open the fork draft PR first and copy the URL returned by GitHub.  The fork PR
 targets `ThreeMonth03/solvcon:master` and must not link back to an upstream
 issue.  The local `issue-draft.md` links to the returned draft PR URL.  Keep
-the issue unpublished until the rebased macOS results pass the gates above.
+the issue unpublished unless it is explicitly approved for upstream posting.
 Never guess the PR number or reuse a URL from another prototype.
 
 ## Out of scope
@@ -322,19 +369,21 @@ Never guess the PR number or reuse a URL from another prototype.
 - Correctness catalog: 3,134,108 overall `ok`; 1,465,004 arithmetic
   outcomes audited
 - C++ tests: 256 passed
-- Focused Python tests: 89 passed
-- Non-GUI Python tests: 1,530 passed, 284 skipped, 3 expected failures,
+- Focused Python tests: 89 passed with 783 subtests on the current macOS run
+- Prior non-GUI Python tests: 1,530 passed, 284 skipped, 3 expected failures,
   and one known callback warning
+- Current macOS non-GUI Python command: four collection errors because the
+  authorized devenv flavor does not contain `jsonschema`
 - Performance specialization: complete for layout-selected inner loops,
   direct equal-shape and scalar loops, signed contiguous traversal, strided
   inputs, dense broadcast layouts, exact aliases, single Python operand
   dispatch, AArch64 feature resolution, and dense singleton-array updates
 - Rebased WSL2 NumPy 2.5.1 benchmark: complete and metadata-audited
-- Rebased Apple NumPy 2.5.1 benchmark: pending macOS handoff
+- Rebased Apple NumPy 2.5.1 benchmark: complete and metadata-audited
 - Fork draft PR: `https://github.com/ThreeMonth03/solvcon/pull/28`
-- Upstream issue draft: `issue-draft.md`, pending the fresh Apple result
+- Upstream issue draft: `issue-draft.md`, kept local and unpublished
 - Commits: split into benchmark, implementation, and documentation concerns
-- Verification: build, full C++ tests, focused and non-GUI Python tests, and
-  `make lint` pass
+- Current macOS verification: build, full C++ tests, focused Python tests,
+  and `make lint` pass; the non-GUI collection dependency is recorded above
 
 <!-- vim: set ft=markdown ff=unix fenc=utf8 et sw=2 ts=2 sts=2 tw=79: -->
