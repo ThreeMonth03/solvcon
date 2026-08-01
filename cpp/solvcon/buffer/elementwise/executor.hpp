@@ -1236,6 +1236,11 @@ void ElementwiseExecutor<Array, T, Kernel>::execute_to(
     Array const & rhs,
     kernel_type kernel)
 {
+    if (destination.size() == 0)
+    {
+        return;
+    }
+
     bool const shapes_match =
         std::ranges::equal(lhs.shape(), rhs.shape());
     if (shapes_match &&

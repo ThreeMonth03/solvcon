@@ -78,6 +78,24 @@ class PlannedElementwiseTC(unittest.TestCase):
 
         np.testing.assert_array_equal(result.ndarray, lhs * rhs)
 
+    def test_empty_broadcast_result_is_a_noop(self):
+        empty = np.empty((0, 3), dtype="float64")
+        singleton = np.ones((1, 1), dtype="float64")
+        for lhs, rhs in ((empty, singleton), (singleton, empty)):
+            with self.subTest(lhs_shape=lhs.shape):
+                lhs_array = make_array(lhs)
+                rhs_array = make_array(rhs)
+
+                result = lhs_array._planned_add(rhs_array)
+                self.assertEqual((0, 3), result.ndarray.shape)
+                self.assertEqual(0, result.size)
+
+                destination = np.empty((0, 3), dtype="float64")
+                lhs_array._planned_add_to(
+                    rhs_array, make_array(destination)
+                )
+                self.assertEqual(0, destination.size)
+
     def test_scalar_and_inplace_broadcast_keep_destination_shape(self):
         source = np.arange(
             3 * 4, dtype="float64"
