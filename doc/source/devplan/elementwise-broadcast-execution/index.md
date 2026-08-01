@@ -299,10 +299,9 @@ reports and the selected tail reports for review.
 
 Open the fork draft PR first and copy the URL returned by GitHub.  The fork PR
 targets `ThreeMonth03/solvcon:master` and must not link back to an upstream
-issue.  Only then replace the PR placeholder in the upstream issue draft with
-that exact URL.  Keep the issue as a local draft until the rebased macOS
-results pass the gates above.  Never guess the PR number or reuse a URL from
-another prototype.
+issue.  The local `issue-draft.md` links to the returned draft PR URL.  Keep
+the issue unpublished until the rebased macOS results pass the gates above.
+Never guess the PR number or reuse a URL from another prototype.
 
 ## Out of scope
 
@@ -332,9 +331,8 @@ another prototype.
   dispatch, AArch64 feature resolution, and dense singleton-array updates
 - Rebased WSL2 NumPy 2.5.1 benchmark: complete and metadata-audited
 - Rebased Apple NumPy 2.5.1 benchmark: pending macOS handoff
-- Fork draft PR: pending review of its title and body
-- Upstream issue draft: pending the exact fork draft PR URL and fresh Apple
-  result
+- Fork draft PR: `https://github.com/ThreeMonth03/solvcon/pull/28`
+- Upstream issue draft: `issue-draft.md`, pending the fresh Apple result
 - Commits: split into benchmark, implementation, and documentation concerns
 - Verification: build, full C++ tests, focused and non-GUI Python tests, and
   `make lint` pass
