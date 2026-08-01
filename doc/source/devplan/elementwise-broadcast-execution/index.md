@@ -278,10 +278,42 @@ broad performance advantage, not a universal one.
 The complete correctness catalog also passes all 3,134,108 cases with the
 expected planned classifications.  The same environment passes all 256 C++
 tests, 89 focused Python tests with 783 subtests, and `make lint`.  The full
-non-GUI Python command stops during collection because the authorized
-devenv flavor does not contain `jsonschema`; no dependency was installed.
+non-GUI Python command originally stopped during collection because the
+devenv flavor did not contain `jsonschema`.  After installing `jsonschema`
+4.26.0 in that flavor, the suite passes 1,532 tests and 1,100 subtests, with
+283 skipped tests, three expected failures, and the existing callback warning.
 Raw JSON and generated summaries remain under the ignored local results
 directory and are not part of the branch.
+
+#### NEON scalar follow-up
+
+Clean revision `68c55689` addresses the two in-place singleton-broadcast
+cases above without changing their execution plan.  Both already reach the
+shared NEON scalar transform: the step-2 outer layout is coalesced into dense
+slabs, and the permuted layout is a dense Fortran-contiguous span.  The change
+therefore stays in `cpp/solvcon/simd/neon/neon.hpp` and processes four vector
+blocks per loop iteration.  The executor, planner, Python bindings, and
+topology selection are unchanged.  Multiply and divide still use their exact
+NEON operations, followed by explicit vector and scalar tails.
+
+The authoritative follow-up used the same native Apple M1, Python 3.14.6,
+NumPy 2.5.1, and single-thread settings.  All 13 result files record revision
+`68c55689`, `git_dirty: false`, `arm64`, and NumPy 2.5.1.  Five independent
+long-sample runs give these NumPy / planned ratios:
+
+| Case | Minimum | Median | Maximum |
+| --- | ---: | ---: | ---: |
+| `div/float32/n128/all-singleton-rhs/permuted` | 1.382x | 1.413x | 1.430x |
+| `mul/float64/n128/all-singleton-rhs/step2-outer` | 1.104x | 1.128x | 1.188x |
+
+The focused scaling sweep wins all 14 division sizes, with 1.459x at n=128
+and 1.103x at n=1024.  Multiplication wins 13 of 14 sizes, with 1.131x at
+n=128 and 0.993x at n=1024.  The requested n=128 cases now consistently beat
+NumPy, but the n=1024 multiplication result still prevents a universal
+performance claim.  All 392 focused correctness cases pass with the expected
+planned classification.  The new vector-block boundary test also checks
+in-place and out-of-place add, subtract, multiply, and divide for float32 and
+float64.
 
 ### Reproduction
 
@@ -365,25 +397,27 @@ Never guess the PR number or reuse a URL from another prototype.
 
 - Branch: `codex/prototype-elementwise-broadcast`
 - Upstream base: `8337f48a`, including PR #1208 merge `2405ac2b`
-- Current benchmark code revision: `2310734c`
+- Full-catalog benchmark anchor: `2310734c`
+- Current optimization revision: `68c55689`
 - Correctness catalog: 3,134,108 overall `ok`; 1,465,004 arithmetic
   outcomes audited
+- Current optimization correctness: 392 focused cases overall `ok`
 - C++ tests: 256 passed
 - Focused Python tests: 89 passed with 783 subtests on the current macOS run
-- Prior non-GUI Python tests: 1,530 passed, 284 skipped, 3 expected failures,
-  and one known callback warning
-- Current macOS non-GUI Python command: four collection errors because the
-  authorized devenv flavor does not contain `jsonschema`
+- NEON scalar boundary test: 5 passed with 48 subtests
+- Current non-GUI Python tests: 1,532 passed, 283 skipped, 3 expected failures,
+  1,100 subtests, and one known callback warning
 - Performance specialization: complete for layout-selected inner loops,
   direct equal-shape and scalar loops, signed contiguous traversal, strided
   inputs, dense broadcast layouts, exact aliases, single Python operand
-  dispatch, AArch64 feature resolution, and dense singleton-array updates
+  dispatch, AArch64 feature resolution, dense singleton-array updates, and
+  four-vector NEON scalar-loop unrolling
 - Rebased WSL2 NumPy 2.5.1 benchmark: complete and metadata-audited
 - Rebased Apple NumPy 2.5.1 benchmark: complete and metadata-audited
 - Fork draft PR: `https://github.com/ThreeMonth03/solvcon/pull/28`
 - Upstream issue draft: `issue-draft.md`, kept local and unpublished
 - Commits: split into benchmark, implementation, and documentation concerns
 - Current macOS verification: build, full C++ tests, focused Python tests,
-  and `make lint` pass; the non-GUI collection dependency is recorded above
+  non-GUI Python tests, focused benchmark correctness, and `make lint` pass
 
 <!-- vim: set ft=markdown ff=unix fenc=utf8 et sw=2 ts=2 sts=2 tw=79: -->
