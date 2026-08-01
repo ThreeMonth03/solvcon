@@ -185,24 +185,41 @@ void transform_scalar(T * dest,
         else
         {
             constexpr size_t N_lane = type::vector_lane<T>;
+            constexpr size_t N_unroll = 4;
+            constexpr size_t N_unrolled_lane = N_lane * N_unroll;
             vec_t const scalar_vec = vdupq(scalar);
-            size_t const blocks =
-                static_cast<size_t>(dest_end - dest) / N_lane;
+            size_t const count = static_cast<size_t>(dest_end - dest);
+            size_t const unrolled_blocks = count / N_unrolled_lane;
             T * ptr = dest;
-            for (size_t block = 0;
-                 block < blocks;
-                 ++block)
+            for (size_t block = 0; block < unrolled_blocks; ++block)
             {
-                vec_t const data_vec = vld1q(src);
-                vst1q(ptr, vec_op(data_vec, scalar_vec));
+                vec_t const data0 = vld1q(src);
+                vec_t const data1 = vld1q(src + N_lane);
+                vec_t const data2 = vld1q(src + 2 * N_lane);
+                vec_t const data3 = vld1q(src + 3 * N_lane);
+                vst1q(ptr, vec_op(data0, scalar_vec));
+                vst1q(ptr + N_lane, vec_op(data1, scalar_vec));
+                vst1q(ptr + 2 * N_lane, vec_op(data2, scalar_vec));
+                vst1q(ptr + 3 * N_lane, vec_op(data3, scalar_vec));
+                ptr += N_unrolled_lane;
+                src += N_unrolled_lane;
+            }
+
+            size_t const vector_blocks = count % N_unrolled_lane / N_lane;
+            for (size_t block = 0; block < vector_blocks; ++block)
+            {
+                vst1q(ptr, vec_op(vld1q(src), scalar_vec));
                 ptr += N_lane;
                 src += N_lane;
             }
-            while (ptr < dest_end)
+
+            size_t scalar_count = count % N_lane;
+            while (scalar_count > 0)
             {
                 *ptr = scalar_op(*src, scalar);
                 ++ptr;
                 ++src;
+                --scalar_count;
             }
         }
     }
