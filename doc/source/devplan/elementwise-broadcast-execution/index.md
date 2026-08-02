@@ -176,9 +176,10 @@ The implementation baseline is clean revision `0c03661f`, which includes the
 NEON scalar-loop change.  The final implementation remains byte-identical to
 that revision in `cpp/`, `gtests/`, and `solvcon/`.  Clean revision
 `e4a1bf84` adds only the reusable stable timing policy and its Python tests;
-it is the measured revision for the final Apple data.  Commits after
-`e4a1bf84` are documentation-only.  The exact documentation head is recorded
-in Draft PR #28 because a commit cannot contain its own hash.
+it is the measured revision for the final Apple data.  Later commits update
+documentation and harden profiler failure handling.  They do not change the
+successful timing order, warmup, sampling, or statistics.  The exact current
+head is recorded in Draft PR #28 because a commit cannot contain its own hash.
 
 The WSL2 correctness and broad performance data remain tied to clean revision
 `2310734c`.  The core implementation did not change, so those results are
@@ -329,6 +330,13 @@ elementwise tests with 285 subtests, 5 SIMD tests with 48 subtests, the full
 lint target, and `git diff --check`.  There are 283 skips, three expected
 failures, and one existing callback warning in the non-GUI Python run.
 
+The [final audit comment][final-pr28-audit] links the immutable
+[Apple archive][final-apple-archive].  Its SHA-256 is
+`2592bb0ceed9eeaf9f6c40a92b3c56e9cde6318fc0dc0cafafbbc41b6c7e5cb6`.
+
+[final-pr28-audit]: https://github.com/ThreeMonth03/solvcon/pull/28#issuecomment-5156411746
+[final-apple-archive]: https://github.com/user-attachments/files/30628902/elementwise-numpy251-macos-stable-20260802-145103.tar.gz
+
 ### Superseded fixed-order Apple evidence
 
 The following `0c03661f` result is retained only to explain the original
@@ -401,16 +409,16 @@ The Mac used clang-format 19, which reported the expected version difference
 from the CI pin.  The changed NEON header also passes the project
 clang-format 20.1.8 check.
 
-The audit comment and raw archive are available from [Draft PR #28][pr28-audit].
-The archive SHA-256 is
+The superseded audit comment and raw archive are available from
+[Draft PR #28][superseded-pr28-audit].  The superseded archive SHA-256 is
 `1e4cc481bba0eb78d2cb10ba99745d699a44ed3817e569f941fd79f30f1d7456`.
 
-[pr28-audit]: https://github.com/ThreeMonth03/solvcon/pull/28#issuecomment-5152766036
-[apple-archive]: https://github.com/user-attachments/files/30621311/elementwise-numpy251-macos-current-20260802-013704.tar.gz
+[superseded-pr28-audit]: https://github.com/ThreeMonth03/solvcon/pull/28#issuecomment-5152766036
+[superseded-apple-archive]: https://github.com/user-attachments/files/30621311/elementwise-numpy251-macos-current-20260802-013704.tar.gz
 
-The [raw archive][apple-archive] contains all six reports, long-tail reruns,
-correctness output, timing samples, build and test logs, environment metadata,
-checksums, and the manifest.
+The [superseded raw archive][superseded-apple-archive] contains all six
+reports, long-tail reruns, correctness output, timing samples, build and test
+logs, environment metadata, checksums, and the manifest.
 
 ### Reproduction
 
@@ -495,9 +503,10 @@ for review.
 
 Open the fork draft PR first and copy the URL returned by GitHub.  The fork PR
 targets `ThreeMonth03/solvcon:master` and must not link back to an upstream
-issue.  The local `issue-draft.md` links to the returned draft PR URL.  Keep
-the issue unpublished unless it is explicitly approved for upstream posting.
-Never guess the PR number or reuse a URL from another prototype.
+issue.  Fork issue #23 is synchronized from `issue-draft.md` and links to the
+returned draft PR URL.  Do not create an issue in `solvcon/solvcon` without
+explicit approval.  Never guess the PR number or reuse a URL from another
+prototype.
 
 ## Out of scope
 
@@ -517,7 +526,7 @@ Never guess the PR number or reuse a URL from another prototype.
 - WSL2 full-catalog benchmark revision: `2310734c`
 - Final implementation revision: `0c03661f`
 - Final Apple measured revision: `e4a1bf84`
-- Current documentation-only head: recorded in Draft PR #28
+- Current PR head: recorded in Draft PR #28
 - Correctness catalog: 3,134,108 overall `ok`; 1,465,004 arithmetic
   outcomes audited
 - C++ tests: 256 passed
@@ -535,10 +544,13 @@ Never guess the PR number or reuse a URL from another prototype.
   metadata-audited
 - WSL2 stable sampling: rerun required for directly comparable parity tails
 - Fork draft PR: `https://github.com/ThreeMonth03/solvcon/pull/28`
-- Upstream issue draft: `issue-draft.md`, kept local and unpublished
-- Commits: split into sampling/test and final evidence concerns; no core
-  implementation commit was needed
+- Fork tracking issue: `https://github.com/ThreeMonth03/solvcon/issues/23`,
+  synchronized from `issue-draft.md`
+- Commits: split into sampling, guard/test, and final evidence concerns; no
+  core implementation commit was needed
 - Current macOS verification: build, full C++ tests, focused Python tests,
   non-GUI Python tests, focused benchmark correctness, and `make lint` pass
+- Post-measurement profiler guards: 19 benchmark tests, stable success and
+  failure CLI probes, and `make lint` pass on WSL2
 
 <!-- vim: set ft=markdown ff=unix fenc=utf8 et sw=2 ts=2 sts=2 tw=79: -->
