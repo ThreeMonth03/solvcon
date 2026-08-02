@@ -61,7 +61,11 @@ processes.  Correctness and timing are separate modes.  NumPy in-place timing
 uses a ufunc with `out=`, and out-of-place timing avoids an unnecessary dtype
 copy.  Both NumPy and `SimpleArray` callables are bound before the timer
 starts.  Large catalogs support deterministic shards, summary-only output,
-and merging.
+and merging.  The fast `matched` policy remains available for broad sweeps.
+The `stable` policy runs independent child processes, uses time-based warmup
+for every method and round, balances each method across timing positions, and
+records every observation with its process, round, sequence, order, repeat,
+elapsed time, and per-call time.
 
 ## Design
 
@@ -168,18 +172,25 @@ Elementwise span, layout, and route policy remains in
 `cpp/solvcon/buffer/elementwise/layout.hpp` instead of extending the shared
 loop layer.
 
-The code revision used for the current WSL2 correctness and performance data
-is `2310734c`.  The complete Apple correctness and performance run used clean
-revision `0c03661f`, which includes the NEON scalar-loop change.  Later
-documentation-only commits do not change either measured source baseline.  A
-rerun must verify the upstream ancestor and the relevant source diff before
-accepting its data.
+The implementation baseline is clean revision `0c03661f`, which includes the
+NEON scalar-loop change.  The final implementation remains byte-identical to
+that revision in `cpp/`, `gtests/`, and `solvcon/`.  Clean revision
+`e4a1bf84` adds only the reusable stable timing policy and its Python tests;
+it is the measured revision for the final Apple data.  Commits after
+`e4a1bf84` are documentation-only.  The exact documentation head is recorded
+in Draft PR #28 because a commit cannot contain its own hash.
+
+The WSL2 correctness and broad performance data remain tied to clean revision
+`2310734c`.  The core implementation did not change, so those results are
+still implementation evidence.  WSL2 must nevertheless rerun the new stable
+tail policy before its near-parity cases are compared directly with the final
+Apple stable data.
 
 ### Correctness catalog
 
 The complete correctness runner processed 3,134,108 rows with NumPy 2.5.1 at
-both the WSL2 anchor `2310734c` and the current Apple benchmark revision
-`0c03661f`.  Every row had overall status `ok`.  Comparison operations
+both the WSL2 anchor `2310734c` and the final Apple measured revision
+`e4a1bf84`.  Every row had overall status `ok`.  Comparison operations
 account for 1,669,104 unavailable rows because this prototype only implements
 arithmetic.  The 1,465,004 arithmetic outcomes are:
 
@@ -232,9 +243,99 @@ samples, seven warmups, and a 30-millisecond target.  Their normal-path
 ratios range from 0.804x to 1.593x.  Three remain slightly or materially
 below 1.0, so the issue must not claim that every case beats NumPy.
 
-### Current Apple Silicon performance evidence
+### Final Apple Silicon performance evidence
 
-The authoritative Apple run used clean revision `0c03661f`.  The native
+The authoritative final Apple run used clean measured revision `e4a1bf84`.
+The native environment was macOS 26.5.1 on Apple M1, native arm64, Python
+3.14.6, NumPy 2.5.1 with Accelerate, and AC power.  The recorded
+`OPENBLAS_NUM_THREADS`, `OMP_NUM_THREADS`, `MKL_NUM_THREADS`,
+`VECLIB_MAXIMUM_THREADS`, and `NUMEXPR_NUM_THREADS` values were all `1` and
+were set before importing NumPy.
+
+The broad sweep keeps the affordable `matched` policy: five samples, two
+warmups, a one-millisecond target, and preallocated-output timing.  The six
+reports contain 24,320, 4,928, 8,448, 9,120, 4,032, and 3,584 rows.  Their
+54,432 raw rows become 49,152 unique identifiers after first-occurrence
+deduplication removes 5,280 overlaps.  Every unique status is `ok`.  The
+deduplicated data contain 33,368 normal and 24,512 reused-output timings.
+
+| Scope | Cases | Win rate | Median NumPy / planned | 10th percentile | Minimum |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| All normal paths | 33,368 | 94.49% | 1.480x | 1.093x | 0.211x |
+| Broadcast normal paths | 29,208 | 97.38% | 1.500x | 1.138x | 0.211x |
+| All reused outputs | 24,512 | 97.56% | 1.865x | 1.146x | 0.323x |
+| Broadcast reused outputs | 22,240 | 97.86% | 1.898x | 1.277x | 0.323x |
+
+Broad matched timing is used for coverage and tail discovery.  It is not used
+to decide a near-parity result.  The reusable stable policy instead launches
+independent child processes, creates fresh callables each round, performs
+time-based warmup for each method and round, and balances `numpy`, `planned`,
+`numpy_to`, and `planned_to` across all four timing positions.  Every raw
+observation records the process, round, sample, sequence, order, repeat,
+elapsed nanoseconds, and per-call nanoseconds.
+
+The exact case is:
+
+```text
+out/mul/float32/n512/all-singleton-rhs/step2-outer/c/none/finite
+LHS shape (2, 257, 512), strides (263168, 512, 1)
+RHS shape (1, 1, 1), strides (1, 1, 1)
+```
+
+The scaling run used 5 independent processes, 7 rounds per process, 9
+samples per round, a 10-millisecond target, and 30 milliseconds of time-based
+warmup per method and round:
+
+| Size | Normal median and round range | Reused median and round range |
+| ---: | ---: | ---: |
+| 256 | 1.054x [0.960, 1.223] | 1.065x [0.955, 1.476] |
+| 512 | 1.012x [0.840, 1.159] | 1.018x [0.844, 1.194] |
+| 1024 | 1.005x [0.734, 1.074] | 1.009x [0.854, 1.149] |
+
+The longer n=512 run used 7 independent processes, 9 rounds per process, 11
+samples per round, a 20-millisecond target, and 50 milliseconds of time-based
+warmup.  Its 63 process-round summaries contain 693 observations per
+method.  Every method appears 173 or 174 times in every timing position.
+Normal execution has a 1.023x median and [0.796, 1.281] round range.  Reused
+output has a 1.032x median and [0.715, 1.153] round range.
+
+Both round ranges cross 1.0, normal and reused execution move together, and
+the same executor kernel handles both destinations after reused-output
+validation.  Operation, dtype, mirrored singleton-side, and neighboring
+layout runs show the same parity behavior for the step2-outer route.  They
+also retain stable advantages for layouts with a general NumPy cost, such as
+step2-inner at 3.149x normal and 3.197x reused, and offset at 1.508x normal
+and 1.568x reused.
+
+The exact route dispatches the array operand once in the Python binding,
+builds an `ElementwisePlan`, recognizes the RHS mapping as constant, and
+selects fixed inner-stride traversal on the unit-stride last axis.  Normal
+execution allocates its compact result and then calls `execute_to`.
+Reused-output execution validates the fixed destination and overlap safety
+before calling the same `execute_to`.  Each row reaches the contiguous
+multiply-by-scalar kernel, including the existing NEON transform and vector
+tail handling.  No extra arithmetic route exists only for one destination.
+
+The old 0.977x reused result is therefore a fixed-order timing artifact, not
+a stable reused-output regression.  A same-implementation fixed-order rerun
+flipped to 1.110x, while the balanced long run classifies the case as parity
+with a small median planned edge.  There is no general, low-risk executor or
+NEON gap to fix.  The core implementation and architecture remain unchanged;
+only the reusable sampling harness and tests were added.
+
+The final environment also passes all 3,134,108 correctness rows, the build,
+256 C++ tests, 1,535 non-GUI Python tests with 1,100 subtests, 34 focused
+elementwise tests with 285 subtests, 5 SIMD tests with 48 subtests, the full
+lint target, and `git diff --check`.  There are 283 skips, three expected
+failures, and one existing callback warning in the non-GUI Python run.
+
+### Superseded fixed-order Apple evidence
+
+The following `0c03661f` result is retained only to explain the original
+tail report.  Its broad sweep remains useful, but its sequential long-tail
+policy must not be used for a near-parity conclusion.
+
+This earlier Apple run used clean revision `0c03661f`.  The native
 environment was macOS 26.5.1 on a MacBook Air with Apple M1, native arm64,
 Python 3.14.6, NumPy 2.5.1 with Accelerate, and AC power.  The recorded
 `OPENBLAS_NUM_THREADS`, `OMP_NUM_THREADS`, `MKL_NUM_THREADS`,
@@ -285,10 +386,10 @@ and a 30-millisecond target.
 | `out/mul/float32/n32/crossed-batch/zero-inner/zero-inner/none/finite` | 0.358x | 1.508x | 1.738x |
 | `out/add/float64/n1024/python-scalar/c/scalar/none/finite` | 0.468x | 1.117x | 1.221x |
 
-All six long-sample normal ratios exceed 1.0.  One of the six reused-output
-ratios remains below 1.0.  The complete short sweep also contains losses,
-including 0.128x and 0.145x minima, so the Apple result supports a broad
-performance advantage, not a universal one.
+All six sequential long-sample normal ratios exceed 1.0, while one reused
+ratio is 0.977x.  The final stable section above supersedes that tail
+interpretation.  The complete short sweep still supports a broad performance
+advantage rather than universal dominance.
 
 The complete correctness catalog passes all 3,134,108 rows with the expected
 planned classifications and zero unexpected results, benchmark errors, or
@@ -313,27 +414,25 @@ checksums, and the manifest.
 
 ### Reproduction
 
-Start from the fork draft PR branch.  Do not start from a similarly named
-local branch or from the old Apple revision.  Before building, fetch upstream
-and run these guards:
+Start from measured revision `e4a1bf84`, not from the later documentation
+head.  Before building, fetch both remotes and run these guards:
 
 ```bash
 git fetch origin codex/prototype-elementwise-broadcast
 git fetch upstream master
+git checkout e4a1bf847da12c01f250c5b44103f28771011b1d
 git status --porcelain
-test "$(git rev-parse --abbrev-ref HEAD)" = codex/prototype-elementwise-broadcast
 git merge-base --is-ancestor 2405ac2b HEAD
 git diff --exit-code upstream/master -- cpp/solvcon/buffer/loop.hpp
-git diff --exit-code 0c03661f -- cpp gtests profiling solvcon tests
+git diff --exit-code 0c03661f -- cpp gtests solvcon
 git rev-parse HEAD
 ```
 
-`git status --porcelain` must print nothing.  The branch-name, ancestor, and
-both source-diff guards must exit zero.  The last source-diff guard proves that
-a documentation-only head still measures the source tree from authoritative
-Apple revision `0c03661f`.  Record the final `git rev-parse HEAD` output.  That
-exact current head, rather than `0c03661f`, must appear in every new JSON
-report.  Use the project devenv and system Python, not a virtual environment.
+`git status --porcelain` must print nothing.  The ancestor and source-diff
+guards must exit zero.  The final guard proves that the implementation remains
+the `0c03661f` baseline while `profiling/` and its Python tests contain the
+stable sampling change.  Every new JSON report must record the exact measured
+revision.  Use the project devenv and system Python, not a virtual environment.
 Then build and verify the environment:
 
 ```bash
@@ -352,7 +451,7 @@ The macOS run is acceptable only when the machine is `arm64`, NumPy is
 result directory.  Never overwrite or merge it with a pre-rebase directory.
 
 ```bash
-RESULT_DIR=profiling/results/elementwise-numpy251-macos-rebased-YYYYMMDD
+RESULT_DIR=profiling/results/elementwise-numpy251-macos-stable-YYYYMMDD-HHMMSS
 test ! -e "$RESULT_DIR"
 mkdir -p "$RESULT_DIR"
 COMMON_ARGS="--catalog performance --implementation planned --timing matched --preallocated-output --record all --samples 5 --warmup 2 --target-ms 1 --progress-every 5000 --fail-on-bug --fail-on-benchmark-error"
@@ -371,9 +470,26 @@ deduplication must leave 49,152 identifiers, normal timing must contain
 overall status must be `ok`; `revision`, `git_dirty`, NumPy, thread variables,
 samples, warmups, target, and filters must match the run above.
 
-Long-sample tail reruns must be selected from the new macOS short sweep.  Do
-not reuse the WSL2 tail ratios as Apple measurements.  Preserve all six raw
-reports and the selected tail reports for review.
+Long tail reruns use `--timing stable`, not the broad `matched` policy.  The
+final exact n=512 protocol is 7 independent processes, 9 rounds per process,
+11 samples per round, a 20-millisecond target, and 50 milliseconds of
+time-based warmup.  Preserve raw observations and verify that all four
+methods occupy each timing position equally across the schedule:
+
+```bash
+python3 profiling/profile_elementwise_broadcast.py \
+  --catalog performance --implementation planned --timing stable \
+  --preallocated-output --record all --operation mul --dtype float32 \
+  --mode out --topology all-singleton-rhs --lhs-layout step2-outer \
+  --rhs-layout c --value-pattern finite --size 512 --samples 11 \
+  --stable-processes 7 --stable-rounds 9 --target-ms 20 \
+  --warmup-ms 50 --fail-on-bug --fail-on-benchmark-error \
+  --output "$RESULT_DIR/final-stable-tail-n512.json"
+```
+
+Do not delete outliers or reuse the WSL2 tail ratios as Apple measurements.
+Preserve all broad reports, stable reports, logs, metadata, and audit outputs
+for review.
 
 ### Draft publication order
 
@@ -399,14 +515,15 @@ Never guess the PR number or reuse a URL from another prototype.
 - Branch: `codex/prototype-elementwise-broadcast`
 - Upstream base: `8337f48a`, including PR #1208 merge `2405ac2b`
 - WSL2 full-catalog benchmark revision: `2310734c`
-- Current optimization revision: `68c55689`
-- Apple full-catalog benchmark revision: `0c03661f`
+- Final implementation revision: `0c03661f`
+- Final Apple measured revision: `e4a1bf84`
+- Current documentation-only head: recorded in Draft PR #28
 - Correctness catalog: 3,134,108 overall `ok`; 1,465,004 arithmetic
   outcomes audited
 - C++ tests: 256 passed
-- Focused Python tests: 89 passed with 783 subtests on the current macOS run
+- Focused Python tests: 34 passed with 285 subtests on the final macOS run
 - NEON scalar boundary test: 5 passed with 48 subtests
-- Current non-GUI Python tests: 1,532 passed, 283 skipped, 3 expected failures,
+- Current non-GUI Python tests: 1,535 passed, 283 skipped, 3 expected failures,
   1,100 subtests, and one known callback warning
 - Performance specialization: complete for layout-selected inner loops,
   direct equal-shape and scalar loops, signed contiguous traversal, strided
@@ -414,12 +531,13 @@ Never guess the PR number or reuse a URL from another prototype.
   dispatch, AArch64 feature resolution, dense singleton-array updates, and
   four-vector NEON scalar-loop unrolling
 - Rebased WSL2 NumPy 2.5.1 benchmark: complete and metadata-audited
-- Rebased Apple NumPy 2.5.1 benchmark: complete and metadata-audited
-- Apple raw archive SHA-256:
-  `1e4cc481bba0eb78d2cb10ba99745d699a44ed3817e569f941fd79f30f1d7456`
+- Final Apple NumPy 2.5.1 broad and stable benchmarks: complete and
+  metadata-audited
+- WSL2 stable sampling: rerun required for directly comparable parity tails
 - Fork draft PR: `https://github.com/ThreeMonth03/solvcon/pull/28`
 - Upstream issue draft: `issue-draft.md`, kept local and unpublished
-- Commits: split into benchmark, implementation, and documentation concerns
+- Commits: split into sampling/test and final evidence concerns; no core
+  implementation commit was needed
 - Current macOS verification: build, full C++ tests, focused Python tests,
   non-GUI Python tests, focused benchmark correctness, and `make lint` pass
 

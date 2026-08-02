@@ -31,10 +31,10 @@ The current macOS gate is complete:
 - all five recorded numerical-library thread variables set to 1 before importing NumPy
 - 54,432 raw benchmark rows deduplicated in fixed report order to 49,152 unique identifiers, all with overall status `ok`
 - 3,134,108 correctness rows with zero unexpected results, benchmark errors, or process crashes
-- 256 C++ tests, 1,532 non-GUI Python tests with 1,100 subtests, 89 focused Python tests with 783 subtests, and 5 SIMD tests with 48 subtests pass
-- the complete lint target passes; local clang-format 20 also accepts the changed NEON header
+- 256 C++ tests, 1,535 non-GUI Python tests with 1,100 subtests, 34 focused elementwise tests with 285 subtests, and 5 SIMD tests with 48 subtests pass
+- the complete lint target and `git diff --check` pass
 
-The WSL2 x86-64 NumPy 2.5.1 gate is also complete. Apple and WSL measurements use the same catalog, report order, deduplication rule, and timing policy.
+The WSL2 x86-64 NumPy 2.5.1 broad gate is also complete. Apple and WSL measurements use the same catalog, report order, deduplication rule, and broad timing policy. Only Apple has run the new stable near-parity policy so far.
 
 ## Correctness evidence
 
@@ -42,31 +42,22 @@ The complete NumPy 2.5.1 catalog contains 3,134,108 rows, all with overall statu
 
 ## Apple M1 NumPy 2.5.1 evidence
 
-The authoritative Apple run measured clean revision `0c03661fe76ad7e01c0c10ffb0c51843c2bdd7b7`. Each short-sweep case used five samples, two warmups, a one-millisecond timing target, and preallocated-output timing. Ratios are NumPy median time divided by planned median time. A value above one means planned execution is faster.
+The final Apple run measured clean revision `e4a1bf847da12c01f250c5b44103f28771011b1d`. The implementation is byte-identical to `0c03661f` in `cpp/`, `gtests/`, and `solvcon/`; the measured revision only adds the reusable stable timing policy and its tests. Ratios are NumPy median time divided by planned median time.
+
+The broad `matched` sweep retains five samples, two warmups, a one-millisecond target, and preallocated-output timing. It is used for coverage and tail discovery:
 
 | Scope | Cases | Win rate | Median ratio | 10th percentile | Minimum |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| All normal paths | 33,368 | 94.49% | 1.498x | 1.091x | 0.128x |
-| Broadcast normal paths | 29,208 | 97.48% | 1.522x | 1.138x | 0.128x |
-| All reused outputs | 24,512 | 97.92% | 1.876x | 1.145x | 0.145x |
-| Broadcast reused outputs | 22,240 | 98.04% | 1.906x | 1.281x | 0.145x |
-| Size-32 normal paths | 16,472 | 95.80% | 1.541x | 1.246x | 0.128x |
-| Size-32 reused outputs | 12,384 | 99.52% | 1.902x | 1.429x | 0.145x |
+| All normal paths | 33,368 | 94.49% | 1.480x | 1.093x | 0.211x |
+| Broadcast normal paths | 29,208 | 97.38% | 1.500x | 1.138x | 0.211x |
+| All reused outputs | 24,512 | 97.56% | 1.865x | 1.146x | 0.323x |
+| Broadcast reused outputs | 22,240 | 97.86% | 1.898x | 1.277x | 0.323x |
 
-Single-axis and outer-broadcast normal paths win 98.74% and 99.21% of cases, with median ratios of 1.545x and 1.797x. The weaker non-broadcast normal family wins 73.46% with a 1.348x median, so the evidence does not support universal dominance.
+Near-parity conclusions use the new `stable` policy. It runs independent child processes, performs time-based warmup for every method and round, balances all four methods across timing positions, and records raw process, round, order, repeat, and elapsed-time data.
 
-The six lowest short-sweep normal cases were selected from this exact run and repeated sequentially with 31 samples, seven warmups, and a 30-millisecond timing target:
+For `out/mul/float32/n512/all-singleton-rhs/step2-outer/c/none/finite`, the LHS shape and strides are `(2, 257, 512)` and `(263168, 512, 1)`. The RHS shape and strides are `(1, 1, 1)` and `(1, 1, 1)`. The long stable run used 7 processes x 9 rounds x 11 samples, a 20-millisecond target, and 50 milliseconds of warmup per method and round. Normal execution has a 1.023x median and [0.796, 1.281] round range. Reused output has a 1.032x median and [0.715, 1.153] round range.
 
-| Case ID | Short normal | Long normal | Long reused |
-| --- | ---: | ---: | ---: |
-| `out/mul/float32/n32/mixed-rank-reversed/negative-inner/offset/none/finite` | 0.128x | 1.388x | 1.466x |
-| `out/mul/float32/n32/mixed-rank-reversed/negative-inner/zero-inner/none/finite` | 0.167x | 1.208x | 1.439x |
-| `out/mul/float32/n4/rhs-column/c/c/none/finite` | 0.283x | 1.332x | 2.195x |
-| `out/mul/float32/n512/all-singleton-rhs/step2-outer/c/none/finite` | 0.319x | 1.095x | 0.977x |
-| `out/mul/float32/n32/crossed-batch/zero-inner/zero-inner/none/finite` | 0.358x | 1.508x | 1.738x |
-| `out/add/float64/n1024/python-scalar/c/scalar/none/finite` | 0.468x | 1.117x | 1.221x |
-
-All six long-sample normal ratios exceed 1.0. One reused-output rerun remains slightly below NumPy at 0.977x, and the full short sweep still contains losses.
+The ranges cross 1.0 for both paths, and operation, dtype, mirrored singleton-side, and neighboring-layout runs do not isolate a reused-output gap. The earlier 0.977x result is a fixed-order artifact, not a stable regression. No core executor or NEON change was made because there is no general, low-risk optimization justified by the stable data.
 
 ## WSL2 NumPy 2.5.1 evidence
 
@@ -82,6 +73,8 @@ The clean WSL2 x86-64 run measured revision `2310734ca0ce8d7cba226b82c0b6ab03df6
 | Size-32 reused outputs | 12,384 | 99.99% | 2.283x | 1.746x |
 
 Long-sample reruns of the six lowest WSL short-sweep normal ratios range from 0.804x to 1.593x, and three remain below 1.0.
+
+The core implementation did not change after the WSL run, so this remains valid implementation evidence. WSL2 should rerun the new stable timing policy before its near-parity tails are compared directly with the final Apple stable result.
 
 ## Proposed design
 
@@ -123,7 +116,7 @@ Every abstraction must be consumed by elementwise arithmetic in the task that in
 
 ## Performance interpretation
 
-Both platforms show a broad advantage over NumPy 2.5.1, especially for broadcast and reused-output execution. The Apple full sweep wins 97.48% of broadcast normal cases and 98.04% of broadcast reused-output cases. The long Apple reruns show that the six most extreme short normal losses were timing-tail artifacts, but the full sweep and the 0.977x reused rerun still prevent a universal claim.
+Both platforms show a broad advantage over NumPy 2.5.1, especially for broadcast and reused-output execution. The final Apple broad sweep wins 97.38% of broadcast normal cases and 97.86% of broadcast reused-output cases. The balanced Apple tail classifies the old 0.977x point as parity, but broad minima and round ranges that cross 1.0 still prevent a universal claim.
 
 The architecture should not gain case-specific conditions only to turn every benchmark point into a win. Remaining losses should be evaluated by topology family and stable long-sample evidence.
 
@@ -142,10 +135,9 @@ The architecture should not gain case-specific conditions only to turn every ben
 
 - [Prototype draft PR #28](https://github.com/ThreeMonth03/solvcon/pull/28)
 - [Development plan, detailed results, and reproduction protocol](https://github.com/ThreeMonth03/solvcon/blob/codex/prototype-elementwise-broadcast/doc/source/devplan/elementwise-broadcast-execution/index.md)
-- [Apple M1 audit comment](https://github.com/ThreeMonth03/solvcon/pull/28#issuecomment-5152766036)
-- [Apple M1 raw reports, samples, logs, and manifest](https://github.com/user-attachments/files/30621311/elementwise-numpy251-macos-current-20260802-013704.tar.gz)
-- Archive SHA-256: `1e4cc481bba0eb78d2cb10ba99745d699a44ed3817e569f941fd79f30f1d7456`
-- Measured Apple code revision: `0c03661fe76ad7e01c0c10ffb0c51843c2bdd7b7`
+- Final Apple audit comment and immutable archive: attached to Draft PR #28
+- Measured Apple revision: `e4a1bf847da12c01f250c5b44103f28771011b1d`
+- Baseline and final core implementation revision: `0c03661fe76ad7e01c0c10ffb0c51843c2bdd7b7`
 - Measured WSL2 code revision: `2310734ca0ce8d7cba226b82c0b6ab03df6094fa`
 
 <!-- Publication gate: confirm that Draft PR #28 still targets ThreeMonth03/solvcon:master and remains open. Do not use a closing keyword when posting upstream. -->
