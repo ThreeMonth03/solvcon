@@ -61,15 +61,14 @@ Every pull request should contain one reviewable architectural step, its immedia
 
 ## Implementation outline
 
-Dependencies: Task 1 may proceed independently. Task 2 uses the shared coordinate types from PR #1208 and Task 1's cases. Task 3 follows Task 2. Tasks 4 and 5 follow Task 3 and may proceed separately. Task 6 requires Tasks 4 and 5. Task 7 follows Task 6.
+Dependencies: Task 2 follows Task 1. Tasks 3 and 4 follow Task 2 and may proceed separately. Task 5 requires Tasks 3 and 4. Task 6 follows Task 5.
 
-- [ ] **Task 1: Establish differential coverage.** Add deterministic scalar and array cases for valid and invalid broadcasting, empty axes, aliases, supported dtypes, arithmetic value patterns, and C, permuted, negative, stepped, offset, and zero-stride layouts. Keep correctness and timing modes separate.
-- [ ] **Task 2: Add generic multiplication broadcasting.** Consume `LoopDomain` and `OperandMapping` from PR #1208, rank-align operands with zero broadcast strides, allocate compact results, and validate mapped traversal against NumPy.
-- [ ] **Task 3: Add fixed destinations and alias safety.** Treat in-place output as a fixed shape, distinguish exact, disjoint, and partial overlap, snapshot partial aliases, and add temporary reused-output profiling controls.
-- [ ] **Task 4: Lower mapped traversal into inner loops.** Select a profitable inner axis and add contiguous, constant, fixed-stride, reversed, and general mapped routes without changing plan semantics.
-- [ ] **Task 5: Preserve low-overhead direct execution.** Bypass redundant planning for scalar and equal-shape dense operations, perform one Python array-or-scalar dispatch, and keep unsupported layouts on the generic route.
-- [ ] **Task 6: Migrate arithmetic semantics.** Move `add`, `sub`, and `div` onto the executor, preserve boolean and division behavior, and tune only topology families supported by stable cross-platform measurements.
-- [ ] **Task 7: Replace legacy public routes.** Move public methods and operators to planned execution, remove staging and duplicate loops, and rerun full correctness, performance, lint, and platform verification.
+- [ ] **Task 1: Add generic multiplication broadcasting.** Consume `LoopDomain` and `OperandMapping` from PR #1208, rank-align operands with zero broadcast strides, allocate compact results, and add NumPy differential tests for valid and invalid shapes, empty axes, scalar operands, and signed or zero-stride layouts.
+- [ ] **Task 2: Add fixed destinations and alias safety.** Treat in-place output as a fixed shape, distinguish exact, disjoint, and partial overlap, snapshot partial aliases, and add unit tests plus temporary reused-output profiling controls for each case.
+- [ ] **Task 3: Lower mapped traversal into inner loops.** Select a profitable inner axis, add contiguous, constant, fixed-stride, reversed, and general mapped routes, and verify every dispatch choice with route tests and topology-level profiles.
+- [ ] **Task 4: Preserve low-overhead direct execution.** Bypass redundant planning for scalar and equal-shape dense operations, perform one Python array-or-scalar dispatch, and add regression tests and profiles that include complete public-call overhead.
+- [ ] **Task 5: Migrate arithmetic semantics.** Move `add`, `sub`, and `div` onto the executor with differential tests for every supported dtype, value pattern, boolean result, division behavior, and in-place form. Tune only topology families supported by stable cross-platform measurements.
+- [ ] **Task 6: Replace legacy public routes.** Move public methods and operators to planned execution, add public-API regression tests, remove staging and duplicate loops, and rerun full correctness, performance, lint, and Apple Accelerate plus WSL2 verification.
 
 ## Global acceptance
 
