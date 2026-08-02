@@ -169,16 +169,19 @@ Elementwise span, layout, and route policy remains in
 loop layer.
 
 The code revision used for the current WSL2 correctness and performance data
-is `2310734c`.  Later documentation-only commits do not change that code
-baseline.  A rerun must verify both the upstream ancestor and the relevant
-source diff before accepting its data.
+is `2310734c`.  The complete Apple correctness and performance run used clean
+revision `0c03661f`, which includes the NEON scalar-loop change.  Later
+documentation-only commits do not change either measured source baseline.  A
+rerun must verify the upstream ancestor and the relevant source diff before
+accepting its data.
 
 ### Correctness catalog
 
-The complete correctness runner processed 3,134,108 rows at clean revision
-`2310734c` with NumPy 2.5.1.  Every row had overall status `ok`.  Comparison
-operations account for 1,669,104 unavailable rows because this prototype
-only implements arithmetic.  The 1,465,004 arithmetic outcomes are:
+The complete correctness runner processed 3,134,108 rows with NumPy 2.5.1 at
+both the WSL2 anchor `2310734c` and the current Apple benchmark revision
+`0c03661f`.  Every row had overall status `ok`.  Comparison operations
+account for 1,669,104 unavailable rows because this prototype only implements
+arithmetic.  The 1,465,004 arithmetic outcomes are:
 
 | Planned result | Cases |
 | --- | ---: |
@@ -231,12 +234,13 @@ below 1.0, so the issue must not claim that every case beats NumPy.
 
 ### Current Apple Silicon performance evidence
 
-The authoritative Apple run used clean revision `c9752b52`.  The relevant
-source tree is byte-identical to benchmark anchor `2310734c`.  The native
-Apple M1 environment used macOS 26.5.1 arm64, Python 3.14.6, NumPy 2.5.1
-with Accelerate, AC power, and one thread for every recorded numerical
-library variable.  Each short-sweep case used five samples, two warmups,
-and a one-millisecond timing target.
+The authoritative Apple run used clean revision `0c03661f`.  The native
+environment was macOS 26.5.1 on a MacBook Air with Apple M1, native arm64,
+Python 3.14.6, NumPy 2.5.1 with Accelerate, and AC power.  The recorded
+`OPENBLAS_NUM_THREADS`, `OMP_NUM_THREADS`, `MKL_NUM_THREADS`,
+`VECLIB_MAXIMUM_THREADS`, and `NUMEXPR_NUM_THREADS` values were all `1`.
+Each short-sweep case used five samples, two warmups, a one-millisecond timing
+target, and preallocated-output timing.
 
 The six reports contain 54,432 raw rows in the documented order: 24,320,
 4,928, 8,448, 9,120, 4,032, and 3,584.  First-occurrence deduplication
@@ -246,74 +250,66 @@ valid reused-output timings.
 
 | Scope | Cases | Win rate | Median NumPy / planned | 10th percentile | Minimum |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| All normal paths | 33,368 | 90.89% | 1.439x | 1.019x | 0.051x |
-| Broadcast normal paths | 29,208 | 93.46% | 1.458x | 1.083x | 0.051x |
-| All reused outputs | 24,512 | 96.34% | 1.803x | 1.090x | 0.199x |
-| Broadcast reused outputs | 22,240 | 96.55% | 1.822x | 1.228x | 0.199x |
-| Size-32 normal paths | 16,472 | 95.64% | 1.487x | 1.190x | 0.439x |
-| Size-32 reused outputs | 12,384 | 99.54% | 1.815x | 1.426x | 0.250x |
+| All normal paths | 33,368 | 94.49% | 1.498x | 1.091x | 0.128x |
+| Broadcast normal paths | 29,208 | 97.48% | 1.522x | 1.138x | 0.128x |
+| All reused outputs | 24,512 | 97.92% | 1.876x | 1.145x | 0.145x |
+| Broadcast reused outputs | 22,240 | 98.04% | 1.906x | 1.281x | 0.145x |
+| Size-32 normal paths | 16,472 | 95.80% | 1.541x | 1.246x | 0.128x |
+| Size-32 reused outputs | 12,384 | 99.52% | 1.902x | 1.429x | 0.145x |
 
 | Topology family | Path | Cases | Win rate | Median | 10th percentile | Minimum |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| Non-broadcast | Normal | 4,160 | 72.86% | 1.334x | 0.901x | 0.663x |
-| Non-broadcast | Reused | 2,272 | 94.32% | 1.119x | 1.020x | 0.525x |
-| Python scalar | Normal | 672 | 80.06% | 1.355x | 0.826x | 0.500x |
-| Python scalar | Reused | 368 | 91.58% | 1.540x | 1.010x | 0.654x |
-| Singleton broadcast | Normal | 9,952 | 86.70% | 1.339x | 0.940x | 0.140x |
-| Singleton broadcast | Reused | 7,104 | 92.05% | 1.713x | 1.015x | 0.199x |
-| Single-axis broadcast | Normal | 9,664 | 97.26% | 1.500x | 1.201x | 0.439x |
-| Single-axis broadcast | Reused | 6,816 | 99.03% | 1.880x | 1.418x | 0.662x |
-| Outer broadcast | Normal | 2,288 | 99.13% | 1.671x | 1.460x | 0.847x |
-| Outer broadcast | Reused | 2,272 | 99.82% | 2.076x | 1.767x | 0.660x |
-| Mixed-rank broadcast | Normal | 6,632 | 97.48% | 1.517x | 1.143x | 0.051x |
-| Mixed-rank broadcast | Reused | 5,680 | 98.20% | 1.798x | 1.306x | 0.250x |
+| Non-broadcast | Normal | 4,160 | 73.46% | 1.348x | 0.922x | 0.602x |
+| Non-broadcast | Reused | 2,272 | 96.70% | 1.138x | 1.029x | 0.738x |
+| Python scalar | Normal | 672 | 96.73% | 1.436x | 1.064x | 0.468x |
+| Python scalar | Reused | 368 | 97.28% | 1.689x | 1.130x | 0.588x |
+| Singleton broadcast | Normal | 9,952 | 95.82% | 1.403x | 1.070x | 0.319x |
+| Singleton broadcast | Reused | 7,104 | 95.88% | 1.834x | 1.121x | 0.229x |
+| Single-axis broadcast | Normal | 9,664 | 98.74% | 1.545x | 1.234x | 0.283x |
+| Single-axis broadcast | Reused | 6,816 | 99.62% | 1.937x | 1.445x | 0.708x |
+| Outer broadcast | Normal | 2,288 | 99.21% | 1.797x | 1.543x | 0.710x |
+| Outer broadcast | Reused | 2,272 | 99.91% | 2.241x | 1.865x | 0.698x |
+| Mixed-rank broadcast | Normal | 6,632 | 97.63% | 1.556x | 1.146x | 0.128x |
+| Mixed-rank broadcast | Reused | 5,680 | 98.17% | 1.826x | 1.300x | 0.145x |
 
-The six lowest short-sweep normal ratios were rerun sequentially, one exact
-case at a time, with 31 samples, seven warmups, and a 30-millisecond target.
-Their long-sample ratios are 1.243x, 1.822x, 0.910x, 0.760x, 1.318x, and
-2.000x.  Four short-sweep extremes were timing interruptions.  Two in-place
-singleton-broadcast cases remain below NumPy, so the Apple result supports a
-broad performance advantage, not a universal one.
+The six lowest short-sweep normal ratios were selected from this exact run and
+rerun sequentially, one exact case at a time, with 31 samples, seven warmups,
+and a 30-millisecond target.
 
-The complete correctness catalog also passes all 3,134,108 cases with the
-expected planned classifications.  The same environment passes all 256 C++
-tests, 89 focused Python tests with 783 subtests, and `make lint`.  The full
-non-GUI Python command originally stopped during collection because the
-devenv flavor did not contain `jsonschema`.  After installing `jsonschema`
-4.26.0 in that flavor, the suite passes 1,532 tests and 1,100 subtests, with
-283 skipped tests, three expected failures, and the existing callback warning.
-Raw JSON and generated summaries remain under the ignored local results
-directory and are not part of the branch.
-
-#### NEON scalar follow-up
-
-Clean revision `68c55689` addresses the two in-place singleton-broadcast
-cases above without changing their execution plan.  Both already reach the
-shared NEON scalar transform: the step-2 outer layout is coalesced into dense
-slabs, and the permuted layout is a dense Fortran-contiguous span.  The change
-therefore stays in `cpp/solvcon/simd/neon/neon.hpp` and processes four vector
-blocks per loop iteration.  The executor, planner, Python bindings, and
-topology selection are unchanged.  Multiply and divide still use their exact
-NEON operations, followed by explicit vector and scalar tails.
-
-The authoritative follow-up used the same native Apple M1, Python 3.14.6,
-NumPy 2.5.1, and single-thread settings.  All 13 result files record revision
-`68c55689`, `git_dirty: false`, `arm64`, and NumPy 2.5.1.  Five independent
-long-sample runs give these NumPy / planned ratios:
-
-| Case | Minimum | Median | Maximum |
+| Case ID | Short normal | Long normal | Long reused |
 | --- | ---: | ---: | ---: |
-| `div/float32/n128/all-singleton-rhs/permuted` | 1.382x | 1.413x | 1.430x |
-| `mul/float64/n128/all-singleton-rhs/step2-outer` | 1.104x | 1.128x | 1.188x |
+| `out/mul/float32/n32/mixed-rank-reversed/negative-inner/offset/none/finite` | 0.128x | 1.388x | 1.466x |
+| `out/mul/float32/n32/mixed-rank-reversed/negative-inner/zero-inner/none/finite` | 0.167x | 1.208x | 1.439x |
+| `out/mul/float32/n4/rhs-column/c/c/none/finite` | 0.283x | 1.332x | 2.195x |
+| `out/mul/float32/n512/all-singleton-rhs/step2-outer/c/none/finite` | 0.319x | 1.095x | 0.977x |
+| `out/mul/float32/n32/crossed-batch/zero-inner/zero-inner/none/finite` | 0.358x | 1.508x | 1.738x |
+| `out/add/float64/n1024/python-scalar/c/scalar/none/finite` | 0.468x | 1.117x | 1.221x |
 
-The focused scaling sweep wins all 14 division sizes, with 1.459x at n=128
-and 1.103x at n=1024.  Multiplication wins 13 of 14 sizes, with 1.131x at
-n=128 and 0.993x at n=1024.  The requested n=128 cases now consistently beat
-NumPy, but the n=1024 multiplication result still prevents a universal
-performance claim.  All 392 focused correctness cases pass with the expected
-planned classification.  The new vector-block boundary test also checks
-in-place and out-of-place add, subtract, multiply, and divide for float32 and
-float64.
+All six long-sample normal ratios exceed 1.0.  One of the six reused-output
+ratios remains below 1.0.  The complete short sweep also contains losses,
+including 0.128x and 0.145x minima, so the Apple result supports a broad
+performance advantage, not a universal one.
+
+The complete correctness catalog passes all 3,134,108 rows with the expected
+planned classifications and zero unexpected results, benchmark errors, or
+process crashes.  The same environment passes the build, all 256 C++ tests,
+1,532 non-GUI Python tests with 1,100 subtests, 283 skips, three expected
+failures, and one existing callback warning.  It also passes 89 focused Python
+tests with 783 subtests, 5 SIMD Python tests with 48 subtests, and `make lint`.
+The Mac used clang-format 19, which reported the expected version difference
+from the CI pin.  The changed NEON header also passes the project
+clang-format 20.1.8 check.
+
+The audit comment and raw archive are available from [Draft PR #28][pr28-audit].
+The archive SHA-256 is
+`1e4cc481bba0eb78d2cb10ba99745d699a44ed3817e569f941fd79f30f1d7456`.
+
+[pr28-audit]: https://github.com/ThreeMonth03/solvcon/pull/28#issuecomment-5152766036
+[apple-archive]: https://github.com/user-attachments/files/30621311/elementwise-numpy251-macos-current-20260802-013704.tar.gz
+
+The [raw archive][apple-archive] contains all six reports, long-tail reruns,
+correctness output, timing samples, build and test logs, environment metadata,
+checksums, and the manifest.
 
 ### Reproduction
 
@@ -322,18 +318,23 @@ local branch or from the old Apple revision.  Before building, fetch upstream
 and run these guards:
 
 ```bash
+git fetch origin codex/prototype-elementwise-broadcast
 git fetch upstream master
 git status --porcelain
+test "$(git rev-parse --abbrev-ref HEAD)" = codex/prototype-elementwise-broadcast
 git merge-base --is-ancestor 2405ac2b HEAD
 git diff --exit-code upstream/master -- cpp/solvcon/buffer/loop.hpp
-git diff --exit-code 2310734c -- cpp gtests profiling solvcon tests
+git diff --exit-code 0c03661f -- cpp gtests profiling solvcon tests
 git rev-parse HEAD
 ```
 
-The first command must print nothing and the next three commands must exit
-zero.  Record the final `git rev-parse HEAD` output.  It is the revision that
-must appear in every new JSON report.  Use the project devenv and system
-Python, not a virtual environment.  Then build and verify the environment:
+`git status --porcelain` must print nothing.  The branch-name, ancestor, and
+both source-diff guards must exit zero.  The last source-diff guard proves that
+a documentation-only head still measures the source tree from authoritative
+Apple revision `0c03661f`.  Record the final `git rev-parse HEAD` output.  That
+exact current head, rather than `0c03661f`, must appear in every new JSON
+report.  Use the project devenv and system Python, not a virtual environment.
+Then build and verify the environment:
 
 ```bash
 make BUILD_QT=OFF
@@ -397,11 +398,11 @@ Never guess the PR number or reuse a URL from another prototype.
 
 - Branch: `codex/prototype-elementwise-broadcast`
 - Upstream base: `8337f48a`, including PR #1208 merge `2405ac2b`
-- Full-catalog benchmark anchor: `2310734c`
+- WSL2 full-catalog benchmark revision: `2310734c`
 - Current optimization revision: `68c55689`
+- Apple full-catalog benchmark revision: `0c03661f`
 - Correctness catalog: 3,134,108 overall `ok`; 1,465,004 arithmetic
   outcomes audited
-- Current optimization correctness: 392 focused cases overall `ok`
 - C++ tests: 256 passed
 - Focused Python tests: 89 passed with 783 subtests on the current macOS run
 - NEON scalar boundary test: 5 passed with 48 subtests
@@ -414,6 +415,8 @@ Never guess the PR number or reuse a URL from another prototype.
   four-vector NEON scalar-loop unrolling
 - Rebased WSL2 NumPy 2.5.1 benchmark: complete and metadata-audited
 - Rebased Apple NumPy 2.5.1 benchmark: complete and metadata-audited
+- Apple raw archive SHA-256:
+  `1e4cc481bba0eb78d2cb10ba99745d699a44ed3817e569f941fd79f30f1d7456`
 - Fork draft PR: `https://github.com/ThreeMonth03/solvcon/pull/28`
 - Upstream issue draft: `issue-draft.md`, kept local and unpublished
 - Commits: split into benchmark, implementation, and documentation concerns
