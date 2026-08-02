@@ -1,10 +1,8 @@
-# Add NumPy-compatible elementwise broadcasting with layout-aware execution
-
 <!-- Published as ThreeMonth03/solvcon#23. Keep the file synchronized with that issue. -->
 
 ## Motivation
 
-`SimpleArray` arithmetic accepts scalars or arrays with identical shapes but does not provide general NumPy-style broadcasting. Important paths also assume linear storage, so applying them to signed, sparse, or zero-stride layouts can lose logical coordinates.
+`SimpleArray` arithmetic accepts scalars or arrays with identical shapes but does not provide general NumPy-style broadcasting. Some paths also assume linear storage, so negative, stepped, sparse, or zero-stride layouts may lose their logical coordinates.
 
 The public operation should align axes from the right, broadcast axes of length one, preserve the fixed shape of an in-place destination, and reject incompatible shapes:
 
@@ -16,11 +14,9 @@ result = lhs + rhs
 assert result.shape == (2, 3, 4)
 ```
 
-The result contains 24 values, but the inputs contain only 8 and 3. Broadcasting should represent repeated values with zero strides instead of allocating expanded copies.
+The result contains 24 values, but the inputs contain only 8 and 3. Broadcasting should use zero strides rather than allocate expanded operands. Partial aliases must be safe, and common scalar or equal-shape dense calls must retain a low-overhead route.
 
-Correct traversal is not enough. Common scalar and equal-shape calls should avoid unnecessary runtime-rank planning, while negative, stepped, offset, permuted, and zero-stride layouts must preserve their logical coordinates. Partial aliases must be snapshotted before writes, and a fixed in-place destination must never expand.
-
-[Draft PR #28](https://github.com/ThreeMonth03/solvcon/pull/28) tests these boundaries behind private staging methods. Its NumPy 2.5.1 results show a broad advantage for planned broadcast execution, but not universal dominance. Detailed measurements, revisions, and raw artifacts are kept in the supplement below and the linked fork study.
+[Draft PR #28](https://github.com/ThreeMonth03/solvcon/pull/28) validates these boundaries behind private staging methods. NumPy 2.5.1 correctness, performance, revisions, and raw artifacts are recorded in the [prototype evidence comment](https://github.com/ThreeMonth03/solvcon/issues/23#issuecomment-5156722528).
 
 ## Proposed design
 
@@ -43,57 +39,45 @@ ElementwiseExecutor::execute(plan, operation)
         `-- general mapped traversal
 ```
 
-The runtime-rank `LoopDomain`, `OperandMapping`, and `MappedOffsetCursor` types introduced through [PR #1208](https://github.com/solvcon/solvcon/pull/1208) contain only shape and offset facts. They do not own storage, dtype, arithmetic, allocation, or backend policy.
+The runtime-rank `LoopDomain` and `OperandMapping` types introduced through [PR #1208](https://github.com/solvcon/solvcon/pull/1208) provide shape and offset facts. `ElementwisePlan` owns broadcast validation, aligned mappings, the fixed output mapping, and route selection. `ElementwiseExecutor` owns allocation, overlap safety, destination reuse, and dispatch. Typed kernels own arithmetic.
 
-`ElementwisePlan` owns elementwise broadcast validation, aligned input mappings, the fixed output mapping, and route selection. `ElementwiseExecutor` owns output allocation, overlap safety, destination reuse, and dispatch. Typed kernels own scalar, contiguous, and fixed-stride arithmetic.
-
-The fast routes and mapped fallback consume the same validated plan. Broadcast axes use zero strides. Exact aliases reuse the destination mapping, partial overlaps copy the affected input before execution, and sparse broadcast results use compact storage rather than materialized expanded operands.
-
-This boundary does not introduce a universal operation object, virtual per-element dispatch, or platform-specific planner branch. The shared coordinate vocabulary remains operation-independent, while elementwise semantics and tuning remain in the elementwise family.
+Broadcast axes use zero strides. Exact aliases reuse the destination mapping, partial overlaps snapshot the affected input, and sparse results use compact storage. Scalar and equal-shape dense operations use a mandatory private direct path; unsupported layouts fall back to the validated signed-stride plan. No plan, route, kernel, or backend selector becomes public.
 
 ## Migration path
 
-Development uses private `_planned_add`, `_planned_sub`, `_planned_mul`, and `_planned_div` methods while the existing public operators remain correctness and performance controls. Private `_planned_*_to` methods expose destination reuse only for profiling; they are not a proposed public `out` contract.
+Development uses private `_planned_*`, `_planned_*_to`, and `_planned_i*` staging methods while the existing public operators remain correctness and performance controls. They are not proposed public APIs.
 
-The final task moves the existing public arithmetic and in-place operators to planned execution, removes the private staging methods, and removes legacy loops that become exact duplicates. Existing dtype, boolean, division, exception, and result-layout behavior remains explicit during migration.
-
-Every pull request should contain one reviewable architectural step, its immediate elementwise consumer, differential tests, and relevant profiling. New abstractions must not land unused.
+Each task introduces one reviewable architectural step with its immediate consumer, tests, and profiling. Task 6 moves the existing public arithmetic and in-place operators to planned execution, then removes the staging methods and duplicate legacy loops.
 
 ## Implementation outline
 
 Dependencies: Task 2 follows Task 1. Task 3 follows Task 2. Tasks 4 and 5 follow Task 3 and may proceed separately. Task 6 requires Tasks 4 and 5.
 
-In Tasks 1-5, plan API means an internal C++ interface. No plan or route selector becomes public. Private Python staging methods exist only for differential testing and profiling, and Task 6 removes them.
+In Tasks 1-5, plan API means an internal C++ interface. Private Python methods exist only for testing and profiling.
 
-- [ ] **Task 1: Add generic multiplication broadcasting and create the minimal plan API.** Consume `LoopDomain` and `OperandMapping` from PR #1208, introduce internal `ElementwisePlan::make()` and `make_scalar()` factories plus `ElementwiseExecutor::transform()`, and initially execute through one general mapped route. Expose private `_planned_mul` array and scalar staging methods, allocate compact results, and add NumPy differential tests for valid and invalid shapes, empty axes, scalar operands, and signed or zero-stride layouts.
-- [ ] **Task 2: Extend the plan API for fixed destinations and alias safety.** Reuse the Task 1 plan instead of creating a second plan type, then add internal `transform_to()` and `transform_into()` execution entry points plus private `_planned_mul_to` and `_planned_imul` staging methods. Treat output as a fixed shape, distinguish exact, disjoint, and partial overlap, snapshot partial aliases, and add unit tests plus reused-output profiling controls for each case.
-- [ ] **Task 3: Add route selection to the existing plan API.** Extend `ElementwisePlan` with `ExecutionRoute`, `inner_axis`, and `InnerLoopPlan`, then let the same executor consume contiguous, constant, fixed-stride, reversed, and general mapped routes. Keep route selection internal, and verify every dispatch choice with C++ route tests and topology-level profiles rather than exposing a Python selector.
-- [ ] **Task 4: Add mandatory low-overhead direct execution.** Add private executor checks that bypass `ElementwisePlan` for scalar and equal-shape dense operations, perform one Python array-or-scalar dispatch, and fall back to the Task 3 plan for every unsupported layout. This task creates no public, staging, or plan API. Use isolated before-and-after profiles with complete public-call overhead on Apple Accelerate and WSL2 to validate the covered cases and prevent the direct path from expanding without evidence.
-- [ ] **Task 5: Migrate arithmetic semantics without another plan API.** Reuse `ElementwisePlan` and the executor for `add`, `sub`, and `div`; add operation-specific kernels and private `_planned_add`, `_planned_sub`, `_planned_div`, `_planned_*_to`, and `_planned_i*` staging methods. Add differential tests for every supported dtype, value pattern, boolean result, division behavior, and in-place form. Tune only topology families supported by stable cross-platform measurements.
-- [ ] **Task 6: Replace legacy public routes.** Move public methods and operators to planned execution, add public-API regression tests, remove staging and duplicate loops, and rerun full correctness, performance, lint, and Apple Accelerate plus WSL2 verification.
+- [ ] **Task 1: Add generic multiplication broadcasting and create the minimal plan API.** Introduce `ElementwisePlan::make()`, `make_scalar()`, and `ElementwiseExecutor::transform()` using the PR #1208 mappings and one general route. Add private `_planned_mul` staging plus differential tests for shapes, scalar operands, empty axes, and signed layouts.
+- [ ] **Task 2: Extend the plan API for fixed destinations and alias safety.** Reuse the Task 1 plan and add `transform_to()` and `transform_into()` with private multiplication staging. Validate fixed output shapes, snapshot partial overlaps, preserve exact aliases, and cover both behavior and reused-output performance.
+- [ ] **Task 3: Add route selection to the existing plan API.** Extend `ElementwisePlan` with `ExecutionRoute`, `inner_axis`, and `InnerLoopPlan`. Add contiguous, constant, fixed-stride, reversed, and mapped routes with internal route tests and topology profiles.
+- [ ] **Task 4: Add mandatory low-overhead direct execution.** Bypass `ElementwisePlan` for scalar and equal-shape dense operations, perform one Python array-or-scalar dispatch, and fall back to the Task 3 plan for every unsupported layout. Add no public, staging, or plan API. Validate the scope with complete-call profiles on Apple Accelerate and WSL2.
+- [ ] **Task 5: Migrate arithmetic semantics without another plan API.** Reuse the same plan and executor for `add`, `sub`, and `div`, adding only typed kernels and private staging methods. Cover supported dtypes, boolean results, division behavior, and in-place forms with differential tests and cross-platform profiles.
+- [ ] **Task 6: Replace legacy public routes.** Move public methods and operators to planned execution, add public-API regression tests, remove staging and duplicate loops, and rerun full correctness, performance, lint, Apple Accelerate, and WSL2 verification.
 
 ## Global acceptance
 
 - Public scalar and array `add`, `sub`, `mul`, and `div`, including in-place forms, match the existing supported semantics and NumPy broadcasting values.
 - Broadcasting uses aligned zero strides and never expands an input to the result shape.
 - Empty domains, signed and sparse layouts, mixed ranks, fixed destinations, exact aliases, and partial overlaps have differential coverage.
-- Common scalar and equal-shape dense calls do not pay for general mapped traversal.
-- Unsupported fast-path combinations use the generic signed-stride executor.
-- Timed calls include planning, allocation when applicable, alias handling, dispatch, and arithmetic, with thread configuration applied before importing NumPy.
-- The final public API contains no `_planned_*` or `_planned_*_to` staging method and exposes no plan, mapping, kernel, or backend selector.
+- Scalar and equal-shape dense calls use the direct route; unsupported combinations use the generic signed-stride executor.
+- Timed calls include planning, allocation when applicable, alias handling, dispatch, and arithmetic.
+- The final public API exposes no staging method, plan, mapping, kernel, route, or backend selector.
 - Final migration includes Apple Accelerate and WSL2 NumPy 2.5.1 correctness and performance evidence.
 
 ## References
 
-- [Elementwise broadcast execution: design, methodology, and reproduction guide](https://github.com/ThreeMonth03/solvcon/blob/codex/prototype-elementwise-broadcast/doc/source/devplan/elementwise-broadcast-execution/index.md)
+- [Elementwise broadcast execution: design and reproduction guide](https://github.com/ThreeMonth03/solvcon/blob/codex/prototype-elementwise-broadcast/doc/source/devplan/elementwise-broadcast-execution/index.md)
+- [Prototype evidence and artifacts](https://github.com/ThreeMonth03/solvcon/issues/23#issuecomment-5156722528)
 - [Shared runtime-rank loop vocabulary, solvcon/solvcon#1208](https://github.com/solvcon/solvcon/pull/1208)
 - [Related batched matmul design, solvcon/solvcon#1172](https://github.com/solvcon/solvcon/issues/1172)
-
-## Appendix: prototype and benchmark evidence
-
-- [Prototype Draft PR #28](https://github.com/ThreeMonth03/solvcon/pull/28)
-- [Final Apple audit comment](https://github.com/ThreeMonth03/solvcon/pull/28#issuecomment-5156411746)
-- [Final Apple raw reports, stable observations, logs, checksums, and manifest](https://github.com/user-attachments/files/30628902/elementwise-numpy251-macos-stable-20260802-145103.tar.gz), SHA-256 `2592bb0ceed9eeaf9f6c40a92b3c56e9cde6318fc0dc0cafafbbc41b6c7e5cb6`
 
 <!-- Publication gate: confirm that Draft PR #28 still targets ThreeMonth03/solvcon:master and remains open. Do not use a closing keyword when posting. -->
 
