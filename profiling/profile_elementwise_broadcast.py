@@ -110,7 +110,7 @@ def parse_arguments():
     parser.add_argument("--progress-every", type=int, default=10000)
     parser.add_argument(
         "--timing",
-        choices=("none", "matched"),
+        choices=("none", "matched", "stable"),
         default="none",
     )
     parser.add_argument(
@@ -129,6 +129,9 @@ def parse_arguments():
     parser.add_argument("--samples", type=int, default=7)
     parser.add_argument("--warmup", type=int, default=2)
     parser.add_argument("--target-ms", type=float, default=20.0)
+    parser.add_argument("--stable-processes", type=int, default=3)
+    parser.add_argument("--stable-rounds", type=int, default=5)
+    parser.add_argument("--warmup-ms", type=float, default=20.0)
     parser.add_argument(
         "--preallocated-output",
         action="store_true",
@@ -146,6 +149,16 @@ def parse_arguments():
     parser.add_argument("--child", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument(
         "--child-spec",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--stable-child-spec",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--stable-process-index",
+        type=int,
+        default=0,
         help=argparse.SUPPRESS,
     )
     return parser.parse_args()
@@ -641,13 +654,7 @@ def audit_preallocated_output(spec, lhs, rhs, expected):
     }
 
 
-def time_preallocated_output(
-    spec,
-    method,
-    lhs,
-    rhs,
-    args,
-):
+def make_preallocated_timed_method(spec, method, lhs, rhs):
     destination = np.empty(
         spec.topology.result_shape, dtype=spec.dtype
     )
@@ -682,10 +689,23 @@ def time_preallocated_output(
             )
 
         function = planned_function
+    return function, None, "out"
+
+
+def time_preallocated_output(
+    spec,
+    method,
+    lhs,
+    rhs,
+    args,
+):
+    function, reset, mode = make_preallocated_timed_method(
+        spec, method, lhs, rhs
+    )
     return timed_samples(
         function,
-        None,
-        "out",
+        reset,
+        mode,
         args.samples,
         args.warmup,
         args.target_ms,
@@ -729,13 +749,7 @@ def timed_samples(
     }
 
 
-def time_case_method(
-    spec,
-    method,
-    lhs,
-    rhs,
-    args,
-):
+def make_timed_case_method(spec, method, lhs, rhs):
     lhs_initial = lhs.storage.copy()
     if method == "numpy":
         operation = NUMPY_OPERATIONS[spec.operation]
@@ -774,14 +788,291 @@ def time_case_method(
         def reset_destination():
             lhs.storage[...] = lhs_initial
         reset = reset_destination
+    return function, reset, spec.mode
+
+
+def time_case_method(
+    spec,
+    method,
+    lhs,
+    rhs,
+    args,
+):
+    function, reset, mode = make_timed_case_method(
+        spec, method, lhs, rhs
+    )
     return timed_samples(
         function,
         reset,
-        spec.mode,
+        mode,
         args.samples,
         args.warmup,
         args.target_ms,
     )
+
+
+def balanced_method_order(methods, sequence):
+    methods = tuple(methods)
+    if not methods:
+        return ()
+    rotation = sequence % len(methods)
+    ordered = methods[rotation:] + methods[:rotation]
+    if (sequence // len(methods)) % 2:
+        ordered = tuple(reversed(ordered))
+    return ordered
+
+
+def run_timed_block(timed_method, repeat):
+    function = timed_method[0]
+    reset = timed_method[1]
+    if reset:
+        reset()
+    start = time.perf_counter_ns()
+    for _ in range(repeat):
+        function()
+    return max(1, time.perf_counter_ns() - start)
+
+
+def calibrate_timed_method(timed_method, target_ms):
+    mode = timed_method[2]
+    elapsed = run_timed_block(timed_method, 1)
+    if mode == "in":
+        repeat = 1
+    else:
+        target_ns = max(1, int(target_ms * 1e6))
+        repeat = max(1, min(10000, target_ns // elapsed))
+    return repeat, elapsed
+
+
+def warm_stable_methods(methods, repeats, warmup_ms, sequence):
+    target_ns = max(0, int(warmup_ms * 1e6))
+    elapsed_by_method = {name: 0 for name in methods}
+    blocks_by_method = {name: 0 for name in methods}
+    while any(value < target_ns for value in elapsed_by_method.values()):
+        order = balanced_method_order(methods, sequence)
+        sequence += 1
+        for name in order:
+            if elapsed_by_method[name] >= target_ns:
+                continue
+            elapsed = run_timed_block(methods[name], repeats[name])
+            elapsed_by_method[name] += elapsed
+            blocks_by_method[name] += 1
+    return elapsed_by_method, blocks_by_method
+
+
+def make_stable_timed_methods(spec, preallocated_output):
+    methods = {}
+    for name in ("numpy", "planned"):
+        lhs, rhs = make_case_data(spec)
+        methods[name] = make_timed_case_method(
+            spec, name, lhs, rhs
+        )
+    if preallocated_output and supports_preallocated_output(spec):
+        for name in ("numpy", "planned"):
+            lhs, rhs = make_case_data(spec)
+            methods[f"{name}_to"] = make_preallocated_timed_method(
+                spec, name, lhs, rhs
+            )
+    return methods
+
+
+def run_stable_process(spec, args, process_index):
+    observations = []
+    calibration = []
+    for round_index in range(args.stable_rounds):
+        round_sequence = (
+            process_index * args.stable_rounds * args.samples
+            + round_index * args.samples
+        )
+        methods = make_stable_timed_methods(
+            spec, args.preallocated_output
+        )
+        repeats = {}
+        calibration_elapsed = {}
+        calibration_order = balanced_method_order(
+            methods, round_sequence
+        )
+        for order_index, name in enumerate(calibration_order):
+            repeats[name], calibration_elapsed[name] = (
+                calibrate_timed_method(methods[name], args.target_ms)
+            )
+            calibration.append({
+                "process": process_index,
+                "round": round_index,
+                "method": name,
+                "order": order_index,
+                "repeat": repeats[name],
+                "elapsed_ns": calibration_elapsed[name],
+            })
+        warmup_elapsed, warmup_blocks = warm_stable_methods(
+            methods,
+            repeats,
+            args.warmup_ms,
+            round_sequence,
+        )
+        for item in calibration[-len(methods):]:
+            name = item["method"]
+            item["warmup_elapsed_ns"] = warmup_elapsed[name]
+            item["warmup_blocks"] = warmup_blocks[name]
+        for sample_index in range(args.samples):
+            sample_sequence = round_sequence + sample_index
+            order = balanced_method_order(methods, sample_sequence)
+            for order_index, name in enumerate(order):
+                elapsed = run_timed_block(methods[name], repeats[name])
+                observations.append({
+                    "process": process_index,
+                    "round": round_index,
+                    "sample": sample_index,
+                    "sequence": sample_sequence,
+                    "order": order_index,
+                    "method": name,
+                    "repeat": repeats[name],
+                    "elapsed_ns": elapsed,
+                    "per_call_ns": elapsed / repeats[name],
+                })
+    return {
+        "process": process_index,
+        "pid": os.getpid(),
+        "calibration": calibration,
+        "observations": observations,
+    }
+
+
+def summarize_ratio(rounds, numerator, denominator):
+    values = []
+    for item in rounds:
+        methods = item["methods"]
+        if numerator in methods and denominator in methods:
+            ratio = (
+                methods[numerator]["median_ms"]
+                / methods[denominator]["median_ms"]
+            )
+            item[f"{numerator}_over_{denominator}"] = ratio
+            values.append(ratio)
+    if not values:
+        return None
+    return {
+        "round_count": len(values),
+        "median": statistics.median(values),
+        "minimum": min(values),
+        "maximum": max(values),
+    }
+
+
+def summarize_stable_observations(observations):
+    seen = set()
+    by_method = collections.defaultdict(list)
+    order_counts = collections.defaultdict(collections.Counter)
+    by_round = collections.defaultdict(
+        lambda: collections.defaultdict(list)
+    )
+    for observation in observations:
+        key = (
+            observation["process"],
+            observation["round"],
+            observation["sample"],
+            observation["method"],
+        )
+        if key in seen:
+            raise ValueError(f"duplicate stable observation: {key}")
+        seen.add(key)
+        value_ms = observation["per_call_ns"] / 1e6
+        by_method[observation["method"]].append(value_ms)
+        order_counts[observation["method"]][observation["order"]] += 1
+        by_round[
+            (observation["process"], observation["round"])
+        ][observation["method"]].append(value_ms)
+    methods = {
+        name: {
+            "sample_count": len(values),
+            "median_ms": statistics.median(values),
+            "minimum_ms": min(values),
+            "maximum_ms": max(values),
+        }
+        for name, values in sorted(by_method.items())
+    }
+    rounds = []
+    for (process_index, round_index), grouped in sorted(by_round.items()):
+        rounds.append({
+            "process": process_index,
+            "round": round_index,
+            "methods": {
+                name: {
+                    "sample_count": len(values),
+                    "median_ms": statistics.median(values),
+                }
+                for name, values in sorted(grouped.items())
+            },
+        })
+    ratios = {
+        "normal": summarize_ratio(rounds, "numpy", "planned"),
+        "reused": summarize_ratio(
+            rounds, "numpy_to", "planned_to"
+        ),
+    }
+    return {
+        "methods": methods,
+        "order_counts": {
+            name: dict(sorted(counts.items()))
+            for name, counts in sorted(order_counts.items())
+        },
+        "rounds": rounds,
+        "ratios": ratios,
+    }
+
+
+def stable_child_command(spec, args, process_index):
+    command = [
+        sys.executable,
+        str(pathlib.Path(__file__).resolve()),
+        "--timing", "stable",
+        "--samples", str(args.samples),
+        "--target-ms", str(args.target_ms),
+        "--stable-rounds", str(args.stable_rounds),
+        "--warmup-ms", str(args.warmup_ms),
+        "--stable-process-index", str(process_index),
+        "--stable-child-spec", serialize_case_spec(spec),
+    ]
+    if args.preallocated_output:
+        command.append("--preallocated-output")
+    return command
+
+
+def run_stable_timing(spec, args):
+    processes = []
+    observations = []
+    calibration = []
+    for process_index in range(args.stable_processes):
+        process = subprocess.run(
+            stable_child_command(spec, args, process_index),
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if process.returncode:
+            raise RuntimeError(
+                "stable timing child failed with return code "
+                f"{process.returncode}: {process.stderr.strip()}"
+            )
+        result = json.loads(process.stdout)
+        processes.append({
+            "process": result["process"],
+            "pid": result["pid"],
+        })
+        calibration.extend(result["calibration"])
+        observations.extend(result["observations"])
+    return {
+        "policy": "balanced-interleaved-v1",
+        "process_count": args.stable_processes,
+        "round_count": args.stable_rounds,
+        "samples_per_round": args.samples,
+        "target_ms": args.target_ms,
+        "warmup_ms": args.warmup_ms,
+        "processes": processes,
+        "calibration": calibration,
+        "observations": observations,
+        "summary": summarize_stable_observations(observations),
+    }
 
 
 def case_matches_filters(spec, args):
@@ -908,12 +1199,27 @@ def run_case(spec, args):
                         args,
                     )
                 )
+    elif (
+        args.timing == "stable"
+        and expected_valid
+        and row["implementations"]["planned"]["status"] == "match"
+    ):
+        try:
+            row["timing"]["stable"] = run_stable_timing(spec, args)
+        except Exception as error:
+            row["timing"]["stable"] = {
+                "status": "benchmark-error",
+                "error_type": type(error).__name__,
+                "error": str(error),
+            }
     statuses = [
         result["status"]
         for result in row["implementations"].values()
     ]
     if "preallocated_output" in row:
         statuses.append(row["preallocated_output"]["status"])
+    if row.get("timing", {}).get("stable", {}).get("status"):
+        statuses.append(row["timing"]["stable"]["status"])
     row["status"] = (
         "bug" if any(status in BUG_STATUSES for status in statuses)
         else "ok"
@@ -1092,6 +1398,9 @@ def build_metadata(args):
         "samples": args.samples,
         "warmup": args.warmup,
         "target_ms": args.target_ms,
+        "stable_processes": args.stable_processes,
+        "stable_rounds": args.stable_rounds,
+        "warmup_ms": args.warmup_ms,
         "preallocated_output": args.preallocated_output,
         "filters": {
             name: getattr(args, name)
@@ -1180,8 +1489,19 @@ def should_record(row, selected_statuses=None):
 
 def main():
     args = parse_arguments()
+    if args.stable_child_spec is not None:
+        spec = deserialize_case_spec(args.stable_child_spec)
+        result = run_stable_process(
+            spec, args, args.stable_process_index
+        )
+        print(json.dumps(result))
+        return 0
     if not 0 <= args.shard_index < args.shard_count:
         raise ValueError("shard index must be smaller than shard count")
+    if min(args.samples, args.stable_processes, args.stable_rounds) < 1:
+        raise ValueError("timing counts must be positive")
+    if min(args.target_ms, args.warmup_ms) < 0:
+        raise ValueError("timing durations must be non-negative")
     if args.child_spec is not None:
         cases = (deserialize_case_spec(args.child_spec),)
     else:

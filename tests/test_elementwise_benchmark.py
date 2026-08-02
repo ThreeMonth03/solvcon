@@ -329,6 +329,80 @@ class ElementwiseBenchmarkCatalogTC(unittest.TestCase):
         self.assertEqual("match", audit["status"])
         self.assertIsNone(result)
 
+    def test_stable_timing_order_balances_every_position(self):
+        """Cancel timing-position bias across a complete schedule cycle."""
+        methods = ("numpy", "planned", "numpy_to", "planned_to")
+        orders = [
+            benchmark_profile.balanced_method_order(methods, sequence)
+            for sequence in range(8)
+        ]
+
+        for position in range(len(methods)):
+            counts = {
+                method: sum(order[position] == method for order in orders)
+                for method in methods
+            }
+            self.assertEqual(dict.fromkeys(methods, 2), counts)
+
+    def test_stable_summary_reports_independent_round_ratios(self):
+        """Derive parity claims from rounds while retaining every sample."""
+        observations = []
+        values = {
+            "numpy": (20, 24),
+            "planned": (10, 12),
+            "numpy_to": (15, 18),
+            "planned_to": (10, 12),
+        }
+        for process_index in range(2):
+            for round_index in range(2):
+                for sample_index in range(2):
+                    for order, (method, pair) in enumerate(values.items()):
+                        per_call_ns = pair[round_index] + process_index
+                        observations.append({
+                            "process": process_index,
+                            "round": round_index,
+                            "sample": sample_index,
+                            "sequence": round_index * 2 + sample_index,
+                            "order": order,
+                            "method": method,
+                            "repeat": 3,
+                            "elapsed_ns": per_call_ns * 3,
+                            "per_call_ns": per_call_ns,
+                        })
+
+        summary = benchmark_profile.summarize_stable_observations(
+            observations
+        )
+
+        self.assertEqual(8, summary["methods"]["numpy"]["sample_count"])
+        self.assertEqual(
+            {0: 8}, summary["order_counts"]["numpy"]
+        )
+        self.assertEqual(4, len(summary["rounds"]))
+        self.assertEqual(4, summary["ratios"]["normal"]["round_count"])
+        self.assertEqual(4, summary["ratios"]["reused"]["round_count"])
+        self.assertGreater(summary["ratios"]["normal"]["minimum"], 1.8)
+        self.assertGreater(summary["ratios"]["reused"]["minimum"], 1.4)
+
+    def test_stable_summary_rejects_duplicate_samples(self):
+        """Prevent retries from silently weighting a stable timing result."""
+        observation = {
+            "process": 0,
+            "round": 0,
+            "sample": 0,
+            "sequence": 0,
+            "order": 0,
+            "method": "numpy",
+            "repeat": 1,
+            "elapsed_ns": 10,
+            "per_call_ns": 10,
+        }
+
+        with self.assertRaisesRegex(ValueError, "duplicate stable"):
+            benchmark_profile.summarize_stable_observations(
+                [observation, dict(observation)]
+            )
+
     def test_smoke_case_identifiers_are_unique(self):
         """Keep command-line filtering unambiguous for reproductions."""
         identifiers = [
