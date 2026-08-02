@@ -1021,7 +1021,9 @@ def summarize_stable_observations(observations):
     }
 
 
-def stable_child_command(spec, args, process_index):
+def stable_child_command(
+    spec, args, process_index, preallocated_output
+):
     command = [
         sys.executable,
         str(pathlib.Path(__file__).resolve()),
@@ -1033,18 +1035,20 @@ def stable_child_command(spec, args, process_index):
         "--stable-process-index", str(process_index),
         "--stable-child-spec", serialize_case_spec(spec),
     ]
-    if args.preallocated_output:
+    if preallocated_output:
         command.append("--preallocated-output")
     return command
 
 
-def run_stable_timing(spec, args):
+def run_stable_timing(spec, args, preallocated_output):
     processes = []
     observations = []
     calibration = []
     for process_index in range(args.stable_processes):
         process = subprocess.run(
-            stable_child_command(spec, args, process_index),
+            stable_child_command(
+                spec, args, process_index, preallocated_output
+            ),
             check=False,
             capture_output=True,
             text=True,
@@ -1204,8 +1208,14 @@ def run_case(spec, args):
         and expected_valid
         and row["implementations"]["planned"]["status"] == "match"
     ):
+        preallocated_output = (
+            row.get("preallocated_output", {}).get("status")
+            == "match"
+        )
         try:
-            row["timing"]["stable"] = run_stable_timing(spec, args)
+            row["timing"]["stable"] = run_stable_timing(
+                spec, args, preallocated_output
+            )
         except Exception as error:
             row["timing"]["stable"] = {
                 "status": "benchmark-error",
@@ -1456,20 +1466,25 @@ def sorted_coverage(coverage):
     }
 
 
+def row_statuses(row):
+    statuses = {row["status"]}
+    statuses.update(
+        result["status"]
+        for result in row.get("implementations", {}).values()
+    )
+    if "preallocated_output" in row:
+        statuses.add(row["preallocated_output"]["status"])
+    statuses.update(
+        result["status"]
+        for result in row.get("timing", {}).values()
+        if "status" in result
+    )
+    return statuses
+
+
 def should_record(row, selected_statuses=None):
     if selected_statuses:
-        statuses = {
-            row["status"],
-            *(
-                result["status"]
-                for result in row.get(
-                    "implementations", {}
-                ).values()
-            ),
-        }
-        if "preallocated_output" in row:
-            statuses.add(row["preallocated_output"]["status"])
-        return bool(statuses.intersection(selected_statuses))
+        return bool(row_statuses(row).intersection(selected_statuses))
     if row["status"] == "bug":
         return True
     statuses = (
@@ -1544,7 +1559,9 @@ def main():
             row = run_case(case, args)
         case_count += 1
         statuses[row["status"]] += 1
-        benchmark_error_count += row["status"] == "benchmark-error"
+        benchmark_error_count += (
+            "benchmark-error" in row_statuses(row)
+        )
         update_coverage(coverage, row)
         for implementation in IMPLEMENTATIONS:
             status = (

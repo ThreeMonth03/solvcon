@@ -403,6 +403,89 @@ class ElementwiseBenchmarkCatalogTC(unittest.TestCase):
                 [observation, dict(observation)]
             )
 
+    def test_stable_reused_timing_requires_correct_destination(self):
+        """Never benchmark a reused-output implementation that failed audit."""
+        topology = benchmark_cases.Topology(
+            "same-1d",
+            (4,),
+            (4,),
+            (4,),
+        )
+        case = benchmark_cases.CaseSpec(
+            catalog="performance",
+            size=4,
+            topology=topology,
+            operation="add",
+            dtype="float64",
+            mode="out",
+            lhs_layout="c",
+            rhs_layout="c",
+        )
+        arguments = types.SimpleNamespace(
+            implementation=None,
+            preallocated_output=True,
+            timing="stable",
+        )
+        for audit_status in ("match", "wrong-value"):
+            with self.subTest(audit_status=audit_status):
+                audit = {
+                    "status": audit_status,
+                    "error_type": "",
+                    "error": "",
+                }
+                with (
+                    unittest.mock.patch.object(
+                        benchmark_profile,
+                        "audit_implementation",
+                        return_value={"status": "match"},
+                    ),
+                    unittest.mock.patch.object(
+                        benchmark_profile,
+                        "audit_preallocated_output",
+                        return_value=audit,
+                    ),
+                    unittest.mock.patch.object(
+                        benchmark_profile,
+                        "run_stable_timing",
+                        return_value={},
+                    ) as run_stable_timing,
+                ):
+                    benchmark_profile.run_case(case, arguments)
+
+                run_stable_timing.assert_called_once_with(
+                    case, arguments, audit_status == "match"
+                )
+
+    def test_stable_benchmark_error_honors_failure_flag(self):
+        """Return failure when an isolated stable timing process fails."""
+        row = {
+            "status": "bug",
+            "implementations": {},
+            "timing": {
+                "stable": {"status": "benchmark-error"},
+            },
+        }
+        arguments = [
+            "profile_elementwise_broadcast.py",
+            "--max-cases", "1",
+            "--record", "summary",
+            "--timing", "stable",
+            "--fail-on-benchmark-error",
+        ]
+        self.assertTrue(
+            benchmark_profile.should_record(row, ["benchmark-error"])
+        )
+        with (
+            unittest.mock.patch.object(
+                benchmark_profile.sys, "argv", arguments
+            ),
+            unittest.mock.patch.object(
+                benchmark_profile, "run_case", return_value=row
+            ),
+            unittest.mock.patch("builtins.print"),
+        ):
+            self.assertEqual(2, benchmark_profile.main())
+
     def test_smoke_case_identifiers_are_unique(self):
         """Keep command-line filtering unambiguous for reproductions."""
         identifiers = [
