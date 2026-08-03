@@ -16,7 +16,7 @@ assert result.shape == (2, 3, 4)
 
 The result contains 24 values, but the inputs contain only 8 and 3. Broadcasting should use zero strides rather than allocate expanded operands. Partial aliases must be safe, and common scalar or equal-shape dense calls must retain a low-overhead route.
 
-[Draft PR #28](https://github.com/ThreeMonth03/solvcon/pull/28) validates these boundaries behind private staging methods. NumPy 2.5.1 correctness, performance, revisions, and raw artifacts are recorded in the [prototype evidence comment](https://github.com/ThreeMonth03/solvcon/issues/23#issuecomment-5156722528).
+[Prototype draft PR #28](https://github.com/ThreeMonth03/solvcon/pull/28) validates these boundaries behind private staging methods. NumPy 2.5.1 correctness, performance, revisions, and raw artifacts are recorded in the [NumPy 2.5.1 evidence comment](https://github.com/ThreeMonth03/solvcon/issues/23#issuecomment-5156722528).
 
 ## Proposed design
 
@@ -39,7 +39,7 @@ ElementwiseExecutor::execute(plan, operation)
         `-- general mapped traversal
 ```
 
-The runtime-rank `LoopDomain` and `OperandMapping` types introduced through [PR #1208](https://github.com/solvcon/solvcon/pull/1208) provide shape and offset facts. `ElementwisePlan` owns broadcast validation, aligned mappings, the fixed output mapping, and route selection. `ElementwiseExecutor` owns allocation, overlap safety, destination reuse, and dispatch. Typed kernels own arithmetic.
+The runtime-rank `LoopDomain` and `OperandMapping` types introduced through [solvcon/solvcon#1208](https://github.com/solvcon/solvcon/pull/1208) provide shape and offset facts. `ElementwisePlan` owns broadcast validation, aligned mappings, the fixed output mapping, and route selection. `ElementwiseExecutor` owns allocation, overlap safety, destination reuse, and dispatch. Typed kernels own arithmetic.
 
 Broadcast axes use zero strides. Exact aliases reuse the destination mapping, partial overlaps snapshot the affected input, and sparse results use compact storage. Scalar and equal-shape dense operations use a mandatory private direct path; unsupported layouts fall back to the validated signed-stride plan. No plan, route, kernel, or backend selector becomes public.
 
@@ -55,7 +55,7 @@ Dependencies: Task 2 follows Task 1. Task 3 follows Task 2. Tasks 4 and 5 follow
 
 In Tasks 1-5, plan API means an internal C++ interface. Private Python methods exist only for testing and profiling.
 
-- [ ] **Task 1: Add generic multiplication broadcasting and create the minimal plan API.** Introduce `ElementwisePlan::make()`, `make_scalar()`, and `ElementwiseExecutor::transform()` using the PR #1208 mappings and one general route. Add private `_planned_mul` staging plus differential tests for shapes, scalar operands, empty axes, and signed layouts.
+- [ ] **Task 1: Add generic multiplication broadcasting and create the minimal plan API.** Introduce `ElementwisePlan::make()`, `make_scalar()`, and `ElementwiseExecutor::transform()` using the shared runtime-rank mappings and one general route. Add private `_planned_mul` staging plus differential tests for shapes, scalar operands, empty axes, and signed layouts.
 - [ ] **Task 2: Extend the plan API for fixed destinations and alias safety.** Reuse the Task 1 plan and add `transform_to()` and `transform_into()` with private multiplication staging. Validate fixed output shapes, snapshot partial overlaps, preserve exact aliases, and cover both behavior and reused-output performance.
 - [ ] **Task 3: Add route selection to the existing plan API.** Extend `ElementwisePlan` with `ExecutionRoute`, `inner_axis`, and `InnerLoopPlan`. Add contiguous, constant, fixed-stride, reversed, and mapped routes with internal route tests and topology profiles.
 - [ ] **Task 4: Add mandatory low-overhead direct execution.** Bypass `ElementwisePlan` for scalar and equal-shape dense operations, perform one Python array-or-scalar dispatch, and fall back to the Task 3 plan for every unsupported layout. Add no public, staging, or plan API. Validate the scope with complete-call profiles on Apple Accelerate and WSL2.
