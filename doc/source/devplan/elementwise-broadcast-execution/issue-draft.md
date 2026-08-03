@@ -2,7 +2,7 @@
 
 ## Motivation
 
-`SimpleArray` arithmetic accepts scalars or arrays with identical shapes but does not provide general NumPy-style broadcasting. Some paths also assume linear storage, so negative, stepped, sparse, or zero-stride layouts may lose their logical coordinates.
+`SimpleArray` arithmetic accepts scalars or arrays with identical shapes but does not provide general NumPy-style broadcasting. Its HPC execution must also preserve logical coordinates for negative, stepped, sparse, and zero-stride layouts rather than assume linear storage.
 
 The public operation should align axes from the right, broadcast axes of length one, preserve the fixed shape of an in-place destination, and reject incompatible shapes:
 
