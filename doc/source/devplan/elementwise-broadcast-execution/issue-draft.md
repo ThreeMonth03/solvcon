@@ -74,7 +74,7 @@ In Tasks 1-5, plan API means an internal C++ interface. Private Python methods e
 
 ## References
 
-- [Elementwise broadcast execution: design and reproduction guide](https://github.com/ThreeMonth03/solvcon/blob/codex/prototype-elementwise-broadcast/doc/source/devplan/elementwise-broadcast-execution/index.md)
+- [Elementwise broadcast HPC execution: design and reproduction guide](https://github.com/ThreeMonth03/solvcon/blob/codex/prototype-elementwise-broadcast/doc/source/devplan/elementwise-broadcast-execution/index.md)
 - [Shared runtime-rank loop vocabulary, solvcon/solvcon#1208](https://github.com/solvcon/solvcon/pull/1208)
 - [Related batched matmul design, solvcon/solvcon#1172](https://github.com/solvcon/solvcon/issues/1172)
 
