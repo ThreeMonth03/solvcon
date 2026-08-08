@@ -97,6 +97,16 @@ struct vec_div
     template <typename V>
     static auto operator()(V a, V b) -> decltype(vdivq(a, b)) { return vdivq(a, b); }
 }; /* end struct vec_div */
+struct vec_reverse_sub
+{
+    template <typename V>
+    static auto operator()(V a, V b) -> decltype(vsubq(b, a)) { return vsubq(b, a); }
+}; /* end struct vec_reverse_sub */
+struct vec_reverse_div
+{
+    template <typename V>
+    static auto operator()(V a, V b) -> decltype(vdivq(b, a)) { return vdivq(b, a); }
+}; /* end struct vec_reverse_div */
 // NOLINTEND(fuchsia-trailing-return)
 
 template <typename T, std::invocable<T, T> ScalarOp, typename VecOp>
@@ -151,6 +161,70 @@ void transform_binary(T * dest, T const * dest_end, T const * src1, T const * sr
     }
 }
 
+template <typename T, std::invocable<T, T> ScalarOp, typename VecOp>
+void transform_scalar(T * dest,
+                      T const * dest_end,
+                      T const * src,
+                      T scalar,
+                      ScalarOp scalar_op,
+                      VecOp vec_op)
+{
+    if constexpr (!type::has_vectype<T>)
+    {
+        generic::transform_scalar<T>(
+            dest, dest_end, src, scalar, scalar_op);
+    }
+    else
+    {
+        using vec_t = type::vector_t<T>;
+        if constexpr (!std::invocable<VecOp, vec_t, vec_t>)
+        {
+            generic::transform_scalar<T>(
+                dest, dest_end, src, scalar, scalar_op);
+        }
+        else
+        {
+            constexpr size_t N_lane = type::vector_lane<T>;
+            constexpr size_t N_unroll = 4;
+            constexpr size_t N_unrolled_lane = N_lane * N_unroll;
+            vec_t const scalar_vec = vdupq(scalar);
+            size_t const count = static_cast<size_t>(dest_end - dest);
+            size_t const unrolled_blocks = count / N_unrolled_lane;
+            T * ptr = dest;
+            for (size_t block = 0; block < unrolled_blocks; ++block)
+            {
+                vec_t const data0 = vld1q(src);
+                vec_t const data1 = vld1q(src + N_lane);
+                vec_t const data2 = vld1q(src + 2 * N_lane);
+                vec_t const data3 = vld1q(src + 3 * N_lane);
+                vst1q(ptr, vec_op(data0, scalar_vec));
+                vst1q(ptr + N_lane, vec_op(data1, scalar_vec));
+                vst1q(ptr + 2 * N_lane, vec_op(data2, scalar_vec));
+                vst1q(ptr + 3 * N_lane, vec_op(data3, scalar_vec));
+                ptr += N_unrolled_lane;
+                src += N_unrolled_lane;
+            }
+
+            size_t const vector_blocks = count % N_unrolled_lane / N_lane;
+            for (size_t block = 0; block < vector_blocks; ++block)
+            {
+                vst1q(ptr, vec_op(vld1q(src), scalar_vec));
+                ptr += N_lane;
+                src += N_lane;
+            }
+
+            size_t scalar_count = count % N_lane;
+            while (scalar_count > 0)
+            {
+                *ptr = scalar_op(*src, scalar);
+                ++ptr;
+                ++src;
+                --scalar_count;
+            }
+        }
+    }
+}
+
 template <typename T>
 inline void add(T * dest, T const * dest_end, T const * src1, T const * src2)
 {
@@ -173,6 +247,78 @@ template <typename T>
 inline void div(T * dest, T const * dest_end, T const * src1, T const * src2)
 {
     transform_binary<T>(dest, dest_end, src1, src2, std::divides<T>{}, vec_div{});
+}
+
+template <typename T>
+inline void add_scalar(T * dest, T const * dest_end, T const * src, T rhs)
+{
+    transform_scalar<T>(
+        dest, dest_end, src, rhs, std::plus<T>{}, vec_add{});
+}
+
+template <typename T>
+inline void add_lhs_scalar(T * dest, T const * dest_end, T lhs, T const * src)
+{
+    transform_scalar<T>(
+        dest, dest_end, src, lhs, std::plus<T>{}, vec_add{});
+}
+
+template <typename T>
+inline void sub_scalar(T * dest, T const * dest_end, T const * src, T rhs)
+{
+    transform_scalar<T>(
+        dest, dest_end, src, rhs, std::minus<T>{}, vec_sub{});
+}
+
+template <typename T>
+inline void sub_lhs_scalar(T * dest, T const * dest_end, T lhs, T const * src)
+{
+    transform_scalar<T>(
+        dest,
+        dest_end,
+        src,
+        lhs,
+        [](T rhs, T scalar)
+        {
+            return scalar - rhs;
+        },
+        vec_reverse_sub{});
+}
+
+template <typename T>
+inline void mul_scalar(T * dest, T const * dest_end, T const * src, T rhs)
+{
+    transform_scalar<T>(
+        dest, dest_end, src, rhs, std::multiplies<T>{}, vec_mul{});
+}
+
+template <typename T>
+inline void mul_lhs_scalar(T * dest, T const * dest_end, T lhs, T const * src)
+{
+    transform_scalar<T>(
+        dest, dest_end, src, lhs, std::multiplies<T>{}, vec_mul{});
+}
+
+template <typename T>
+inline void div_scalar(T * dest, T const * dest_end, T const * src, T rhs)
+{
+    transform_scalar<T>(
+        dest, dest_end, src, rhs, std::divides<T>{}, vec_div{});
+}
+
+template <typename T>
+inline void div_lhs_scalar(T * dest, T const * dest_end, T lhs, T const * src)
+{
+    transform_scalar<T>(
+        dest,
+        dest_end,
+        src,
+        lhs,
+        [](T rhs, T scalar)
+        {
+            return scalar / rhs;
+        },
+        vec_reverse_div{});
 }
 
 template <typename T>
@@ -273,6 +419,54 @@ template <typename T>
 void div(T * dest, T const * dest_end, T const * src1, T const * src2)
 {
     generic::div<T>(dest, dest_end, src1, src2);
+}
+
+template <typename T>
+void add_scalar(T * dest, T const * dest_end, T const * src, T rhs)
+{
+    generic::add_scalar<T>(dest, dest_end, src, rhs);
+}
+
+template <typename T>
+void add_lhs_scalar(T * dest, T const * dest_end, T lhs, T const * src)
+{
+    generic::add_lhs_scalar<T>(dest, dest_end, lhs, src);
+}
+
+template <typename T>
+void sub_scalar(T * dest, T const * dest_end, T const * src, T rhs)
+{
+    generic::sub_scalar<T>(dest, dest_end, src, rhs);
+}
+
+template <typename T>
+void sub_lhs_scalar(T * dest, T const * dest_end, T lhs, T const * src)
+{
+    generic::sub_lhs_scalar<T>(dest, dest_end, lhs, src);
+}
+
+template <typename T>
+void mul_scalar(T * dest, T const * dest_end, T const * src, T rhs)
+{
+    generic::mul_scalar<T>(dest, dest_end, src, rhs);
+}
+
+template <typename T>
+void mul_lhs_scalar(T * dest, T const * dest_end, T lhs, T const * src)
+{
+    generic::mul_lhs_scalar<T>(dest, dest_end, lhs, src);
+}
+
+template <typename T>
+void div_scalar(T * dest, T const * dest_end, T const * src, T rhs)
+{
+    generic::div_scalar<T>(dest, dest_end, src, rhs);
+}
+
+template <typename T>
+void div_lhs_scalar(T * dest, T const * dest_end, T lhs, T const * src)
+{
+    generic::div_lhs_scalar<T>(dest, dest_end, lhs, src);
 }
 
 #endif /* defined(__aarch64__) */

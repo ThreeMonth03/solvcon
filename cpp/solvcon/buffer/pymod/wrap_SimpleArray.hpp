@@ -7,7 +7,9 @@
 
 #include <solvcon/buffer/pymod/buffer_pymod.hpp> // Must be the first include.
 
+#include <solvcon/buffer/elementwise/SimpleArrayElementwise.hpp>
 #include <solvcon/buffer/pymod/array_common.hpp>
+#include <solvcon/buffer/pymod/wrap_SimpleArray_elementwise.hpp>
 
 #include <cstdint>
 
@@ -28,6 +30,9 @@ class SOLVCON_PYTHON_WRAPPER_VISIBILITY WrapSimpleArray
     using value_type = typename wrapped_type::value_type;
     using array_order_type = typename wrapped_type::ArrayOrder;
     using property_helper = ArrayPropertyHelper<T>;
+    using elementwise_type = solvcon::detail::SimpleArrayElementwise<
+        wrapped_type,
+        value_type>;
 
     friend root_base_type;
 
@@ -171,6 +176,7 @@ class SOLVCON_PYTHON_WRAPPER_VISIBILITY WrapSimpleArray
                                    { return pybind11::cast(SimpleArrayPlex(arr)); })
             .wrap_modifiers()
             .wrap_calculators()
+            .wrap_elementwise()
             .wrap_matrix()
             .wrap_sort()
             .wrap_search()
@@ -504,6 +510,14 @@ class SOLVCON_PYTHON_WRAPPER_VISIBILITY WrapSimpleArray
             ;
 
         return *this;
+    }
+
+    wrapper_type & wrap_elementwise()
+    {
+        return detail::bind_simple_array_elementwise<
+            wrapped_type,
+            value_type,
+            elementwise_type>(*this);
     }
 
     // NOLINTBEGIN(bugprone-easily-swappable-parameters)

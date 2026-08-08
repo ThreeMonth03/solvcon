@@ -73,4 +73,52 @@ class SimdTransformBinaryTC(unittest.TestCase):
         for i, want in enumerate(expected):
             self.assertEqual(out[i], want)
 
+
+class SimdTransformScalarTC(unittest.TestCase):
+    def test_floating_point_block_boundaries(self):
+        operations = {
+            "add": np.add,
+            "sub": np.subtract,
+            "mul": np.multiply,
+            "div": np.divide,
+        }
+        dtype_cases = {
+            "float32": (
+                solvcon.SimpleArrayFloat32,
+                (15, 16, 17, 31, 32, 33),
+            ),
+            "float64": (
+                solvcon.SimpleArrayFloat64,
+                (7, 8, 9, 15, 16, 17),
+            ),
+        }
+        for dtype, (array_type, sizes) in dtype_cases.items():
+            scalar = np.dtype(dtype).type(1.25)
+            for size in sizes:
+                values = np.linspace(1, 2, size, dtype=dtype)
+                for operation, reference in operations.items():
+                    with self.subTest(
+                        dtype=dtype,
+                        size=size,
+                        operation=operation,
+                    ):
+                        expected = reference(values, scalar)
+
+                        source = array_type(array=values)
+                        result = getattr(
+                            source, f"_planned_{operation}"
+                        )(float(scalar))
+                        np.testing.assert_array_equal(
+                            result.ndarray, expected
+                        )
+
+                        inplace_values = values.copy()
+                        inplace = array_type(array=inplace_values)
+                        getattr(
+                            inplace, f"_planned_i{operation}"
+                        )(float(scalar))
+                        np.testing.assert_array_equal(
+                            inplace.ndarray, expected
+                        )
+
 # vim: set ff=unix fenc=utf8 et sw=4 ts=4 sts=4:

@@ -92,6 +92,110 @@ void div(T * dest, T const * dest_end, T const * src1, T const * src2)
 }
 
 template <typename T>
+void add_scalar(T * dest, T const * dest_end, T const * src, T rhs)
+{
+    switch (detail::detect_simd())
+    {
+    case detail::SIMD_NEON:
+        return neon::add_scalar<T>(dest, dest_end, src, rhs);
+    default:
+        return generic::add_scalar<T>(dest, dest_end, src, rhs);
+    }
+}
+
+template <typename T>
+void add_lhs_scalar(T * dest, T const * dest_end, T lhs, T const * src)
+{
+    switch (detail::detect_simd())
+    {
+    case detail::SIMD_NEON:
+        return neon::add_lhs_scalar<T>(
+            dest, dest_end, lhs, src);
+    default:
+        return generic::add_lhs_scalar<T>(
+            dest, dest_end, lhs, src);
+    }
+}
+
+template <typename T>
+void sub_scalar(T * dest, T const * dest_end, T const * src, T rhs)
+{
+    switch (detail::detect_simd())
+    {
+    case detail::SIMD_NEON:
+        return neon::sub_scalar<T>(dest, dest_end, src, rhs);
+    default:
+        return generic::sub_scalar<T>(dest, dest_end, src, rhs);
+    }
+}
+
+template <typename T>
+void sub_lhs_scalar(T * dest, T const * dest_end, T lhs, T const * src)
+{
+    switch (detail::detect_simd())
+    {
+    case detail::SIMD_NEON:
+        return neon::sub_lhs_scalar<T>(
+            dest, dest_end, lhs, src);
+    default:
+        return generic::sub_lhs_scalar<T>(
+            dest, dest_end, lhs, src);
+    }
+}
+
+template <typename T>
+void mul_scalar(T * dest, T const * dest_end, T const * src, T rhs)
+{
+    switch (detail::detect_simd())
+    {
+    case detail::SIMD_NEON:
+        return neon::mul_scalar<T>(dest, dest_end, src, rhs);
+    default:
+        return generic::mul_scalar<T>(dest, dest_end, src, rhs);
+    }
+}
+
+template <typename T>
+void mul_lhs_scalar(T * dest, T const * dest_end, T lhs, T const * src)
+{
+    switch (detail::detect_simd())
+    {
+    case detail::SIMD_NEON:
+        return neon::mul_lhs_scalar<T>(
+            dest, dest_end, lhs, src);
+    default:
+        return generic::mul_lhs_scalar<T>(
+            dest, dest_end, lhs, src);
+    }
+}
+
+template <typename T>
+void div_scalar(T * dest, T const * dest_end, T const * src, T rhs)
+{
+    switch (detail::detect_simd())
+    {
+    case detail::SIMD_NEON:
+        return neon::div_scalar<T>(dest, dest_end, src, rhs);
+    default:
+        return generic::div_scalar<T>(dest, dest_end, src, rhs);
+    }
+}
+
+template <typename T>
+void div_lhs_scalar(T * dest, T const * dest_end, T lhs, T const * src)
+{
+    switch (detail::detect_simd())
+    {
+    case detail::SIMD_NEON:
+        return neon::div_lhs_scalar<T>(
+            dest, dest_end, lhs, src);
+    default:
+        return generic::div_lhs_scalar<T>(
+            dest, dest_end, lhs, src);
+    }
+}
+
+template <typename T>
 T max(T const * start, T const * end)
 {
     return generic::max<T>(start, end);
