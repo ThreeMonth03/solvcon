@@ -7,9 +7,11 @@
 
 #include <solvcon/buffer/loop.hpp>
 #include <solvcon/buffer/small_vector.hpp>
+#include <solvcon/math/Strassen.hpp>
 #include <solvcon/math/math.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <format>
@@ -32,6 +34,9 @@ inline constexpr bool can_matmul_blas_v = std::is_same_v<T, float> ||
                                           std::is_same_v<T, Complex<float>> ||
                                           std::is_same_v<T, Complex<double>>;
 
+template <typename T>
+inline constexpr bool can_matmul_strassen_v = std::is_same_v<T, float> || std::is_same_v<T, double>;
+
 /**
  * @brief Identify the contraction kernel fixed before batch traversal.
  */
@@ -42,6 +47,8 @@ enum class MatmulKernel : std::uint8_t
     BlasGevm,
     BlasGemv,
     BlasGemm,
+    StrassenGemm1,
+    StrassenGemm2,
 }; /* end enum class MatmulKernel */
 
 /**
@@ -99,10 +106,93 @@ struct MatmulTuning
         size_t reuse_min_total_output_elements;
     }; /* end struct BatchedVector */
 
+    /**
+     * @brief Map calibrated GEMM shapes to a fixed Strassen kernel.
+     */
+    struct Strassen
+    {
+        struct Route
+        {
+            ssize_t m_rows;
+            ssize_t m_columns;
+            ssize_t m_inner_size;
+            MatmulKernel m_kernel;
+        }; /* end struct Route */
+
+        std::array<Route, 2> m_float32;
+        std::array<Route, 3> m_float64;
+    }; /* end struct Strassen */
+
     DirectBlas direct_blas;
     MatrixPacking matrix_packing;
     BatchedVector batched_vector;
+    Strassen m_strassen;
 }; /* end struct MatmulTuning */
+
+template <size_t N>
+constexpr MatmulKernel select_strassen_kernel(
+    std::array<MatmulTuning::Strassen::Route, N> const & routes,
+    ssize_t rows,
+    ssize_t columns,
+    ssize_t inner_size) noexcept
+{
+    for (MatmulTuning::Strassen::Route const & route : routes)
+    {
+        if (route.m_rows == rows && route.m_columns == columns && route.m_inner_size == inner_size)
+        {
+            return route.m_kernel;
+        }
+    }
+    return MatmulKernel::Generic;
+}
+
+template <typename T>
+constexpr MatmulKernel select_strassen_kernel(
+    MatmulTuning::Strassen const & tuning,
+    ssize_t rows,
+    ssize_t columns,
+    ssize_t inner_size) noexcept
+{
+    if constexpr (std::is_same_v<T, float>)
+    {
+        return select_strassen_kernel(tuning.m_float32, rows, columns, inner_size);
+    }
+    else if constexpr (std::is_same_v<T, double>)
+    {
+        return select_strassen_kernel(tuning.m_float64, rows, columns, inner_size);
+    }
+    else
+    {
+        return MatmulKernel::Generic;
+    }
+}
+
+inline constexpr MatmulTuning::Strassen APPLE_ARM64_STRASSEN_TUNING{
+    .m_float32 = {{
+        {.m_rows = 5632,
+         .m_columns = 5632,
+         .m_inner_size = 5632,
+         .m_kernel = MatmulKernel::StrassenGemm1},
+        {.m_rows = 3072,
+         .m_columns = 3072,
+         .m_inner_size = 24576,
+         .m_kernel = MatmulKernel::StrassenGemm1},
+    }},
+    .m_float64 = {{
+        {.m_rows = 3072,
+         .m_columns = 3072,
+         .m_inner_size = 3072,
+         .m_kernel = MatmulKernel::StrassenGemm1},
+        {.m_rows = 4096,
+         .m_columns = 4096,
+         .m_inner_size = 4096,
+         .m_kernel = MatmulKernel::StrassenGemm2},
+        {.m_rows = 6144,
+         .m_columns = 6144,
+         .m_inner_size = 6144,
+         .m_kernel = MatmulKernel::StrassenGemm2},
+    }},
+};
 
 /**
  * @brief Record the fixed kernel and packing for one matmul call.
@@ -235,17 +325,18 @@ private:
  * MatmulExecutor combines plan metadata with MatmulTuning to select a
  * MatmulSelection. It applies the selected operand preparation, rebuilds the
  * plan when a physical layout changes, and traverses every batch offset with
- * the same kernel. Generic kernels read signed strides directly, while BLAS
- * kernels consume compatible vector and matrix descriptors.
+ * the same kernel. Generic kernels read signed strides directly, BLAS kernels
+ * consume compatible descriptors, and calibrated compact GEMM shapes may use
+ * a fixed Strassen depth.
  *
  * For `(2,1,3,4) @ (1,5,4,6)`, the executor visits ten batch offsets and
  * evaluates one `(3,4) @ (4,6)` contraction at each offset. The results are
  * written into the allocated `(2,5,3,6)` output.
  *
- * @note The current implementation selects generic or direct BLAS kernels for
- * DOT, GEVM, GEMV, and GEMM. Packing materializes a reused broadcast matrix or
- * vector once in row-major storage before traversal. Unsupported equal-batch
- * matrix layouts remain generic.
+ * @note The current implementation selects generic, direct BLAS, or calibrated
+ * Strassen kernels. Packing materializes a reused broadcast matrix or vector
+ * once in row-major storage before traversal. Unsupported equal-batch matrix
+ * layouts remain generic.
  */
 template <typename Array>
 class MatmulExecutor
@@ -291,6 +382,7 @@ private:
             .reuse_min_matrix_elements = 576,
             .reuse_min_total_output_elements = 128,
         },
+        .m_strassen = APPLE_ARM64_STRASSEN_TUNING,
     };
 
     MatmulSelection select_execution() const;
@@ -313,6 +405,7 @@ private:
     void execute_gevm_blas(value_type * output, value_type const * lhs_data, value_type const * rhs_data);
     void execute_gemv_blas(value_type * output, value_type const * lhs_data, value_type const * rhs_data);
     void execute_gemm_blas(value_type * output, value_type const * lhs_data, value_type const * rhs_data);
+    void execute_gemm_strassen(size_t depth);
     std::optional<matrix_view_type> lhs_matrix_view(value_type const * data) const;
     std::optional<matrix_view_type> rhs_matrix_view(value_type const * data) const;
     static std::optional<matrix_view_type> make_matrix_view(
@@ -617,6 +710,12 @@ void MatmulExecutor<Array>::execute()
     case MatmulKernel::BlasGemm:
         execute_contractions<MatmulKernel::BlasGemm>();
         return;
+    case MatmulKernel::StrassenGemm1:
+        execute_gemm_strassen(1);
+        return;
+    case MatmulKernel::StrassenGemm2:
+        execute_gemm_strassen(2);
+        return;
     }
     throw std::logic_error("MatmulExecutor::execute(): invalid kernel");
 }
@@ -735,6 +834,25 @@ MatmulSelection MatmulExecutor<Array>::select_gemm() const
         std::min({m_plan.rows(), m_plan.columns(), m_plan.inner_size()});
     bool const lhs_blas_compatible = bool(lhs_matrix_view(m_lhs_data));
     bool const rhs_blas_compatible = bool(rhs_matrix_view(m_rhs_data));
+#if defined(__APPLE__) && defined(__arm64__)
+    if constexpr (can_matmul_strassen_v<value_type>)
+    {
+        bool const compact_row_major = !m_plan.has_batch_axes() &&
+                                       m_plan.lhs_row_stride() == m_plan.inner_size() &&
+                                       m_plan.lhs_inner_stride() == 1 &&
+                                       m_plan.rhs_inner_stride() == m_plan.columns() &&
+                                       m_plan.rhs_column_stride() == 1;
+        if (compact_row_major)
+        {
+            MatmulKernel const kernel = select_strassen_kernel<value_type>(
+                TUNING.m_strassen, m_plan.rows(), m_plan.columns(), m_plan.inner_size());
+            if (kernel != MatmulKernel::Generic)
+            {
+                return MatmulSelection{.kernel = kernel, .packing = {}};
+            }
+        }
+    }
+#endif
     if (minimum_dimension >= TUNING.direct_blas.gemm_min_dimension && lhs_blas_compatible && rhs_blas_compatible)
     {
         return MatmulSelection{.kernel = MatmulKernel::BlasGemm, .packing = {}};
@@ -923,6 +1041,28 @@ void MatmulExecutor<Array>::execute_gemm_blas(value_type * output, value_type co
     matrix_view_type const lhs = lhs_matrix_view(lhs_data).value();
     matrix_view_type const rhs = rhs_matrix_view(rhs_data).value();
     gemm_blas(m_plan.rows(), m_plan.columns(), m_plan.inner_size(), lhs, rhs, output);
+}
+
+template <typename Array>
+void MatmulExecutor<Array>::execute_gemm_strassen(size_t depth)
+{
+#if defined(__APPLE__) && defined(__arm64__)
+    if constexpr (can_matmul_strassen_v<value_type>)
+    {
+        static thread_local StrassenWorkspace<value_type> workspace;
+        gemm_strassen(
+            m_plan.rows(),
+            m_plan.columns(),
+            m_plan.inner_size(),
+            m_lhs_data,
+            m_rhs_data,
+            m_output_data,
+            depth,
+            workspace);
+        return;
+    }
+#endif
+    throw std::logic_error("MatmulExecutor::execute_gemm_strassen(): unavailable Strassen kernel");
 }
 
 template <typename Array>
