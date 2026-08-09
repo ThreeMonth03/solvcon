@@ -166,6 +166,29 @@ class MatmulDispatchPolicyTC(unittest.TestCase):
         self.assertTrue(all(len(line) <= 79
                             for line in generated.splitlines()))
 
+    def test_compiled_fixture_is_render_include_output(self):
+        facts = {
+            "rows": 3,
+            "columns": 7,
+            "inner_size": 4,
+            "batch_size": 1,
+            "dtype": "float64",
+            "lhs_layout": "row_major",
+            "rhs_layout": "row_major",
+        }
+        facts.update({name: False for name in tune.BOOLEAN_FEATURES})
+        records = tuple(
+            {"facts": {**facts, "backend": backend}}
+            for backend in ("accelerate", "cblas", "mkl", "none")
+        )
+        scope = tune.make_codegen_scope(records, 84)
+        generated = tune.render_include(
+            tune.Leaf(("DynamicIkj",)), scope)
+        fixture = (Path(__file__).resolve().parents[1] /
+                   "gtests/fixtures/matmul_dispatch_policy.inc")
+        self.assertEqual(
+            generated, fixture.read_text(encoding="utf-8"))
+
     def test_fit_removes_stale_include_before_loading_data(self):
         with tempfile.TemporaryDirectory() as directory:
             include = Path(directory) / "policy.inc"

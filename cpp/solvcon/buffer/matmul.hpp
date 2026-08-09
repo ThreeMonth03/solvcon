@@ -54,6 +54,8 @@ enum class MatmulKernel : std::uint8_t
     BlasGemm,
 }; /* end enum class MatmulKernel */
 
+inline constexpr std::uint32_t MATMUL_POLICY_SCHEMA_VERSION = 1;
+
 inline constexpr std::array<MatmulKernel, 5> MATMUL_GEMM_CANDIDATES{
     MatmulKernel::GenericIjk,
     MatmulKernel::DynamicIkj,
@@ -165,6 +167,10 @@ struct MatmulFacts
     bool lhs_zero_batch_stride;
     bool rhs_zero_batch_stride;
 }; /* end struct MatmulFacts */
+
+#ifdef SC_HAS_MATMUL_POLICY
+#include <solvcon/buffer/matmul_dispatch_policy.inc>
+#endif
 
 /**
  * @brief Identify operands that must be materialized into row-major storage.
@@ -912,6 +918,26 @@ void MatmulExecutor<Array>::execute(MatmulSelection const & selection)
 template <typename Array>
 MatmulSelection MatmulExecutor<Array>::select_execution() const
 {
+#ifdef SC_HAS_MATMUL_POLICY
+    if (!m_plan.lhs_is_vector() && !m_plan.rhs_is_vector())
+    {
+        auto const eligible = [this](MatmulKernel kernel)
+        {
+            return select_forced_gemm(kernel).has_value();
+        };
+        std::optional<MatmulKernel> const kernel =
+            select_calibrated_gemm(facts(), eligible);
+        if (kernel)
+        {
+            std::optional<MatmulSelection> const selection =
+                select_forced_gemm(*kernel);
+            if (selection)
+            {
+                return *selection;
+            }
+        }
+    }
+#endif
 #if (defined(__APPLE__) && defined(__arm64__)) || defined(SC_HAS_CBLAS)
     if constexpr (can_matmul_blas_v<value_type>)
     {

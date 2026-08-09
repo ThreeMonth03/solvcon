@@ -32,6 +32,7 @@ add_executable(
     test_nopython_transform.cpp
     test_nopython_rtree.cpp
     test_nopython_formatter.cpp
+    test_nopython_matmul_policy.cpp
     test_nopython_mdspan.cpp
     test_nopython_multidim.cpp
     test_nopython_pilot_history.cpp
@@ -56,8 +57,23 @@ target_link_libraries(
     test_nopython
     GTest::gtest_main
     GTest::gmock_main
+    solvcon_matmul_policy
     ${APPLE_FWK_ACCELERATE}
 )
+
+get_filename_component(SOLVCON_MATMUL_POLICY_TEST_PATH
+    "${SOLVCON_MATMUL_POLICY_FILE}" ABSOLUTE
+    BASE_DIR "${CMAKE_SOURCE_DIR}")
+if (SOLVCON_MATMUL_POLICY_TEST_PATH STREQUAL
+    "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/matmul_dispatch_policy.inc")
+    target_compile_definitions(test_nopython PRIVATE
+        SC_MATMUL_POLICY_TEST_FIXTURE_REQUIRED=1
+        SC_MATMUL_POLICY_TEST_FIXTURE=1)
+    add_custom_target(run_matmul_policy_fixture_gtest
+        COMMAND $<TARGET_FILE:test_nopython>
+            --gtest_filter=MatmulPolicyFixture.*
+        DEPENDS test_nopython)
+endif ()
 
 include(GoogleTest)
 gtest_discover_tests(test_nopython PROPERTIES LABELS "cpp")

@@ -30,7 +30,8 @@ RUNENV += PYTHONPATH=$(SOLVCON_ROOT)
 CMAKE_KNOBS = SKIP_PYTHON_EXECUTABLE HIDE_SYMBOL DEBUG_SYMBOL SOLVCON_PROFILE \
 	BUILD_METAL BUILD_QT USE_CLANG_TIDY LINT_AS_ERRORS USE_GOOGLETEST \
 	USE_SANITIZER USE_CCACHE CMAKE_INSTALL_PREFIX \
-	CMAKE_LIBRARY_OUTPUT_DIRECTORY CMAKE_PREFIX_PATH
+	CMAKE_LIBRARY_OUTPUT_DIRECTORY CMAKE_PREFIX_PATH \
+	SOLVCON_MATMUL_POLICY_FILE
 CMAKE_OVERRIDES = $(strip $(foreach knob,$(CMAKE_KNOBS), \
 	$(if $(filter-out undefined default,$(origin $(knob))),\
 	-D$(knob)=$($(knob)))))
@@ -181,6 +182,35 @@ pilot_clang_tidy_diff: cmake
 .PHONY: gtest
 gtest: cmake
 	cmake --build $(BUILD_PATH) --target run_gtest VERBOSE=$(VERBOSE) $(MAKE_PARALLEL)
+
+MATMUL_POLICY_FIXTURE = \
+	$(SOLVCON_ROOT)/gtests/fixtures/matmul_dispatch_policy.inc
+MATMUL_POLICY_FIXTURE_TEST_FILE = tests/test_matmul_dispatch_policy.py
+MATMUL_POLICY_FIXTURE_TEST_CASE = MatmulDispatchPolicyTC::test_compiled_fixture_is_render_include_output
+MATMUL_POLICY_FIXTURE_BUILD_PATH = $(BUILD_PATH)_matmul_policy_fixture
+MATMUL_POLICY_PYBIND11_DIR = \
+	$(shell $(WHICH_PYTHON) -m pybind11 --cmakedir 2>/dev/null)
+MATMUL_POLICY_CMAKE_ARGS = $(CMAKE_ARGS) \
+	$(if $(CMAKE_PREFIX_PATH),,\
+		$(if $(DEVENVPREFIX),-DCMAKE_PREFIX_PATH=$(DEVENVPREFIX))) \
+	$(if $(MATMUL_POLICY_PYBIND11_DIR),\
+		-Dpybind11_DIR=$(MATMUL_POLICY_PYBIND11_DIR))
+
+.PHONY: check-matmul-policy-fixture
+check-matmul-policy-fixture:
+	env $(RUNENV) $(PYTEST) \
+		$(MATMUL_POLICY_FIXTURE_TEST_FILE)::$(MATMUL_POLICY_FIXTURE_TEST_CASE)
+
+.PHONY: gtest-matmul-policy
+gtest-matmul-policy: check-matmul-policy-fixture
+	$(MAKE) cmake \
+		BUILD_PATH=$(MATMUL_POLICY_FIXTURE_BUILD_PATH) \
+		BUILD_QT=OFF \
+		CMAKE_ARGS="$(MATMUL_POLICY_CMAKE_ARGS)" \
+		SOLVCON_MATMUL_POLICY_FILE=$(MATMUL_POLICY_FIXTURE)
+	cmake --build $(MATMUL_POLICY_FIXTURE_BUILD_PATH) \
+		--target run_matmul_policy_fixture_gtest \
+		VERBOSE=$(VERBOSE) $(MAKE_PARALLEL)
 
 # Build and launch the pilot GUI. PYTHONPATH is set via RUNENV so the
 # in-tree package is found; CMake resolves the platform binary path.

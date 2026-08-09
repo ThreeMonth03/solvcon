@@ -3,6 +3,33 @@
 
 cmake_minimum_required(VERSION 4.0.1)
 
+set(SOLVCON_MATMUL_POLICY_FILE "" CACHE FILEPATH
+    "Generated matmul dispatch policy include")
+add_library(solvcon_matmul_policy INTERFACE)
+if (SOLVCON_MATMUL_POLICY_FILE)
+    get_filename_component(SOLVCON_MATMUL_POLICY_PATH
+        "${SOLVCON_MATMUL_POLICY_FILE}" ABSOLUTE
+        BASE_DIR "${CMAKE_SOURCE_DIR}")
+    if (NOT EXISTS "${SOLVCON_MATMUL_POLICY_PATH}")
+        message(FATAL_ERROR
+            "SOLVCON_MATMUL_POLICY_FILE does not exist: "
+            "${SOLVCON_MATMUL_POLICY_PATH}")
+    endif ()
+
+    set(SOLVCON_MATMUL_POLICY_DIR
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/solvcon/buffer")
+    file(MAKE_DIRECTORY "${SOLVCON_MATMUL_POLICY_DIR}")
+    configure_file(
+        "${SOLVCON_MATMUL_POLICY_PATH}"
+        "${SOLVCON_MATMUL_POLICY_DIR}/matmul_dispatch_policy.inc"
+        COPYONLY)
+
+    target_include_directories(solvcon_matmul_policy INTERFACE
+        "${CMAKE_CURRENT_BINARY_DIR}/generated")
+    target_compile_definitions(solvcon_matmul_policy INTERFACE
+        SC_HAS_MATMUL_POLICY=1)
+endif ()
+
 if (BUILD_QT)
     set(CMAKE_AUTOMOC ON)
     set(CMAKE_AUTORCC ON)
@@ -169,6 +196,7 @@ else () # BUILD_QT
 endif () # BUILD_QT
 
 set_target_properties(solvcon_primary PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_link_libraries(solvcon_primary PUBLIC solvcon_matmul_policy)
 
 if (CLANG_TIDY_EXE AND USE_CLANG_TIDY)
     set_target_properties(
