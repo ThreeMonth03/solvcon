@@ -17,6 +17,44 @@ namespace solvcon
 namespace python
 {
 
+inline char const * matmul_operation_name(solvcon::detail::MatmulOperation operation)
+{
+    switch (operation)
+    {
+    case solvcon::detail::MatmulOperation::Dot: return "dot";
+    case solvcon::detail::MatmulOperation::Gevm: return "gevm";
+    case solvcon::detail::MatmulOperation::Gemv: return "gemv";
+    case solvcon::detail::MatmulOperation::Gemm: return "gemm";
+    }
+    throw std::logic_error("invalid matmul operation");
+}
+
+inline char const * matmul_backend_name(solvcon::detail::MatmulBackend backend)
+{
+    switch (backend)
+    {
+    case solvcon::detail::MatmulBackend::None: return "none";
+    case solvcon::detail::MatmulBackend::Accelerate: return "accelerate";
+    case solvcon::detail::MatmulBackend::Mkl: return "mkl";
+    case solvcon::detail::MatmulBackend::Cblas: return "cblas";
+    }
+    throw std::logic_error("invalid matmul backend");
+}
+
+inline char const * matmul_layout_name(solvcon::detail::MatmulLayout layout)
+{
+    switch (layout)
+    {
+    case solvcon::detail::MatmulLayout::Vector: return "vector";
+    case solvcon::detail::MatmulLayout::RowMajor: return "row_major";
+    case solvcon::detail::MatmulLayout::RowMajorPadded: return "row_major_padded";
+    case solvcon::detail::MatmulLayout::ColumnMajor: return "column_major";
+    case solvcon::detail::MatmulLayout::ColumnMajorPadded: return "column_major_padded";
+    case solvcon::detail::MatmulLayout::Unsupported: return "unsupported";
+    }
+    throw std::logic_error("invalid matmul layout");
+}
+
 template <typename T>
 class SOLVCON_PYTHON_WRAPPER_VISIBILITY WrapSimpleArray
     : public WrapBase<WrapSimpleArray<T>, SimpleArray<T>>
@@ -32,6 +70,7 @@ class SOLVCON_PYTHON_WRAPPER_VISIBILITY WrapSimpleArray
     friend root_base_type;
 
     static wrapped_type make_array_from_numpy(pybind11::array & arr_in);
+    static pybind11::dict matmul_planned_profile(wrapped_type const & lhs, wrapped_type const & rhs);
 
     WrapSimpleArray(pybind11::module & mod, char const * pyname, char const * pydoc)
         : root_base_type(mod, pyname, pydoc, pybind11::buffer_protocol())
@@ -415,6 +454,10 @@ class SOLVCON_PYTHON_WRAPPER_VISIBILITY WrapSimpleArray
         (*this)
             .def("matmul", &wrapped_type::matmul)
             .def("matmul_planned", &wrapped_type::matmul_planned)
+            .def(
+                "_matmul_planned_profile",
+                [](wrapped_type const & self, wrapped_type const & other)
+                { return matmul_planned_profile(self, other); })
             .def("matmul_blas", &wrapped_type::matmul_blas)
             .def(
                 "matmul_fast",
@@ -726,6 +769,41 @@ class SOLVCON_PYTHON_WRAPPER_VISIBILITY WrapSimpleArray
         throw std::invalid_argument("SimpleArray::where(): unsupported dtype");
     }
 }; /* end class WrapSimpleArray */
+
+template <typename T>
+pybind11::dict WrapSimpleArray<T>::matmul_planned_profile(
+    wrapped_type const & lhs,
+    wrapped_type const & rhs)
+{
+    namespace py = pybind11;
+
+    solvcon::detail::MatmulPlan plan = solvcon::detail::MatmulPlan::make(lhs, rhs);
+    wrapped_type output(plan.output_shape());
+    solvcon::detail::MatmulExecutor<wrapped_type> executor(std::move(plan), output, lhs, rhs);
+    solvcon::detail::MatmulFacts const facts = executor.facts();
+
+    py::dict profile;
+    profile["operation"] = matmul_operation_name(facts.operation);
+    profile["dtype"] = py::dtype::of<value_type>().attr("name");
+    profile["backend"] = matmul_backend_name(facts.backend);
+    profile["rows"] = facts.rows;
+    profile["columns"] = facts.columns;
+    profile["inner_size"] = facts.inner_size;
+    profile["batch_size"] = facts.batch_size;
+    profile["has_batch_axes"] = facts.has_batch_axes;
+    profile["lhs_layout"] = matmul_layout_name(facts.lhs_layout);
+    profile["rhs_layout"] = matmul_layout_name(facts.rhs_layout);
+    profile["lhs_row_stride"] = facts.lhs_row_stride;
+    profile["lhs_inner_stride"] = facts.lhs_inner_stride;
+    profile["rhs_inner_stride"] = facts.rhs_inner_stride;
+    profile["rhs_column_stride"] = facts.rhs_column_stride;
+    profile["lhs_reused"] = facts.lhs_reused;
+    profile["rhs_reused"] = facts.rhs_reused;
+    profile["lhs_zero_batch_stride"] = facts.lhs_zero_batch_stride;
+    profile["rhs_zero_batch_stride"] = facts.rhs_zero_batch_stride;
+    profile["current_kernel"] = executor.current_kernel();
+    return profile;
+}
 
 template <typename T>
 typename WrapSimpleArray<T>::wrapped_type

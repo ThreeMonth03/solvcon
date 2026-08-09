@@ -49,6 +49,101 @@ enum class MatmulKernel : std::uint8_t
     BlasGemm,
 }; /* end enum class MatmulKernel */
 
+enum class MatmulOperation : std::uint8_t
+{
+    Dot,
+    Gevm,
+    Gemv,
+    Gemm,
+}; /* end enum class MatmulOperation */
+
+enum class MatmulDataType : std::uint8_t
+{
+    Other,
+    Float32,
+    Float64,
+    Complex64,
+    Complex128,
+}; /* end enum class MatmulDataType */
+
+enum class MatmulBackend : std::uint8_t
+{
+    None,
+    Accelerate,
+    Mkl,
+    Cblas,
+}; /* end enum class MatmulBackend */
+
+enum class MatmulLayout : std::uint8_t
+{
+    Vector,
+    RowMajor,
+    RowMajorPadded,
+    ColumnMajor,
+    ColumnMajorPadded,
+    Unsupported,
+}; /* end enum class MatmulLayout */
+
+template <typename T>
+constexpr MatmulDataType matmul_data_type() noexcept
+{
+    if constexpr (std::is_same_v<T, float>)
+    {
+        return MatmulDataType::Float32;
+    }
+    else if constexpr (std::is_same_v<T, double>)
+    {
+        return MatmulDataType::Float64;
+    }
+    else if constexpr (std::is_same_v<T, Complex<float>>)
+    {
+        return MatmulDataType::Complex64;
+    }
+    else if constexpr (std::is_same_v<T, Complex<double>>)
+    {
+        return MatmulDataType::Complex128;
+    }
+    else
+    {
+        return MatmulDataType::Other;
+    }
+}
+
+constexpr MatmulBackend matmul_backend() noexcept
+{
+#if defined(__APPLE__) && defined(__arm64__)
+    return MatmulBackend::Accelerate;
+#elif defined(SC_HAS_MKL)
+    return MatmulBackend::Mkl;
+#elif defined(SC_HAS_CBLAS)
+    return MatmulBackend::Cblas;
+#else
+    return MatmulBackend::None;
+#endif
+}
+
+struct MatmulFacts
+{
+    MatmulOperation operation;
+    MatmulDataType dtype;
+    MatmulBackend backend;
+    ssize_t rows;
+    ssize_t columns;
+    ssize_t inner_size;
+    size_t batch_size;
+    bool has_batch_axes;
+    MatmulLayout lhs_layout;
+    MatmulLayout rhs_layout;
+    ssize_t lhs_row_stride;
+    ssize_t lhs_inner_stride;
+    ssize_t rhs_inner_stride;
+    ssize_t rhs_column_stride;
+    bool lhs_reused;
+    bool rhs_reused;
+    bool lhs_zero_batch_stride;
+    bool rhs_zero_batch_stride;
+}; /* end struct MatmulFacts */
+
 /**
  * @brief Identify operands that must be materialized into row-major storage.
  */
@@ -309,6 +404,8 @@ public:
     MatmulExecutor & operator=(MatmulExecutor const &) = delete;
     MatmulExecutor & operator=(MatmulExecutor &&) = delete;
 
+    MatmulFacts facts() const;
+    MatmulKernel current_kernel() const;
     void execute();
 
 private:
@@ -368,6 +465,11 @@ private:
     std::optional<matrix_view_type> rhs_matrix_view(value_type const * data) const;
     static std::optional<matrix_view_type> make_matrix_view(
         value_type const * data,
+        ssize_t row_stride,
+        ssize_t column_stride,
+        ssize_t rows,
+        ssize_t columns);
+    static MatmulLayout classify_matrix_layout(
         ssize_t row_stride,
         ssize_t column_stride,
         ssize_t rows,
@@ -639,6 +741,65 @@ MatmulExecutor<Array>::MatmulExecutor(MatmulPlan plan, Array & output, Array con
     , m_lhs_data(lhs.logical_data())
     , m_rhs_data(rhs.logical_data())
 {
+}
+
+template <typename Array>
+MatmulFacts MatmulExecutor<Array>::facts() const
+{
+    MatmulOperation operation = MatmulOperation::Gemm;
+    if (m_plan.lhs_is_vector() && m_plan.rhs_is_vector())
+    {
+        operation = MatmulOperation::Dot;
+    }
+    else if (m_plan.lhs_is_vector())
+    {
+        operation = MatmulOperation::Gevm;
+    }
+    else if (m_plan.rhs_is_vector())
+    {
+        operation = MatmulOperation::Gemv;
+    }
+
+    MatmulLayout const lhs_layout = m_plan.lhs_is_vector()
+                                        ? MatmulLayout::Vector
+                                        : classify_matrix_layout(
+                                              m_plan.lhs_row_stride(),
+                                              m_plan.lhs_inner_stride(),
+                                              m_plan.rows(),
+                                              m_plan.inner_size());
+    MatmulLayout const rhs_layout = m_plan.rhs_is_vector()
+                                        ? MatmulLayout::Vector
+                                        : classify_matrix_layout(
+                                              m_plan.rhs_inner_stride(),
+                                              m_plan.rhs_column_stride(),
+                                              m_plan.inner_size(),
+                                              m_plan.columns());
+    return MatmulFacts{
+        .operation = operation,
+        .dtype = matmul_data_type<value_type>(),
+        .backend = matmul_backend(),
+        .rows = m_plan.rows(),
+        .columns = m_plan.columns(),
+        .inner_size = m_plan.inner_size(),
+        .batch_size = m_plan.batch_size(),
+        .has_batch_axes = m_plan.has_batch_axes(),
+        .lhs_layout = lhs_layout,
+        .rhs_layout = rhs_layout,
+        .lhs_row_stride = m_plan.lhs_row_stride(),
+        .lhs_inner_stride = m_plan.lhs_inner_stride(),
+        .rhs_inner_stride = m_plan.rhs_inner_stride(),
+        .rhs_column_stride = m_plan.rhs_column_stride(),
+        .lhs_reused = m_plan.lhs_is_broadcast(),
+        .rhs_reused = m_plan.rhs_is_broadcast(),
+        .lhs_zero_batch_stride = m_plan.lhs_has_zero_batch_stride(),
+        .rhs_zero_batch_stride = m_plan.rhs_has_zero_batch_stride(),
+    };
+}
+
+template <typename Array>
+MatmulKernel MatmulExecutor<Array>::current_kernel() const
+{
+    return select_execution().kernel;
 }
 
 template <typename Array>
@@ -1072,15 +1233,37 @@ std::optional<typename MatmulExecutor<Array>::matrix_view_type> MatmulExecutor<A
     ssize_t rows,
     ssize_t columns)
 {
+    switch (classify_matrix_layout(row_stride, column_stride, rows, columns))
+    {
+    case MatmulLayout::RowMajor:
+    case MatmulLayout::RowMajorPadded:
+        return BlasMatrixView<value_type>{data, row_stride, BlasTranspose::None};
+    case MatmulLayout::ColumnMajor:
+    case MatmulLayout::ColumnMajorPadded:
+        return BlasMatrixView<value_type>{data, column_stride, BlasTranspose::Transpose};
+    case MatmulLayout::Vector:
+    case MatmulLayout::Unsupported:
+        return std::nullopt;
+    }
+    return std::nullopt;
+}
+
+template <typename Array>
+MatmulLayout MatmulExecutor<Array>::classify_matrix_layout(
+    ssize_t row_stride,
+    ssize_t column_stride,
+    ssize_t rows,
+    ssize_t columns)
+{
     if (column_stride == 1 && row_stride >= columns)
     {
-        return BlasMatrixView<value_type>{data, row_stride, BlasTranspose::None};
+        return row_stride == columns ? MatmulLayout::RowMajor : MatmulLayout::RowMajorPadded;
     }
     if (row_stride == 1 && column_stride >= rows)
     {
-        return BlasMatrixView<value_type>{data, column_stride, BlasTranspose::Transpose};
+        return column_stride == rows ? MatmulLayout::ColumnMajor : MatmulLayout::ColumnMajorPadded;
     }
-    return std::nullopt;
+    return MatmulLayout::Unsupported;
 }
 
 template <typename Array>

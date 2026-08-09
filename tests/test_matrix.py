@@ -393,6 +393,29 @@ class MatmulTestBase(sc.testing.TestBase):
                         shape=(m, k, n), lhs=lhs_case, rhs=rhs_case):
                     self.assert_matmul_planned(lhs, rhs, expected)
 
+    def test_matmul_profile_batch_facts(self):
+        dtype = np.dtype(self.dtype).name
+        lhs_data = np.arange(6, dtype=dtype).reshape(1, 2, 3)
+        rhs_data = np.arange(60, dtype=dtype).reshape(4, 3, 5)
+        lhs = self.SimpleArray(array=lhs_data)
+        rhs = self.SimpleArray(array=rhs_data)
+        profile = lhs._matmul_planned_profile(rhs)
+
+        self.assertEqual(profile['operation'], 'gemm')
+        self.assertEqual(profile['batch_size'], 4)
+        self.assertTrue(profile['has_batch_axes'])
+        self.assertTrue(profile['lhs_reused'])
+        self.assertFalse(profile['rhs_reused'])
+        self.assertFalse(profile['lhs_zero_batch_stride'])
+        self.assertFalse(profile['rhs_zero_batch_stride'])
+
+        lhs_data = np.lib.stride_tricks.as_strided(
+            lhs_data, shape=(4, 2, 3), strides=(0, *lhs_data.strides[1:]))
+        lhs = self.SimpleArray(array=lhs_data)
+        profile = lhs._matmul_planned_profile(rhs)
+        self.assertFalse(profile['lhs_reused'])
+        self.assertTrue(profile['lhs_zero_batch_stride'])
+
     def test_batch_strides(self):
         """Batch axes support negative and step-two strides."""
         dtype = np.dtype(self.dtype).name

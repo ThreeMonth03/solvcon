@@ -13,6 +13,15 @@ namespace python
 
 void wrap_SimpleArray(pybind11::module & mod)
 {
+    pybind11::enum_<solvcon::detail::MatmulKernel>(mod, "_MatmulKernel")
+        .value("GenericIjk", solvcon::detail::MatmulKernel::GenericIjk)
+        .value("FixedIkj", solvcon::detail::MatmulKernel::FixedIkj)
+        .value("FixedJki", solvcon::detail::MatmulKernel::FixedJki)
+        .value("BlasDot", solvcon::detail::MatmulKernel::BlasDot)
+        .value("BlasGevm", solvcon::detail::MatmulKernel::BlasGevm)
+        .value("BlasGemv", solvcon::detail::MatmulKernel::BlasGemv)
+        .value("BlasGemm", solvcon::detail::MatmulKernel::BlasGemm);
+
     wrap_SimpleArray_bool(mod);
     wrap_SimpleArray_int(mod);
     wrap_SimpleArray_uint(mod);
