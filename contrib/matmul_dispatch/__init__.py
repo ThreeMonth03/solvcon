@@ -7,6 +7,7 @@ from . import measurement
 from . import sampling
 from . import collect
 from . import model
+from . import codegen
 from . import cli
 
 
@@ -17,6 +18,7 @@ _MODULES = (
     measurement,
     collect,
     model,
+    codegen,
     cli,
 )
 

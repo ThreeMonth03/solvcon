@@ -21,6 +21,88 @@ def make_record(group, current, timings, family=None):
 
 class MatmulDispatchModelTC(unittest.TestCase):
 
+    def test_grouped_folds_use_each_shape_group_once(self):
+        records = [
+            make_record(group, "GenericIjk", {"GenericIjk": 1})
+            for group in ("a", "a", "b", "c", "d", "e", "f")
+        ]
+        folds = tune.make_grouped_folds(records, 5, 9)
+        validation_groups = []
+        for train, validation in folds:
+            train_groups = {record["group"] for record in train}
+            fold_groups = {record["group"] for record in validation}
+            self.assertFalse(train_groups & fold_groups)
+            validation_groups.extend(fold_groups)
+        self.assertCountEqual(
+            ("a", "b", "c", "d", "e", "f"),
+            validation_groups,
+        )
+
+    def test_grouped_folds_are_deterministic_and_size_balanced(self):
+        sizes = (9, 8, 7, 6, 5, 4, 3, 2, 1, 1)
+        records = [
+            make_record(
+                f"shape:{group}", "GenericIjk",
+                {"GenericIjk": 1}, family="shape")
+            for group, size in enumerate(sizes)
+            for _ in range(size)
+        ]
+        folds = tune.make_grouped_folds(records, 5, 13)
+        reversed_folds = tune.make_grouped_folds(
+            tuple(reversed(records)), 5, 13)
+        fold_groups = tuple(
+            {record["group"] for record in validation}
+            for _, validation in folds
+        )
+        reversed_groups = tuple(
+            {record["group"] for record in validation}
+            for _, validation in reversed_folds
+        )
+        self.assertEqual(fold_groups, reversed_groups)
+        fold_sizes = [len(validation) for _, validation in folds]
+        self.assertLessEqual(max(fold_sizes) - min(fold_sizes), 1)
+
+    def test_grouped_folds_spread_families(self):
+        records = [
+            make_record(
+                f"{family}:{group}", "GenericIjk",
+                {"GenericIjk": 1}, family=family)
+            for family in ("square", "jitter", "skinny")
+            for group in range(5)
+        ]
+        folds = tune.make_grouped_folds(records, 5, 21)
+        for _, validation in folds:
+            self.assertEqual(
+                {"square", "jitter", "skinny"},
+                {record["family"] for record in validation},
+            )
+
+    def test_grouped_oof_aggregate_includes_every_fold(self):
+        records = [
+            make_record(
+                f"g{index}", "GenericIjk",
+                {"GenericIjk": 10, "BlasGemm": blas_time},
+            )
+            for index, blas_time in enumerate((5, 5, 5, 5, 20))
+        ]
+        fitted = tune.FittedTrees(
+            features=(),
+            model=None,
+            stump_model=None,
+            tree=tune.Leaf(("BlasGemm",)),
+            stump_tree=tune.Leaf(("BlasGemm",)),
+        )
+        args = types.SimpleNamespace(seed=9)
+        with mock.patch.object(
+                model, "_fit_trees", return_value=fitted):
+            validation = tune.evaluate_grouped_oof(
+                records, args, object)
+        self.assertEqual("grouped_5_fold_oof", validation["method"])
+        self.assertEqual(5, len(validation["folds"]))
+        aggregate = validation["aggregate"]["decision_tree"]
+        self.assertEqual(5, aggregate["samples"])
+        self.assertEqual(2.0, aggregate["policy_worst_regret"])
+
     def test_regret_uses_current_route_for_ineligible_prediction(self):
         records = [
             make_record(
