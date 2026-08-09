@@ -8,6 +8,7 @@ from . import sampling
 from . import collect
 from . import model
 from . import codegen
+from . import policy
 from . import cli
 
 
@@ -19,6 +20,7 @@ _MODULES = (
     collect,
     model,
     codegen,
+    policy,
     cli,
 )
 

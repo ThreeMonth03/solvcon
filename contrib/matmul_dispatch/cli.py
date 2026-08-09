@@ -10,6 +10,7 @@ from .collect import (
     REFINEMENT_GAP,
     collect_records,
 )
+from .policy import DEFAULT_INCLUDE, DEFAULT_REPORT, fit_policy
 
 
 def positive_int(value):
@@ -68,14 +69,39 @@ def make_parser():
                          default=10_000)
     collect.add_argument("--overwrite", action="store_true")
 
+    fit = commands.add_parser(
+        "fit", help="fit and assess a shallow dispatch tree")
+    fit.add_argument("--input", default=DEFAULT_RESULTS)
+    fit.add_argument("--report", default=DEFAULT_REPORT)
+    fit.add_argument("--generated-include", default=DEFAULT_INCLUDE)
+    fit.add_argument("--holdout-fraction", type=fraction, default=0.25,
+                     help=argparse.SUPPRESS)
+    fit.add_argument("--max-depth", type=positive_int, default=5)
+    fit.add_argument("--min-samples-leaf", type=positive_int, default=6)
+    fit.add_argument("--seed", type=int, default=1208)
+    fit.add_argument("--min-holdout-samples", type=positive_int,
+                     default=20)
+    fit.add_argument("--min-oracle-headroom", type=positive_float,
+                     default=1.05)
+    fit.add_argument("--min-speedup", type=positive_float, default=1.03)
+    fit.add_argument("--min-stump-speedup", type=positive_float,
+                     default=1.005)
+    fit.add_argument("--max-geomean-regret", type=positive_float,
+                     default=1.03)
+    fit.add_argument("--max-p95-regret", type=positive_float, default=1.05)
+    fit.add_argument("--max-regression", type=positive_float, default=1.10)
+    fit.add_argument("--min-captured-gap", type=fraction, default=0.70)
     return parser
 
 
 def main(argv=None):
     args = make_parser().parse_args(argv)
-    if args.max_samples < args.min_samples:
-        raise ValueError("max samples must not be less than min samples")
-    result = collect_records(args)
+    if args.command == "collect":
+        if args.max_samples < args.min_samples:
+            raise ValueError("max samples must not be less than min samples")
+        result = collect_records(args)
+    else:
+        result = fit_policy(args)
     print(json.dumps(result, indent=2, sort_keys=True))
 
 # vim: set ff=unix fenc=utf8 et sw=4 ts=4 sts=4 tw=79:
