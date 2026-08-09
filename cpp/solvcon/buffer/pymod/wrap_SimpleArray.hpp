@@ -415,6 +415,12 @@ class SOLVCON_PYTHON_WRAPPER_VISIBILITY WrapSimpleArray
         (*this)
             .def("matmul", &wrapped_type::matmul)
             .def("matmul_planned", &wrapped_type::matmul_planned)
+            .def(
+                "_matmul_strassen_control",
+                &wrapped_type::matmul_strassen_control,
+                py::arg("other"),
+                py::arg("depth"),
+                py::arg("padding"))
             .def("matmul_blas", &wrapped_type::matmul_blas)
             .def(
                 "matmul_fast",

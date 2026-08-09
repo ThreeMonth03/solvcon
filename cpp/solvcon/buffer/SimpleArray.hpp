@@ -1086,6 +1086,7 @@ public:
 
     A matmul(A const & other) const;
     A matmul_planned(A const & other) const;
+    A matmul_strassen_control(A const & other, size_t depth, bool padding) const;
     A & imatmul(A const & other);
     A matmul_blas(A const & other) const;
     A & imatmul_blas(A const & other);
@@ -1215,6 +1216,14 @@ A SimpleArrayMixinCalculators<A, T>::matmul_planned(A const & other) const
     MatmulExecutor<A> executor(std::move(plan), output, *athis, other);
     executor.execute();
     return output;
+}
+
+template <typename A, typename T>
+A SimpleArrayMixinCalculators<A, T>::matmul_strassen_control(
+    A const & other, size_t depth, bool padding) const
+{
+    auto const * lhs = static_cast<A const *>(this);
+    return execute_strassen_control(*lhs, other, depth, padding);
 }
 
 /**

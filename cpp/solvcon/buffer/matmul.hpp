@@ -1123,6 +1123,97 @@ void MatmulExecutor<Array>::execute_generic(ssize_t output_base, ssize_t lhs_bas
     }
 }
 
+inline ssize_t strassen_padded_extent(ssize_t extent, size_t depth) noexcept
+{
+    ssize_t const divisor = static_cast<ssize_t>(size_t{1} << depth);
+    return (extent + divisor - 1) / divisor * divisor;
+}
+
+template <typename T>
+void copy_matrix_rows(
+    T const * source,
+    ssize_t rows,
+    ssize_t columns,
+    ssize_t source_row_stride,
+    T * destination,
+    ssize_t destination_row_stride)
+{
+    for (ssize_t row = 0; row < rows; ++row)
+    {
+        std::copy_n(source + row * source_row_stride, columns, destination + row * destination_row_stride);
+    }
+}
+
+template <typename Array>
+Array execute_strassen_control_typed(Array const & lhs, Array const & rhs, size_t depth, bool padding)
+{
+    if (lhs.ndim() != 2 || rhs.ndim() != 2)
+    {
+        throw std::invalid_argument("Strassen control requires rank-2 operands");
+    }
+    if (!lhs.is_c_contiguous() || !rhs.is_c_contiguous())
+    {
+        throw std::invalid_argument("Strassen control requires compact row-major operands");
+    }
+    if (depth != 1 && depth != 2)
+    {
+        throw std::invalid_argument("Strassen control depth must be 1 or 2");
+    }
+
+    MatmulPlan const plan = MatmulPlan::make(lhs, rhs);
+    Array output(typename Array::shape_type{plan.rows(), plan.columns()});
+    static thread_local StrassenWorkspace<typename Array::value_type> workspace;
+    ssize_t const padded_rows = strassen_padded_extent(plan.rows(), depth);
+    ssize_t const padded_columns = strassen_padded_extent(plan.columns(), depth);
+    ssize_t const padded_inner_size = strassen_padded_extent(plan.inner_size(), depth);
+    bool const needs_padding = padded_rows != plan.rows() ||
+                               padded_columns != plan.columns() ||
+                               padded_inner_size != plan.inner_size();
+    if (!padding || !needs_padding)
+    {
+        gemm_strassen(
+            plan.rows(), plan.columns(), plan.inner_size(), lhs.data(), rhs.data(), output.data(), depth, workspace);
+        return output;
+    }
+
+    Array padded_lhs(
+        typename Array::shape_type{padded_rows, padded_inner_size},
+        typename Array::value_type{});
+    Array padded_rhs(
+        typename Array::shape_type{padded_inner_size, padded_columns},
+        typename Array::value_type{});
+    Array padded_output(typename Array::shape_type{padded_rows, padded_columns});
+    copy_matrix_rows(
+        lhs.data(), plan.rows(), plan.inner_size(), plan.inner_size(), padded_lhs.data(), padded_inner_size);
+    copy_matrix_rows(
+        rhs.data(), plan.inner_size(), plan.columns(), plan.columns(), padded_rhs.data(), padded_columns);
+    gemm_strassen(
+        padded_rows,
+        padded_columns,
+        padded_inner_size,
+        padded_lhs.data(),
+        padded_rhs.data(),
+        padded_output.data(),
+        depth,
+        workspace);
+    copy_matrix_rows(
+        padded_output.data(), plan.rows(), plan.columns(), padded_columns, output.data(), plan.columns());
+    return output;
+}
+
+template <typename Array>
+Array execute_strassen_control(Array const & lhs, Array const & rhs, size_t depth, bool padding)
+{
+    if constexpr (can_matmul_strassen_v<typename Array::value_type>)
+    {
+        return execute_strassen_control_typed(lhs, rhs, depth, padding);
+    }
+    else
+    {
+        throw std::invalid_argument("Strassen control supports float32 and float64");
+    }
+}
+
 template <typename A, typename T>
 class SimpleArrayMatmulHelper
 {

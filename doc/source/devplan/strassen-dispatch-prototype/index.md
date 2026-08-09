@@ -83,14 +83,16 @@ The focused C++ tests cover:
 
 The full C++ suite, the matrix Python tests, and source checks pass locally.
 The documentation build cannot start because Doxygen is not installed in the
-current environment.  Performance claims remain based on the earlier Apple
-measurements; this rewrite does not introduce new benchmark results.
+current environment.  The separate [whole-matrix padding control](padding-results.md)
+keeps the initial table divisible-only while preserving padded execution as a
+future generated-selection candidate.
 
 ## Out of scope
 
 This prototype does not add runtime autotuning, fringe handling for odd
-dimensions, packing for non-compact matrices, batched Strassen, complex
-support, a public depth control, or workspace cache eviction.  A production
+dimensions, whole-matrix padding, packing for non-compact matrices, batched
+Strassen, complex support, a public depth control, or workspace cache
+eviction.  A production
 change should recalibrate the route table on supported Apple hardware and
 decide how long retained thread-local storage may live.
 
