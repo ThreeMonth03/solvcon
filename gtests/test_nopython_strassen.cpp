@@ -3,6 +3,7 @@
  * BSD 3-Clause License, see COPYING
  */
 
+#include <solvcon/buffer/matmul.hpp>
 #include <solvcon/math/Strassen.hpp>
 
 #include <algorithm>
@@ -185,6 +186,33 @@ TEST(StrassenKernel, blas_leaf)
         { detail::gemm_strassen<0>(gemm, workspace); },
         testing::ThrowsMessage<std::runtime_error>("solvcon BLAS wrapper: CBLAS backend is unavailable"));
 #endif
+}
+
+TEST(StrassenDispatch, selects_measured_axis_regions)
+{
+    auto const & tuning = detail::APPLE_ARM64_STRASSEN_TUNING;
+
+    auto kernel = detail::select_strassen_kernel<float>(tuning, 5632, 5632, 5632);
+    ASSERT_TRUE(kernel);
+    EXPECT_EQ(*kernel, detail::MatmulKernel::StrassenDepth1);
+
+    kernel = detail::select_strassen_kernel<float>(tuning, 3072, 3072, 24576);
+    ASSERT_TRUE(kernel);
+    EXPECT_EQ(*kernel, detail::MatmulKernel::StrassenDepth1);
+
+    EXPECT_FALSE(detail::select_strassen_kernel<float>(tuning, 18930, 3072, 3072));
+    EXPECT_FALSE(detail::select_strassen_kernel<float>(tuning, 3072, 18930, 3072));
+    EXPECT_FALSE(detail::select_strassen_kernel<float>(tuning, 3072, 3072, 18930));
+    EXPECT_FALSE(detail::select_strassen_kernel<float>(tuning, 6144, 6144, 6144));
+    EXPECT_FALSE(detail::select_strassen_kernel<float>(tuning, 3072, 3072, 24578));
+
+    kernel = detail::select_strassen_kernel<double>(tuning, 3072, 6144, 3072);
+    ASSERT_TRUE(kernel);
+    EXPECT_EQ(*kernel, detail::MatmulKernel::StrassenDepth1);
+
+    kernel = detail::select_strassen_kernel<double>(tuning, 6144, 6144, 6144);
+    ASSERT_TRUE(kernel);
+    EXPECT_EQ(*kernel, detail::MatmulKernel::StrassenDepth2);
 }
 
 // vim: set ff=unix fenc=utf8 et sw=4 ts=4 sts=4:

@@ -235,6 +235,62 @@ def profile_planned_suite(dtype, warmups=1, samples=1, rounds=3):
                 warmups, samples, rounds)
 
 
+def iter_strassen_cases(dtype):
+    if np.dtype(dtype) == np.dtype(np.float32):
+        return (
+            (1, (5632, 5632, 5632)),
+            (1, (3072, 24576, 3072)),
+        )
+    return (
+        (1, (3072, 3072, 3072)),
+        (1, (4096, 4096, 4096)),
+        (2, (6144, 6144, 6144)),
+    )
+
+
+def profile_strassen_case(
+        dtype, depth, dimensions, warmups, samples, rounds, rng):
+    rows, inner_size, columns = dimensions
+    dtype_name = np.dtype(dtype).name
+    lhs = rng.random((rows, inner_size), dtype=dtype_name)
+    rhs = rng.random((inner_size, columns), dtype=dtype_name)
+    lhs_sa = make_container(lhs)
+    rhs_sa = make_container(rhs)
+    methods = (
+        ("np", profile_matmul_np, lhs, rhs),
+        ("blas_sa", profile_matmul_blas_sa, lhs_sa, rhs_sa),
+        ("planned_sa", profile_matmul_planned_sa, lhs_sa, rhs_sa),
+    )
+    timings = {name: [] for name, *_ in methods}
+    for round_index in range(rounds):
+        for _ in range(warmups):
+            for _, func, arg_lhs, arg_rhs in methods:
+                func(arg_lhs, arg_rhs)
+
+        for sample in range(samples):
+            shift = (round_index * samples + sample) % len(methods)
+            for name, func, arg_lhs, arg_rhs in (
+                    *methods[shift:], *methods[:shift]):
+                timings[name].append(profile_one_call(
+                    func, arg_lhs, arg_rhs))
+
+    medians = {
+        name: statistics.median(timings[name])
+        for name, *_ in methods
+    }
+    print(f"## Strassen depth {depth}: "
+          f"`{rows} x {inner_size} x {columns}`, "
+          f"dtype: `{dtype_name}`\n")
+    print_profile_row("func", "median (ms)", "cmp to np")
+    print_profile_row("-" * 20, "-" * 15, "-" * 15)
+    numpy_time = medians["np"]
+    for name, *_ in methods:
+        value = medians[name]
+        print_profile_row(name, f"{value:.3E}",
+                          f"{value / numpy_time:.3f}")
+    print()
+
+
 def parse_positive_count(value):
     count = int(value)
     if count < 1:
@@ -269,6 +325,13 @@ def main(argv=None):
         profile_planned_suite(
             dtype, warmups=args.warmups, samples=args.samples,
             rounds=args.rounds)
+
+    rng = np.random.default_rng(20260803)
+    for dtype in (np.float32, np.float64):
+        for depth, dimensions in iter_strassen_cases(dtype):
+            profile_strassen_case(
+                dtype, depth, dimensions, args.warmups, args.samples,
+                args.rounds, rng)
 
 
 if __name__ == "__main__":
