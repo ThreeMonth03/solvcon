@@ -10,6 +10,7 @@ from . import model
 from . import codegen
 from . import policy
 from . import transfer_profile
+from . import transfer
 from . import cli
 
 
@@ -23,6 +24,7 @@ _MODULES = (
     codegen,
     policy,
     transfer_profile,
+    transfer,
     cli,
 )
 

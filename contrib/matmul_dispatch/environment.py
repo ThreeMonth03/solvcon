@@ -29,6 +29,7 @@ PACKAGE_TUNING_SOURCES = tuple(sorted((
     "contrib/matmul_dispatch/model.py",
     "contrib/matmul_dispatch/policy.py",
     "contrib/matmul_dispatch/sampling.py",
+    "contrib/matmul_dispatch/transfer.py",
     "contrib/matmul_dispatch/transfer_profile.py",
 )))
 TUNING_SOURCES = (

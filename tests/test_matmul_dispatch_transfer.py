@@ -202,6 +202,71 @@ class MatmulDispatchTransferTC(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "distinct hardware"):
             tune.make_landmark_manifest(changed, 4)
 
+    def test_leave_one_device_out_excludes_landmark_groups(self):
+        profiles = make_profiles()
+        config = tune.TransferConfig(
+            landmark_count=2,
+            signature_rank=2,
+            ridge_alpha=2.0,
+            min_speedup=1.03,
+            seed=17,
+        )
+        report = tune.evaluate_leave_one_device_out(profiles, config)
+        self.assertEqual("leave_one_device_out", report["method"])
+        self.assertEqual(2, report["landmarks"])
+        for metrics in report["devices"].values():
+            self.assertEqual(4, metrics["validation_groups"])
+            self.assertEqual(8, metrics["samples"])
+
+    def test_transfer_model_changes_same_shape_decision(self):
+        profiles = make_profiles()
+        sources = {
+            name: records for name, records in profiles.items()
+            if name != "balanced"
+        }
+        manifest = tune.make_landmark_manifest(sources, 4, seed=31)
+        config = tune.TransferConfig(
+            landmark_count=4,
+            signature_rank=2,
+            ridge_alpha=1.0,
+            min_speedup=1.03,
+            seed=31,
+        )
+        model = tune.fit_transfer_model(sources, manifest, config)
+        model.route_margins = {
+            route: 0.0 for route in model.route_margins
+        }
+        slow = profiles["slow_blas"][-1]
+        fast = profiles["faster_blas"][-1]
+        slow_signature = tune.make_device_signature(
+            profiles["slow_blas"], manifest)
+        fast_signature = tune.make_device_signature(
+            profiles["faster_blas"], manifest)
+        self.assertEqual(
+            "GenericIjk",
+            tune.select_transfer_route(model, slow_signature, slow),
+        )
+        self.assertEqual(
+            "BlasGemm",
+            tune.select_transfer_route(model, fast_signature, fast),
+        )
+        model.route_margins = {
+            route: math.inf for route in model.route_margins
+        }
+        self.assertEqual(
+            "GenericIjk",
+            tune.select_transfer_route(model, fast_signature, fast),
+        )
+
+    def test_leave_one_device_out_requires_three_devices(self):
+        profiles = make_profiles()
+        with self.assertRaisesRegex(ValueError, "at least three"):
+            tune.evaluate_leave_one_device_out({
+                name: profiles[name]
+                for name in ("slow_blas", "fast_blas")
+            })
+
+
 if __name__ == "__main__":
     unittest.main()
 
