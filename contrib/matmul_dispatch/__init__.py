@@ -3,6 +3,7 @@
 
 from . import data
 from . import environment
+from . import measurement
 from . import sampling
 
 
@@ -10,6 +11,7 @@ _MODULES = (
     data,
     sampling,
     environment,
+    measurement,
 )
 
 
