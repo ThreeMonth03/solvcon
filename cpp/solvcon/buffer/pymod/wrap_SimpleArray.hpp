@@ -71,6 +71,10 @@ class SOLVCON_PYTHON_WRAPPER_VISIBILITY WrapSimpleArray
 
     static wrapped_type make_array_from_numpy(pybind11::array & arr_in);
     static pybind11::dict matmul_planned_profile(wrapped_type const & lhs, wrapped_type const & rhs);
+    static wrapped_type matmul_planned_forced(
+        wrapped_type const & lhs,
+        wrapped_type const & rhs,
+        solvcon::detail::MatmulKernel kernel);
 
     WrapSimpleArray(pybind11::module & mod, char const * pyname, char const * pydoc)
         : root_base_type(mod, pyname, pydoc, pybind11::buffer_protocol())
@@ -458,6 +462,12 @@ class SOLVCON_PYTHON_WRAPPER_VISIBILITY WrapSimpleArray
                 "_matmul_planned_profile",
                 [](wrapped_type const & self, wrapped_type const & other)
                 { return matmul_planned_profile(self, other); })
+            .def(
+                "_matmul_planned_forced",
+                [](wrapped_type const & self, wrapped_type const & other, solvcon::detail::MatmulKernel kernel)
+                { return matmul_planned_forced(self, other, kernel); },
+                py::arg("other"),
+                py::arg("kernel"))
             .def("matmul_blas", &wrapped_type::matmul_blas)
             .def(
                 "matmul_fast",
@@ -771,6 +781,20 @@ class SOLVCON_PYTHON_WRAPPER_VISIBILITY WrapSimpleArray
 }; /* end class WrapSimpleArray */
 
 template <typename T>
+typename WrapSimpleArray<T>::wrapped_type
+WrapSimpleArray<T>::matmul_planned_forced(
+    wrapped_type const & lhs,
+    wrapped_type const & rhs,
+    solvcon::detail::MatmulKernel kernel)
+{
+    solvcon::detail::MatmulPlan plan = solvcon::detail::MatmulPlan::make(lhs, rhs);
+    wrapped_type output(plan.output_shape());
+    solvcon::detail::MatmulExecutor<wrapped_type> executor(std::move(plan), output, lhs, rhs);
+    executor.execute(kernel);
+    return output;
+}
+
+template <typename T>
 pybind11::dict WrapSimpleArray<T>::matmul_planned_profile(
     wrapped_type const & lhs,
     wrapped_type const & rhs)
@@ -781,6 +805,17 @@ pybind11::dict WrapSimpleArray<T>::matmul_planned_profile(
     wrapped_type output(plan.output_shape());
     solvcon::detail::MatmulExecutor<wrapped_type> executor(std::move(plan), output, lhs, rhs);
     solvcon::detail::MatmulFacts const facts = executor.facts();
+    solvcon::detail::matmul_kernel_mask_type const mask = executor.eligible_kernels();
+
+    py::list eligible_kernels;
+    for (solvcon::detail::MatmulKernel const kernel :
+         solvcon::detail::MATMUL_GEMM_CANDIDATES)
+    {
+        if ((mask & solvcon::detail::matmul_kernel_bit(kernel)) != 0)
+        {
+            eligible_kernels.append(kernel);
+        }
+    }
 
     py::dict profile;
     profile["operation"] = matmul_operation_name(facts.operation);
@@ -802,6 +837,7 @@ pybind11::dict WrapSimpleArray<T>::matmul_planned_profile(
     profile["lhs_zero_batch_stride"] = facts.lhs_zero_batch_stride;
     profile["rhs_zero_batch_stride"] = facts.rhs_zero_batch_stride;
     profile["current_kernel"] = executor.current_kernel();
+    profile["eligible_kernels"] = py::tuple(eligible_kernels);
     return profile;
 }
 

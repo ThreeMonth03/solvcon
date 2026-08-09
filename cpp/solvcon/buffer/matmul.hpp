@@ -10,6 +10,7 @@
 #include <solvcon/math/math.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <format>
@@ -35,12 +36,16 @@ inline constexpr bool can_matmul_blas_v = std::is_same_v<T, float> ||
 template <typename T>
 inline constexpr bool can_matmul_fixed_v = std::is_same_v<T, float> || std::is_same_v<T, double>;
 
+template <typename T>
+inline constexpr bool can_matmul_dynamic_ikj_v = std::is_same_v<T, float> || std::is_same_v<T, double>;
+
 /**
  * @brief Identify the contraction kernel selected before batch traversal.
  */
 enum class MatmulKernel : std::uint8_t
 {
     GenericIjk,
+    DynamicIkj,
     FixedIkj,
     FixedJki,
     BlasDot,
@@ -48,6 +53,14 @@ enum class MatmulKernel : std::uint8_t
     BlasGemv,
     BlasGemm,
 }; /* end enum class MatmulKernel */
+
+inline constexpr std::array<MatmulKernel, 5> MATMUL_GEMM_CANDIDATES{
+    MatmulKernel::GenericIjk,
+    MatmulKernel::DynamicIkj,
+    MatmulKernel::FixedIkj,
+    MatmulKernel::FixedJki,
+    MatmulKernel::BlasGemm,
+};
 
 enum class MatmulOperation : std::uint8_t
 {
@@ -83,6 +96,15 @@ enum class MatmulLayout : std::uint8_t
     ColumnMajorPadded,
     Unsupported,
 }; /* end enum class MatmulLayout */
+
+using matmul_kernel_mask_type = std::uint16_t;
+
+static_assert(static_cast<std::uint8_t>(MatmulKernel::BlasGemm) < sizeof(matmul_kernel_mask_type) * 8);
+
+constexpr matmul_kernel_mask_type matmul_kernel_bit(MatmulKernel kernel) noexcept
+{
+    return static_cast<matmul_kernel_mask_type>(1U << static_cast<std::uint8_t>(kernel));
+}
 
 template <typename T>
 constexpr MatmulDataType matmul_data_type() noexcept
@@ -347,6 +369,18 @@ private:
     BatchMappings m_batch;
 }; /* end class MatmulPlan */
 
+void execute_dynamic_ikj(
+    float * output,
+    float const * lhs,
+    float const * rhs,
+    MatmulPlan const & plan);
+
+void execute_dynamic_ikj(
+    double * output,
+    double const * lhs,
+    double const * rhs,
+    MatmulPlan const & plan);
+
 void execute_fixed_ikj(
     float * output,
     float const * lhs,
@@ -406,7 +440,9 @@ public:
 
     MatmulFacts facts() const;
     MatmulKernel current_kernel() const;
+    matmul_kernel_mask_type eligible_kernels() const;
     void execute();
+    void execute(MatmulKernel kernel);
 
 private:
     using value_type = typename Array::value_type;
@@ -442,6 +478,7 @@ private:
     MatmulSelection select_gevm() const;
     MatmulSelection select_gemv() const;
     MatmulSelection select_gemm() const;
+    std::optional<MatmulSelection> select_forced_gemm(MatmulKernel kernel) const;
     PackingState select_matrix_packing(PackingState required) const;
     PackingState select_vector_packing(PackingState required) const;
     std::optional<MatmulSelection> select_fixed() const;
@@ -474,6 +511,7 @@ private:
         ssize_t column_stride,
         ssize_t rows,
         ssize_t columns);
+    void execute(MatmulSelection const & selection);
     void execute_generic_ijk(ssize_t output_base, ssize_t lhs_base, ssize_t rhs_base);
 
     MatmulPlan m_plan;
@@ -803,10 +841,39 @@ MatmulKernel MatmulExecutor<Array>::current_kernel() const
 }
 
 template <typename Array>
+matmul_kernel_mask_type MatmulExecutor<Array>::eligible_kernels() const
+{
+    matmul_kernel_mask_type mask = 0;
+    for (MatmulKernel const kernel : MATMUL_GEMM_CANDIDATES)
+    {
+        if (select_forced_gemm(kernel))
+        {
+            mask |= matmul_kernel_bit(kernel);
+        }
+    }
+    return mask;
+}
+
+template <typename Array>
 void MatmulExecutor<Array>::execute()
 {
-    MatmulSelection const selection = select_execution();
+    execute(select_execution());
+}
 
+template <typename Array>
+void MatmulExecutor<Array>::execute(MatmulKernel kernel)
+{
+    std::optional<MatmulSelection> const selection = select_forced_gemm(kernel);
+    if (!selection)
+    {
+        throw std::invalid_argument("forced kernel is not eligible for this GEMM");
+    }
+    execute(*selection);
+}
+
+template <typename Array>
+void MatmulExecutor<Array>::execute(MatmulSelection const & selection)
+{
     if (selection.packing)
     {
         pack(selection.packing);
@@ -816,6 +883,9 @@ void MatmulExecutor<Array>::execute()
     {
     case MatmulKernel::GenericIjk:
         execute_contractions<MatmulKernel::GenericIjk>();
+        return;
+    case MatmulKernel::DynamicIkj:
+        execute_contractions<MatmulKernel::DynamicIkj>();
         return;
     case MatmulKernel::FixedIkj:
         execute_fixed<MatmulKernel::FixedIkj>();
@@ -989,6 +1059,81 @@ MatmulSelection MatmulExecutor<Array>::select_gemm() const
 }
 
 template <typename Array>
+std::optional<MatmulSelection> MatmulExecutor<Array>::select_forced_gemm(MatmulKernel kernel) const
+{
+    if (m_plan.lhs_is_vector() || m_plan.rhs_is_vector())
+    {
+        return std::nullopt;
+    }
+
+    bool const lhs_row_major = m_plan.lhs_row_stride() > 0 &&
+                               m_plan.lhs_inner_stride() == 1 &&
+                               m_plan.lhs_row_stride() >= m_plan.inner_size();
+    bool const rhs_row_major = m_plan.rhs_inner_stride() > 0 &&
+                               m_plan.rhs_column_stride() == 1 &&
+                               m_plan.rhs_inner_stride() >= m_plan.columns();
+
+    switch (kernel)
+    {
+    case MatmulKernel::GenericIjk:
+        return MatmulSelection{};
+    case MatmulKernel::DynamicIkj:
+        if constexpr (can_matmul_dynamic_ikj_v<value_type>)
+        {
+            if (m_plan.inner_size() == 0 ||
+                (lhs_row_major && rhs_row_major))
+            {
+                return MatmulSelection{.kernel = kernel, .packing = {}};
+            }
+        }
+        return std::nullopt;
+    case MatmulKernel::FixedIkj:
+    case MatmulKernel::FixedJki:
+        if constexpr (can_matmul_fixed_v<value_type>)
+        {
+            bool const is_square = m_plan.rows() == m_plan.columns() && m_plan.rows() == m_plan.inner_size();
+            bool const side_supported = m_plan.rows() >= TUNING.fixed_matrix.min_side &&
+                                        m_plan.rows() <= TUNING.fixed_matrix.max_side;
+            if (!is_square || !side_supported)
+            {
+                return std::nullopt;
+            }
+            if (kernel == MatmulKernel::FixedIkj)
+            {
+                return MatmulSelection{
+                    .kernel = kernel,
+                    .packing = {.rhs = m_plan.rhs_column_stride() != 1},
+                };
+            }
+            if (m_plan.rhs_inner_stride() == 1)
+            {
+                return MatmulSelection{.kernel = kernel, .packing = {}};
+            }
+        }
+        return std::nullopt;
+    case MatmulKernel::BlasGemm:
+#if (defined(__APPLE__) && defined(__arm64__)) || defined(SC_HAS_CBLAS)
+        if constexpr (can_matmul_blas_v<value_type>)
+        {
+            return MatmulSelection{
+                .kernel = kernel,
+                .packing = {
+                    .lhs = !lhs_matrix_view(m_lhs_data),
+                    .rhs = !rhs_matrix_view(m_rhs_data),
+                },
+            };
+        }
+#endif
+        return std::nullopt;
+    case MatmulKernel::BlasDot:
+    case MatmulKernel::BlasGevm:
+    case MatmulKernel::BlasGemv:
+        return std::nullopt;
+    }
+    return std::nullopt;
+}
+
+template <typename Array>
 PackingState MatmulExecutor<Array>::select_matrix_packing(PackingState required) const
 {
     bool const lhs_supported =
@@ -1135,6 +1280,19 @@ void MatmulExecutor<Array>::execute_at(
     if constexpr (Kernel == MatmulKernel::GenericIjk)
     {
         execute_generic_ijk(output_base, lhs_base, rhs_base);
+    }
+    else if constexpr (Kernel == MatmulKernel::DynamicIkj)
+    {
+        if constexpr (can_matmul_dynamic_ikj_v<value_type>)
+        {
+            execute_dynamic_ikj(
+                m_output_data + output_base,
+                m_lhs_data + lhs_base,
+                m_rhs_data + rhs_base,
+                m_plan);
+            return;
+        }
+        throw std::logic_error("MatmulExecutor::execute_at(): unavailable dynamic IKJ kernel");
     }
     else
     {

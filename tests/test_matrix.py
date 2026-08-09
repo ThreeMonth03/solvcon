@@ -393,6 +393,162 @@ class MatmulTestBase(sc.testing.TestBase):
                         shape=(m, k, n), lhs=lhs_case, rhs=rhs_case):
                     self.assert_matmul_planned(lhs, rhs, expected)
 
+    def test_forced_gemm_kernels(self):
+        dtype = np.dtype(self.dtype).name
+        kernels = sc.core._impl._MatmulKernel
+        lhs_data = np.arange(81, dtype=dtype).reshape(9, 9)
+        rhs_data = np.arange(81, dtype=dtype).reshape(9, 9)
+        rhs_cases = (
+            ('row_major', rhs_data, 'row_major'),
+            ('column_major', np.asfortranarray(rhs_data), 'column_major'),
+            ('unsupported',
+             self.make_strided_view(rhs_data, 0, -1), 'unsupported'),
+        )
+
+        for case, case_rhs, rhs_layout in rhs_cases:
+            lhs = self.SimpleArray(array=lhs_data)
+            rhs = self.SimpleArray(array=case_rhs)
+            profile = lhs._matmul_planned_profile(rhs)
+
+            with self.subTest(case=case, profile=profile):
+                self.assertEqual(profile['operation'], 'gemm')
+                self.assertEqual(profile['dtype'], dtype)
+                self.assertEqual(profile['rows'], 9)
+                self.assertEqual(profile['columns'], 9)
+                self.assertEqual(profile['inner_size'], 9)
+                self.assertEqual(profile['batch_size'], 1)
+                self.assertFalse(profile['has_batch_axes'])
+                self.assertEqual(profile['lhs_layout'], 'row_major')
+                self.assertEqual(profile['rhs_layout'], rhs_layout)
+                self.assertFalse(profile['lhs_reused'])
+                self.assertFalse(profile['rhs_reused'])
+                self.assertFalse(profile['lhs_zero_batch_stride'])
+                self.assertFalse(profile['rhs_zero_batch_stride'])
+
+                eligible = profile['eligible_kernels']
+                self.assertIsInstance(eligible, tuple)
+                self.assertIn(kernels.GenericIjk, eligible)
+                self.assertIn(profile['current_kernel'], eligible)
+                if np.issubdtype(self.dtype, np.floating):
+                    self.assertIn(kernels.FixedIkj, eligible)
+                    if case == 'column_major':
+                        self.assertIn(kernels.FixedJki, eligible)
+                    else:
+                        self.assertNotIn(kernels.FixedJki, eligible)
+                else:
+                    self.assertNotIn(kernels.FixedIkj, eligible)
+                    self.assertNotIn(kernels.FixedJki, eligible)
+                if profile['backend'] == 'none':
+                    self.assertNotIn(kernels.BlasGemm, eligible)
+                else:
+                    self.assertIn(kernels.BlasGemm, eligible)
+
+                expected = np.matmul(lhs_data, case_rhs)
+                for kernel in eligible:
+                    result = lhs._matmul_planned_forced(rhs, kernel)
+                    tol = 64 * np.finfo(result.ndarray.real.dtype).eps
+                    np.testing.assert_allclose(
+                        result.ndarray, expected, rtol=tol, atol=tol)
+
+    def test_forced_dynamic_ikj_layouts(self):
+        dtype = np.dtype(self.dtype).name
+        kernels = sc.core._impl._MatmulKernel
+        lhs_data = np.arange(12, dtype=dtype).reshape(4, 3)
+        rhs_data = np.arange(21, dtype=dtype).reshape(3, 7)
+        lhs_padded = dict(
+            self.make_matrix_stride_cases(lhs_data, 1))['padded']
+        rhs_padded = dict(
+            self.make_matrix_stride_cases(rhs_data, 0))['padded']
+        cases = (
+            ('compact', lhs_data, rhs_data,
+             'row_major', 'row_major', (3, 1, 7, 1), True),
+            ('padded', lhs_padded, rhs_padded,
+             'row_major_padded', 'row_major_padded', (5, 1, 9, 1), True),
+            ('lhs_column_major',
+             np.asfortranarray(lhs_data, dtype=dtype), rhs_data,
+             'column_major', 'row_major', (1, 4, 7, 1), False),
+            ('rhs_column_major', lhs_data,
+             np.asfortranarray(rhs_data, dtype=dtype),
+             'row_major', 'column_major', (3, 1, 1, 3), False),
+            ('lhs_negative_inner',
+             self.make_strided_view(lhs_data, 1, -1), rhs_data,
+             'unsupported', 'row_major', (3, -1, 7, 1), False),
+            ('rhs_negative_inner', lhs_data,
+             self.make_strided_view(rhs_data, 0, -1),
+             'row_major', 'unsupported', (3, 1, -7, 1), False),
+        )
+
+        for (case, case_lhs, case_rhs, lhs_layout, rhs_layout,
+             strides, layout_eligible) in cases:
+            lhs = self.SimpleArray(array=case_lhs)
+            rhs = self.SimpleArray(array=case_rhs)
+            profile = lhs._matmul_planned_profile(rhs)
+            eligible = (np.issubdtype(self.dtype, np.floating) and
+                        layout_eligible)
+
+            with self.subTest(case=case, profile=profile):
+                self.assertEqual(profile['lhs_layout'], lhs_layout)
+                self.assertEqual(profile['rhs_layout'], rhs_layout)
+                self.assertEqual(
+                    (
+                        profile['lhs_row_stride'],
+                        profile['lhs_inner_stride'],
+                        profile['rhs_inner_stride'],
+                        profile['rhs_column_stride'],
+                    ),
+                    strides,
+                )
+                self.assertEqual(
+                    kernels.DynamicIkj in profile['eligible_kernels'],
+                    eligible)
+                self.assertIn(
+                    profile['current_kernel'], profile['eligible_kernels'])
+                if eligible:
+                    result = lhs._matmul_planned_forced(
+                        rhs, kernels.DynamicIkj)
+                    expected = np.matmul(case_lhs, case_rhs)
+                    tol = 64 * np.finfo(result.ndarray.dtype).eps
+                    np.testing.assert_allclose(
+                        result.ndarray, expected, rtol=tol, atol=tol)
+                else:
+                    with self.assertRaisesRegex(
+                            ValueError, 'forced kernel is not eligible'):
+                        lhs._matmul_planned_forced(
+                            rhs, kernels.DynamicIkj)
+
+    def test_forced_dynamic_ikj_empty_inner(self):
+        if not np.issubdtype(self.dtype, np.floating):
+            self.skipTest('DynamicIkj only supports real floating types')
+
+        kernels = sc.core._impl._MatmulKernel
+        lhs = self.SimpleArray(shape=(3, 0), value=0)
+        rhs = self.SimpleArray(shape=(0, 4), value=0)
+        profile = lhs._matmul_planned_profile(rhs)
+
+        self.assertEqual(profile['inner_size'], 0)
+        self.assertIn(kernels.DynamicIkj, profile['eligible_kernels'])
+        result = lhs._matmul_planned_forced(rhs, kernels.DynamicIkj)
+        np.testing.assert_array_equal(
+            result.ndarray, np.zeros((3, 4), dtype=self.dtype))
+
+    def test_forced_dynamic_ikj_batched(self):
+        if not np.issubdtype(self.dtype, np.floating):
+            self.skipTest('DynamicIkj only supports real floating types')
+
+        dtype = np.dtype(self.dtype).name
+        kernels = sc.core._impl._MatmulKernel
+        lhs_data = np.arange(24, dtype=dtype).reshape(2, 3, 4)
+        rhs_data = np.arange(40, dtype=dtype).reshape(2, 4, 5)
+        lhs = self.SimpleArray(array=lhs_data)
+        rhs = self.SimpleArray(array=rhs_data)
+        profile = lhs._matmul_planned_profile(rhs)
+
+        self.assertEqual(profile['batch_size'], 2)
+        self.assertIn(kernels.DynamicIkj, profile['eligible_kernels'])
+        result = lhs._matmul_planned_forced(rhs, kernels.DynamicIkj)
+        np.testing.assert_array_equal(
+            result.ndarray, np.matmul(lhs_data, rhs_data))
+
     def test_matmul_profile_batch_facts(self):
         dtype = np.dtype(self.dtype).name
         lhs_data = np.arange(6, dtype=dtype).reshape(1, 2, 3)
@@ -415,6 +571,19 @@ class MatmulTestBase(sc.testing.TestBase):
         profile = lhs._matmul_planned_profile(rhs)
         self.assertFalse(profile['lhs_reused'])
         self.assertTrue(profile['lhs_zero_batch_stride'])
+
+    def test_forced_gemm_rejects_vector_operation(self):
+        dtype = np.dtype(self.dtype).name
+        kernels = sc.core._impl._MatmulKernel
+        lhs = self.SimpleArray(array=np.arange(9, dtype=dtype))
+        rhs = self.SimpleArray(array=np.arange(9, dtype=dtype))
+        profile = lhs._matmul_planned_profile(rhs)
+
+        self.assertEqual(profile['operation'], 'dot')
+        self.assertEqual(profile['eligible_kernels'], ())
+        with self.assertRaisesRegex(
+                ValueError, 'forced kernel is not eligible for this GEMM'):
+            lhs._matmul_planned_forced(rhs, kernels.GenericIjk)
 
     def test_batch_strides(self):
         """Batch axes support negative and step-two strides."""

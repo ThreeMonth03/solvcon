@@ -15,6 +15,45 @@ namespace solvcon
 namespace detail
 {
 
+template <typename T>
+static void run_dynamic_ikj(
+    T * output,
+    T const * lhs,
+    T const * rhs,
+    MatmulPlan const & plan)
+{
+    ssize_t const rows = plan.rows();
+    ssize_t const columns = plan.columns();
+    ssize_t const inner_size = plan.inner_size();
+    if (inner_size == 0)
+    {
+        std::fill(output, output + rows * columns, T{});
+        return;
+    }
+
+    for (ssize_t row = 0; row < rows; ++row)
+    {
+        T * output_row = output + row * columns;
+        T const * lhs_value = lhs + row * plan.lhs_row_stride();
+        T const * rhs_row = rhs;
+        T lhs_scalar = *lhs_value;
+        for (ssize_t column = 0; column < columns; ++column)
+        {
+            output_row[column] = lhs_scalar * rhs_row[column];
+        }
+        for (ssize_t inner = 1; inner < inner_size; ++inner)
+        {
+            lhs_value += plan.lhs_inner_stride();
+            rhs_row += plan.rhs_inner_stride();
+            lhs_scalar = *lhs_value;
+            for (ssize_t column = 0; column < columns; ++column)
+            {
+                output_row[column] += lhs_scalar * rhs_row[column];
+            }
+        }
+    }
+}
+
 template <typename T, size_t Side, size_t ColumnStart, size_t ColumnCount, bool LhsInnerIsUnitStride>
 static void run_fixed_ikj_block(
     T * output,
@@ -253,6 +292,24 @@ static void dispatch_fixed_jki(
         return;
     default: throw std::logic_error("execute_fixed_jki(): unsupported matrix side");
     }
+}
+
+void execute_dynamic_ikj(
+    float * output,
+    float const * lhs,
+    float const * rhs,
+    MatmulPlan const & plan)
+{
+    run_dynamic_ikj(output, lhs, rhs, plan);
+}
+
+void execute_dynamic_ikj(
+    double * output,
+    double const * lhs,
+    double const * rhs,
+    MatmulPlan const & plan)
+{
+    run_dynamic_ikj(output, lhs, rhs, plan);
 }
 
 void execute_fixed_ikj(

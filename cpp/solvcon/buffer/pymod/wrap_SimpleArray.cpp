@@ -15,6 +15,7 @@ void wrap_SimpleArray(pybind11::module & mod)
 {
     pybind11::enum_<solvcon::detail::MatmulKernel>(mod, "_MatmulKernel")
         .value("GenericIjk", solvcon::detail::MatmulKernel::GenericIjk)
+        .value("DynamicIkj", solvcon::detail::MatmulKernel::DynamicIkj)
         .value("FixedIkj", solvcon::detail::MatmulKernel::FixedIkj)
         .value("FixedJki", solvcon::detail::MatmulKernel::FixedJki)
         .value("BlasDot", solvcon::detail::MatmulKernel::BlasDot)
