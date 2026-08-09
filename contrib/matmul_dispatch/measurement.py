@@ -311,4 +311,65 @@ def _timing_block(record, phase, route_offsets=None, auto_offset=0):
     }
 
 
+def _first_pass_gap(record):
+    medians = sorted(record["median_ns"].values())
+    if len(medians) < 2 or medians[0] <= 0:
+        return None
+    return medians[1] / medians[0] - 1
+
+
+def _annotate_refinement(record, threshold):
+    gap = _first_pass_gap(record)
+    candidate = gap is not None and gap < threshold
+    record["refinement"] = {
+        "first_pass_top_two_gap": gap,
+        "threshold": threshold,
+        "status": "pending" if candidate else "not_selected",
+        "completed_blocks": 0,
+        "added_route_samples": {},
+        "added_auto_samples": 0,
+    }
+    return candidate
+
+
+def _merge_refinement(record, refined):
+    fields = ("sample_id", "current_kernel", "measured_kernels")
+    if any(record[name] != refined[name] for name in fields):
+        raise RuntimeError("refinement changed the measured route set")
+
+    if "measurement_blocks" not in record:
+        record["measurement_blocks"] = [
+            _timing_block(record, "coarse")]
+    route_offsets = {
+        route: len(values)
+        for route, values in record["timings_ns"].items()
+    }
+    auto_offset = len(record["auto_timings_ns"])
+    block = _timing_block(
+        refined, "refinement", route_offsets, auto_offset)
+    added_route_samples = {}
+    for route, values in refined["timings_ns"].items():
+        record["timings_ns"][route].extend(values)
+        record["timing_batches_ns"][route].extend(
+            refined["timing_batches_ns"][route])
+        added_route_samples[route] = len(values)
+    record["auto_timings_ns"].extend(refined["auto_timings_ns"])
+    record["auto_timing_batches_ns"].extend(
+        refined["auto_timing_batches_ns"])
+    record["median_ns"] = {
+        route: statistics.median(values)
+        for route, values in record["timings_ns"].items()
+    }
+    record["auto_median_ns"] = statistics.median(
+        record["auto_timings_ns"])
+    record["measurement_blocks"].append(block)
+
+    refinement = record["refinement"]
+    refinement["status"] = "completed"
+    refinement["completed_blocks"] += 1
+    refinement["added_route_samples"] = added_route_samples
+    refinement["added_auto_samples"] = len(
+        refined["auto_timings_ns"])
+
+
 # vim: set ff=unix fenc=utf8 et sw=4 ts=4 sts=4 tw=79:

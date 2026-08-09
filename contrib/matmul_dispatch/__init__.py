@@ -5,6 +5,8 @@ from . import data
 from . import environment
 from . import measurement
 from . import sampling
+from . import collect
+from . import cli
 
 
 _MODULES = (
@@ -12,6 +14,8 @@ _MODULES = (
     sampling,
     environment,
     measurement,
+    collect,
+    cli,
 )
 
 
