@@ -6,6 +6,7 @@ from . import environment
 from . import measurement
 from . import sampling
 from . import collect
+from . import model
 from . import cli
 
 
@@ -15,6 +16,7 @@ _MODULES = (
     environment,
     measurement,
     collect,
+    model,
     cli,
 )
 
