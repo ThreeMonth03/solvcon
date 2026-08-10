@@ -144,12 +144,17 @@ inline constexpr ssize_t FIXED_MATRIX_MAX_SIDE = std::max(
     FIXED_MATRIX_TUNING<T>.jki_max_side);
 
 /**
- * @brief Record the selected kernel and packing for one matmul call.
+ * @brief Record the selected kernel and operand preparation for one matmul call.
+ *
+ * Complete packing materializes an operand before batch traversal. Streamed
+ * packing reuses one matrix-sized scratch buffer while traversing unique
+ * matrices. Both forms expose row-major data to the selected BLAS kernel.
  */
 struct MatmulSelection
 {
     MatmulKernel kernel = MatmulKernel::GenericIjk;
-    PackingState packing;
+    PackingState complete_packing{};
+    PackingState streamed_packing{};
 }; /* end struct MatmulSelection */
 
 /**
@@ -303,13 +308,14 @@ void execute_fixed_gemm(
  * evaluates one `(3,4) @ (4,6)` contraction at each offset. The results are
  * written into the allocated `(2,5,3,6)` output.
  *
- * When a strided `(10,M,K)` operand requires packing, the complete supplied
- * batch is materialized once and the plan is rebuilt before traversal.
+ * A BLAS-incompatible operand reused by broadcasting is packed completely
+ * before traversal. A unique `(10,M,K)` operand instead reuses one `(M,K)`
+ * scratch matrix: each batch core is copied and consumed by GEMM immediately.
  *
  * @note The current implementation selects generic or direct BLAS kernels for
  * DOT, GEVM, GEMV, and GEMM. Small square products with supported value types
- * may use fixed-size kernels. BLAS-incompatible matrix operands may be
- * materialized once in row-major storage before traversal.
+ * may use fixed-size kernels. GEMM may pack reused operands completely or
+ * stream unique operands through matrix-sized scratch storage.
  */
 template <typename Array>
 class MatmulExecutor
@@ -358,6 +364,15 @@ private:
     PackingState select_vector_packing(PackingState required) const;
     bool should_pack_vector() const;
     void pack(PackingState const & packing);
+    void execute_streamed_gemm(PackingState const & packing);
+
+    static void copy_matrix_core(
+        value_type const * source,
+        value_type * destination,
+        ssize_t rows,
+        ssize_t columns,
+        ssize_t row_stride,
+        ssize_t column_stride);
 
     template <MatmulKernel Kernel>
     void execute_contractions();
@@ -652,9 +667,14 @@ void MatmulExecutor<Array>::execute()
 {
     MatmulSelection const selection = select_execution();
 
-    if (selection.packing)
+    if (selection.complete_packing)
     {
-        pack(selection.packing);
+        pack(selection.complete_packing);
+    }
+    if (selection.streamed_packing)
+    {
+        execute_streamed_gemm(selection.streamed_packing);
+        return;
     }
 
     switch (selection.kernel)
@@ -724,7 +744,7 @@ MatmulSelection MatmulExecutor<Array>::select_dot() const
     bool const use_blas = m_plan.inner_size() >= TUNING.direct_blas.dot_min_length && strides_supported;
     return MatmulSelection{
         .kernel = use_blas ? MatmulKernel::BlasDot : MatmulKernel::GenericIjk,
-        .packing = {},
+        .complete_packing = {},
     };
 }
 
@@ -746,7 +766,7 @@ MatmulSelection MatmulExecutor<Array>::select_gevm() const
                                    TUNING.batched_vector.direct_min_matrix_elements);
         return MatmulSelection{
             .kernel = use_blas ? MatmulKernel::BlasGevm : MatmulKernel::GenericIjk,
-            .packing = packing,
+            .complete_packing = packing,
         };
     }
     if (m_plan.lhs_inner_stride() <= 0)
@@ -763,7 +783,7 @@ MatmulSelection MatmulExecutor<Array>::select_gevm() const
                                     TUNING.direct_blas.gemv_min_dimension;
     return MatmulSelection{
         .kernel = use_blas ? MatmulKernel::BlasGevm : MatmulKernel::GenericIjk,
-        .packing = {},
+        .complete_packing = {},
     };
 }
 
@@ -785,7 +805,7 @@ MatmulSelection MatmulExecutor<Array>::select_gemv() const
                                    TUNING.batched_vector.direct_min_matrix_elements);
         return MatmulSelection{
             .kernel = use_blas ? MatmulKernel::BlasGemv : MatmulKernel::GenericIjk,
-            .packing = packing,
+            .complete_packing = packing,
         };
     }
 
@@ -793,7 +813,7 @@ MatmulSelection MatmulExecutor<Array>::select_gemv() const
                           std::min(m_plan.rows(), m_plan.inner_size()) >= TUNING.direct_blas.gemv_min_dimension;
     return MatmulSelection{
         .kernel = use_blas ? MatmulKernel::BlasGemv : MatmulKernel::GenericIjk,
-        .packing = {},
+        .complete_packing = {},
     };
 }
 
@@ -811,7 +831,7 @@ MatmulSelection MatmulExecutor<Array>::select_gemm() const
         if (minimum_dimension >= TUNING.direct_blas.gemm_min_dimension &&
             lhs_blas_compatible && rhs_blas_compatible)
         {
-            return MatmulSelection{.kernel = MatmulKernel::BlasGemm, .packing = {}};
+            return MatmulSelection{.kernel = MatmulKernel::BlasGemm, .complete_packing = {}};
         }
         required_packing = PackingState{
             .lhs = !lhs_blas_compatible,
@@ -834,7 +854,27 @@ MatmulSelection MatmulExecutor<Array>::select_gemm() const
     {
         if (minimum_dimension >= TUNING.matrix_packing.gemm_min_dimension && required_packing)
         {
-            return MatmulSelection{.kernel = MatmulKernel::BlasGemm, .packing = required_packing};
+            PackingState streamed_packing;
+            if (m_plan.has_batch_axes())
+            {
+                streamed_packing = PackingState{
+                    .lhs = required_packing.lhs &&
+                           !m_plan.lhs_is_broadcast() &&
+                           !m_plan.lhs_has_zero_batch_stride(),
+                    .rhs = required_packing.rhs &&
+                           !m_plan.rhs_is_broadcast() &&
+                           !m_plan.rhs_has_zero_batch_stride(),
+                };
+            }
+            PackingState const complete_packing{
+                .lhs = required_packing.lhs && !streamed_packing.lhs,
+                .rhs = required_packing.rhs && !streamed_packing.rhs,
+            };
+            return MatmulSelection{
+                .kernel = MatmulKernel::BlasGemm,
+                .complete_packing = complete_packing,
+                .streamed_packing = streamed_packing,
+            };
         }
     }
 #endif
@@ -853,12 +893,12 @@ std::optional<MatmulSelection> MatmulExecutor<Array>::select_fixed_gemm() const
     if (m_plan.rows() <= TUNING.fixed_matrix.ikj_max_side &&
         m_plan.rhs_column_stride() == 1)
     {
-        return MatmulSelection{.kernel = MatmulKernel::FixedIkj, .packing = {}};
+        return MatmulSelection{.kernel = MatmulKernel::FixedIkj, .complete_packing = {}};
     }
     if (m_plan.rows() <= TUNING.fixed_matrix.jki_max_side &&
         m_plan.rhs_inner_stride() == 1)
     {
-        return MatmulSelection{.kernel = MatmulKernel::FixedJki, .packing = {}};
+        return MatmulSelection{.kernel = MatmulKernel::FixedJki, .complete_packing = {}};
     }
 
     bool const rhs_reused = m_plan.rhs_is_broadcast() && !m_plan.rhs_has_zero_batch_stride();
@@ -866,7 +906,7 @@ std::optional<MatmulSelection> MatmulExecutor<Array>::select_fixed_gemm() const
     {
         return std::nullopt;
     }
-    return MatmulSelection{.kernel = MatmulKernel::FixedIkj, .packing = {.rhs = true}};
+    return MatmulSelection{.kernel = MatmulKernel::FixedIkj, .complete_packing = {.rhs = true}};
 }
 
 template <typename Array>
@@ -921,6 +961,104 @@ void MatmulExecutor<Array>::pack(PackingState const & packing)
     m_plan = MatmulPlan::make(lhs, rhs);
     m_lhs_data = lhs.logical_data();
     m_rhs_data = rhs.logical_data();
+}
+
+template <typename Array>
+void MatmulExecutor<Array>::execute_streamed_gemm(PackingState const & packing)
+{
+#if (defined(__APPLE__) && defined(__arm64__)) || defined(SC_HAS_CBLAS)
+    if constexpr (can_matmul_blas_v<value_type>)
+    {
+        std::optional<Array> lhs_scratch;
+        std::optional<Array> rhs_scratch;
+        if (packing.lhs)
+        {
+            lhs_scratch.emplace(typename Array::shape_type{m_plan.rows(), m_plan.inner_size()});
+        }
+        if (packing.rhs)
+        {
+            rhs_scratch.emplace(typename Array::shape_type{m_plan.inner_size(), m_plan.columns()});
+        }
+
+        matrix_view_type lhs_view = packing.lhs
+                                        ? matrix_view_type{
+                                              lhs_scratch->logical_data(),
+                                              m_plan.inner_size(),
+                                              BlasTranspose::None}
+                                        : require_matrix_view(lhs_matrix_view(m_lhs_data));
+        matrix_view_type rhs_view = packing.rhs
+                                        ? matrix_view_type{
+                                              rhs_scratch->logical_data(),
+                                              m_plan.columns(),
+                                              BlasTranspose::None}
+                                        : require_matrix_view(rhs_matrix_view(m_rhs_data));
+
+        for (MappedOffsetCursor cursor = m_plan.batch_cursor(); cursor; cursor.advance())
+        {
+            value_type const * lhs_data = m_lhs_data + cursor.offset(MatmulPlan::Operand::Lhs);
+            value_type const * rhs_data = m_rhs_data + cursor.offset(MatmulPlan::Operand::Rhs);
+            if (lhs_scratch)
+            {
+                copy_matrix_core(
+                    lhs_data,
+                    lhs_scratch->logical_data(),
+                    m_plan.rows(),
+                    m_plan.inner_size(),
+                    m_plan.lhs_row_stride(),
+                    m_plan.lhs_inner_stride());
+                lhs_data = lhs_scratch->logical_data();
+            }
+            lhs_view.m_data = lhs_data;
+            if (rhs_scratch)
+            {
+                copy_matrix_core(
+                    rhs_data,
+                    rhs_scratch->logical_data(),
+                    m_plan.inner_size(),
+                    m_plan.columns(),
+                    m_plan.rhs_inner_stride(),
+                    m_plan.rhs_column_stride());
+                rhs_data = rhs_scratch->logical_data();
+            }
+            rhs_view.m_data = rhs_data;
+
+            gemm_blas(
+                m_plan.rows(),
+                m_plan.columns(),
+                m_plan.inner_size(),
+                lhs_view,
+                rhs_view,
+                m_output_data + cursor.offset(MatmulPlan::Operand::Output));
+        }
+        return;
+    }
+#endif
+    throw std::logic_error("MatmulExecutor::execute_streamed_gemm(): unavailable BLAS kernel");
+}
+
+template <typename Array>
+void MatmulExecutor<Array>::copy_matrix_core(
+    value_type const * source,
+    value_type * destination,
+    ssize_t rows,
+    ssize_t columns,
+    ssize_t row_stride,
+    ssize_t column_stride)
+{
+    for (ssize_t row = 0; row < rows; ++row)
+    {
+        value_type const * source_row = source + row * row_stride;
+        value_type * destination_row = destination + row * columns;
+        if (column_stride == 1)
+        {
+            std::ranges::copy_n(source_row, columns, destination_row);
+            continue;
+        }
+        for (ssize_t column = 0; column < columns; ++column)
+        {
+            destination_row[column] = source_row[column * column_stride];
+        }
+    }
 }
 
 template <typename Array>

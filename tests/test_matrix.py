@@ -417,6 +417,29 @@ class MatmulTestBase(sc.testing.TestBase):
                         shape=lhs_shape, lhs=lhs_case, rhs=rhs_case):
                     self.assert_matmul_planned(lhs, rhs, expected)
 
+    def test_unique_batch_matrix_strides(self):
+        """Unique strided matrix cores match NumPy across a batch."""
+        dtype = np.dtype(self.dtype).name
+        shape = (3, 21, 21)
+        lhs_data = np.arange(np.prod(shape), dtype=dtype).reshape(shape)
+        rhs_data = np.arange(np.prod(shape), dtype=dtype).reshape(shape)
+        case_names = ('c_contiguous', 'negative_stride', 'step_two')
+        lhs_cases = self.make_matrix_stride_cases(lhs_data, 2)
+        rhs_cases = self.make_matrix_stride_cases(rhs_data, 1)
+        lhs_cases = tuple(case for case in lhs_cases
+                          if case[0] in case_names)
+        rhs_cases = tuple(case for case in rhs_cases
+                          if case[0] in case_names)
+
+        for (lhs_case, case_lhs), (rhs_case, case_rhs) in itertools.product(
+                lhs_cases, rhs_cases):
+            lhs = self.SimpleArray(array=case_lhs)
+            rhs = self.SimpleArray(array=case_rhs)
+            expected = np.matmul(case_lhs, case_rhs)
+
+            with self.subTest(lhs=lhs_case, rhs=rhs_case):
+                self.assert_matmul_planned(lhs, rhs, expected)
+
     def test_fixed_sides(self):
         """Configured fixed sides preserve broadcast strided values."""
         dtype = np.dtype(self.dtype).name

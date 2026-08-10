@@ -76,6 +76,34 @@ def iter_stride_cases(lhs, rhs):
         yield name, case_lhs, case_rhs
 
 
+def make_step_two_view(data, axis):
+    storage_shape = list(data.shape)
+    storage_shape[axis] *= 2
+    storage = np.empty(storage_shape, dtype=data.dtype)
+    selection = [slice(None)] * data.ndim
+    selection[axis] = slice(None, None, 2)
+    view = storage[tuple(selection)]
+    view[...] = data
+    return view
+
+
+def iter_matrix_stride_cases(lhs, rhs):
+    lhs_cases = (
+        ("c_contiguous", lhs),
+        ("negative_inner_stride", np.flip(lhs, axis=-1)),
+        ("step_two_inner_stride", make_step_two_view(lhs, -1)),
+    )
+    rhs_cases = (
+        ("c_contiguous", rhs),
+        ("negative_inner_stride", np.flip(rhs, axis=-2)),
+        ("step_two_inner_stride", make_step_two_view(rhs, -2)),
+    )
+    for lhs_case, rhs_case in itertools.product(lhs_cases, rhs_cases):
+        lhs_name, case_lhs = lhs_case
+        rhs_name, case_rhs = rhs_case
+        yield f"lhs_{lhs_name}_rhs_{rhs_name}", case_lhs, case_rhs
+
+
 def element_strides(data):
     return tuple(stride // data.itemsize for stride in data.strides)
 
@@ -150,16 +178,22 @@ def profile_planned_case(
     lhs_sa = make_container(lhs)
     rhs_sa = make_container(rhs)
     timings = {"np": [], "planned_sa": []}
-    for _ in range(rounds):
+    for round_index in range(rounds):
         for _ in range(warmups):
             np.matmul(lhs, rhs)
             lhs_sa.matmul_planned(rhs_sa)
 
-        for _ in range(samples):
-            timings["np"].append(profile_one_call(
-                profile_matmul_np, lhs, rhs))
-            timings["planned_sa"].append(profile_one_call(
-                profile_matmul_planned_sa, lhs_sa, rhs_sa))
+        for sample in range(samples):
+            if (round_index + sample) % 2 == 0:
+                timings["np"].append(profile_one_call(
+                    profile_matmul_np, lhs, rhs))
+                timings["planned_sa"].append(profile_one_call(
+                    profile_matmul_planned_sa, lhs_sa, rhs_sa))
+            else:
+                timings["planned_sa"].append(profile_one_call(
+                    profile_matmul_planned_sa, lhs_sa, rhs_sa))
+                timings["np"].append(profile_one_call(
+                    profile_matmul_np, lhs, rhs))
 
     methods = ("np", "planned_sa")
     timings = {
@@ -223,6 +257,18 @@ def iter_batched_vector_threshold_cases(dtype):
         yield (f"Batched GEMV B={batch_size}", matrix, vector)
 
 
+def iter_streamed_gemm_cases(dtype):
+    for batch_size, side in (
+            (2, 16), (10, 16), (32, 16),
+            (10, 32), (10, 64), (10, 256)):
+        shape = (batch_size, side, side)
+        yield (
+            f"Unique-batch GEMM B={batch_size}, S={side}",
+            make_data(dtype, shape),
+            make_data(dtype, shape),
+        )
+
+
 def profile_planned_suite(dtype, warmups=1, samples=1, rounds=3):
     cases = itertools.chain(
         iter_planned_cases(dtype),
@@ -230,6 +276,16 @@ def profile_planned_suite(dtype, warmups=1, samples=1, rounds=3):
     )
     for title, lhs, rhs in cases:
         for case_name, case_lhs, case_rhs in iter_stride_cases(lhs, rhs):
+            profile_planned_case(
+                title, dtype, case_name, case_lhs, case_rhs,
+                warmups, samples, rounds)
+
+
+def profile_streamed_gemm_suite(
+        dtype, warmups=1, samples=1, rounds=3):
+    for title, lhs, rhs in iter_streamed_gemm_cases(dtype):
+        for case_name, case_lhs, case_rhs in iter_matrix_stride_cases(
+                lhs, rhs):
             profile_planned_case(
                 title, dtype, case_name, case_lhs, case_rhs,
                 warmups, samples, rounds)
@@ -255,11 +311,21 @@ def parse_arguments(argv=None):
     parser.add_argument(
         "--rounds", type=parse_positive_count, default=3,
         help="planned profiling rounds; use 5 or more for stable results")
+    parser.add_argument(
+        "--suite", choices=("all", "streamed-gemm"), default="all",
+        help="profiling suite to run")
     return parser.parse_args(argv)
 
 
 def main(argv=None):
     args = parse_arguments(argv)
+
+    if args.suite == "streamed-gemm":
+        for dtype in (np.float32, np.float64):
+            profile_streamed_gemm_suite(
+                dtype, warmups=args.warmups, samples=args.samples,
+                rounds=args.rounds)
+        return
 
     gemm_sides = (4, 9, 16, 27, 64, 81, 243, 256, 729, 1024)
     for dtype in (np.float32, np.float64):
