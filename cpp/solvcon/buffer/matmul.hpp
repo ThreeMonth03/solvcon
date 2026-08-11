@@ -66,6 +66,30 @@ struct PackingState
 }; /* end struct PackingState */
 
 /**
+ * @brief Describe one measured Strassen dispatch region.
+ */
+struct StrassenWorkload
+{
+    ssize_t minimum_rows;
+    ssize_t minimum_columns;
+    ssize_t minimum_inner_size;
+    size_t minimum_mnk;
+    ssize_t maximum_rows = std::numeric_limits<ssize_t>::max();
+    ssize_t maximum_columns = std::numeric_limits<ssize_t>::max();
+    ssize_t maximum_inner_size = std::numeric_limits<ssize_t>::max();
+}; /* end struct StrassenWorkload */
+
+/**
+ * @brief Group measured Strassen workloads by recursion depth.
+ */
+struct StrassenTuning
+{
+    std::array<StrassenWorkload, 2> float_depth1;
+    std::array<StrassenWorkload, 1> double_depth1;
+    std::array<StrassenWorkload, 1> double_depth2;
+}; /* end struct StrassenTuning */
+
+/**
  * @brief Group measured thresholds by matmul dispatch decision.
  *
  * A tuning table supplies the workload boundaries used to compare generic,
@@ -109,31 +133,10 @@ struct MatmulTuning
         size_t reuse_min_total_output_elements;
     }; /* end struct BatchedVector */
 
-    /**
-     * @brief Group measured Strassen workloads by recursion depth.
-     */
-    struct Strassen
-    {
-        struct Workload
-        {
-            ssize_t minimum_rows;
-            ssize_t minimum_columns;
-            ssize_t minimum_inner_size;
-            size_t minimum_mnk;
-            ssize_t maximum_rows = std::numeric_limits<ssize_t>::max();
-            ssize_t maximum_columns = std::numeric_limits<ssize_t>::max();
-            ssize_t maximum_inner_size = std::numeric_limits<ssize_t>::max();
-        }; /* end struct Workload */
-
-        std::array<Workload, 2> float_depth1;
-        std::array<Workload, 1> double_depth1;
-        std::array<Workload, 1> double_depth2;
-    }; /* end struct Strassen */
-
     DirectBlas direct_blas;
     MatrixPacking matrix_packing;
     BatchedVector batched_vector;
-    Strassen strassen;
+    StrassenTuning strassen;
 }; /* end struct MatmulTuning */
 
 constexpr size_t ceil_divide(size_t numerator, size_t denominator) noexcept
@@ -142,7 +145,7 @@ constexpr size_t ceil_divide(size_t numerator, size_t denominator) noexcept
 }
 
 constexpr bool meets_strassen_workload(
-    MatmulTuning::Strassen::Workload const & workload,
+    StrassenWorkload const & workload,
     ssize_t rows,
     ssize_t columns,
     ssize_t inner_size,
@@ -174,7 +177,7 @@ constexpr bool meets_strassen_workload(
 
 template <size_t N>
 constexpr bool meets_strassen_workload(
-    std::array<MatmulTuning::Strassen::Workload, N> const & workloads,
+    std::array<StrassenWorkload, N> const & workloads,
     ssize_t rows,
     ssize_t columns,
     ssize_t inner_size,
@@ -182,13 +185,13 @@ constexpr bool meets_strassen_workload(
 {
     return std::ranges::any_of(
         workloads,
-        [=](MatmulTuning::Strassen::Workload const & workload)
+        [=](StrassenWorkload const & workload)
         { return meets_strassen_workload(workload, rows, columns, inner_size, depth); });
 }
 
 template <typename T>
 constexpr std::optional<MatmulKernel> select_strassen_kernel(
-    MatmulTuning::Strassen const & tuning,
+    StrassenTuning const & tuning,
     ssize_t rows,
     ssize_t columns,
     ssize_t inner_size) noexcept
@@ -214,7 +217,7 @@ constexpr std::optional<MatmulKernel> select_strassen_kernel(
     return std::nullopt;
 }
 
-inline constexpr MatmulTuning::Strassen APPLE_ARM64_STRASSEN_TUNING{
+inline constexpr StrassenTuning APPLE_ARM64_STRASSEN_TUNING{
     .float_depth1 = {{
         {
             .minimum_rows = 5632,
