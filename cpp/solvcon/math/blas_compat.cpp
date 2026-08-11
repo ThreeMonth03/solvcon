@@ -411,62 +411,98 @@ void gemv(ssize_t m, ssize_t n, BlasMatrixView<Complex<double>> matrix, BlasVect
     cblas_zgemv(CblasRowMajor, bop, bm, bn, &alpha, matrix_data, blda, vector_data, bincx, &beta, result_data, 1);
 }
 
-void gemm(ssize_t m, ssize_t n, ssize_t k, BlasMatrixView<float> lhs, BlasMatrixView<float> rhs, float * result)
+void gemm(ssize_t m,
+          ssize_t n,
+          ssize_t k,
+          BlasMatrixView<float> lhs,
+          BlasMatrixView<float> rhs,
+          BlasOutputView<float> output,
+          float alpha,
+          float beta)
 {
     blas_int_type const bm = to_blas_int(m, "m");
     blas_int_type const bn = to_blas_int(n, "n");
     blas_int_type const bk = to_blas_int(k, "k");
     blas_int_type const blda = to_blas_int(lhs.m_leading_dimension, "lda");
     blas_int_type const bldb = to_blas_int(rhs.m_leading_dimension, "ldb");
+    blas_int_type const bldc = to_blas_int(output.m_leading_dimension, "ldc");
     CBLAS_TRANSPOSE const opa = to_cblas_transpose(lhs.m_transpose);
     CBLAS_TRANSPOSE const opb = to_cblas_transpose(rhs.m_transpose);
-    cblas_sgemm(CblasRowMajor, opa, opb, bm, bn, bk, 1.0F, lhs.m_data, blda, rhs.m_data, bldb, 0.0F, result, bn);
+    cblas_sgemm(
+        CblasRowMajor, opa, opb, bm, bn, bk, alpha, lhs.m_data, blda, rhs.m_data, bldb, beta, output.m_data, bldc);
 }
 
-void gemm(ssize_t m, ssize_t n, ssize_t k, BlasMatrixView<double> lhs, BlasMatrixView<double> rhs, double * result)
+void gemm(ssize_t m,
+          ssize_t n,
+          ssize_t k,
+          BlasMatrixView<double> lhs,
+          BlasMatrixView<double> rhs,
+          BlasOutputView<double> output,
+          double alpha,
+          double beta)
 {
     blas_int_type const bm = to_blas_int(m, "m");
     blas_int_type const bn = to_blas_int(n, "n");
     blas_int_type const bk = to_blas_int(k, "k");
     blas_int_type const blda = to_blas_int(lhs.m_leading_dimension, "lda");
     blas_int_type const bldb = to_blas_int(rhs.m_leading_dimension, "ldb");
+    blas_int_type const bldc = to_blas_int(output.m_leading_dimension, "ldc");
     CBLAS_TRANSPOSE const opa = to_cblas_transpose(lhs.m_transpose);
     CBLAS_TRANSPOSE const opb = to_cblas_transpose(rhs.m_transpose);
-    cblas_dgemm(CblasRowMajor, opa, opb, bm, bn, bk, 1.0, lhs.m_data, blda, rhs.m_data, bldb, 0.0, result, bn);
+    cblas_dgemm(
+        CblasRowMajor, opa, opb, bm, bn, bk, alpha, lhs.m_data, blda, rhs.m_data, bldb, beta, output.m_data, bldc);
 }
 
-void gemm(ssize_t m, ssize_t n, ssize_t k, BlasMatrixView<Complex<float>> lhs, BlasMatrixView<Complex<float>> rhs, Complex<float> * result)
+void gemm(ssize_t m,
+          ssize_t n,
+          ssize_t k,
+          BlasMatrixView<Complex<float>> lhs,
+          BlasMatrixView<Complex<float>> rhs,
+          BlasOutputView<Complex<float>> output,
+          Complex<float> alpha,
+          Complex<float> beta)
 {
     blas_int_type const bm = to_blas_int(m, "m");
     blas_int_type const bn = to_blas_int(n, "n");
     blas_int_type const bk = to_blas_int(k, "k");
     blas_int_type const blda = to_blas_int(lhs.m_leading_dimension, "lda");
     blas_int_type const bldb = to_blas_int(rhs.m_leading_dimension, "ldb");
+    blas_int_type const bldc = to_blas_int(output.m_leading_dimension, "ldc");
     CBLAS_TRANSPOSE const opa = to_cblas_transpose(lhs.m_transpose);
     CBLAS_TRANSPOSE const opb = to_cblas_transpose(rhs.m_transpose);
-    std::complex<float> const alpha{1.0F, 0.0F};
-    std::complex<float> const beta{0.0F, 0.0F};
     auto const * lhs_data = as_std_complex_pointer(lhs.m_data);
     auto const * rhs_data = as_std_complex_pointer(rhs.m_data);
-    auto * result_data = as_std_complex_pointer(result);
-    cblas_cgemm(CblasRowMajor, opa, opb, bm, bn, bk, &alpha, lhs_data, blda, rhs_data, bldb, &beta, result_data, bn);
+    auto * output_data = as_std_complex_pointer(output.m_data);
+    std::complex<float> const balpha = alpha.to_std_complex();
+    std::complex<float> const bbeta = beta.to_std_complex();
+    cblas_cgemm(
+        CblasRowMajor, opa, opb, bm, bn, bk, &balpha, lhs_data, blda, rhs_data, bldb, &bbeta, output_data, bldc);
 }
 
-void gemm(ssize_t m, ssize_t n, ssize_t k, BlasMatrixView<Complex<double>> lhs, BlasMatrixView<Complex<double>> rhs, Complex<double> * result)
+void gemm(ssize_t m,
+          ssize_t n,
+          ssize_t k,
+          BlasMatrixView<Complex<double>> lhs,
+          BlasMatrixView<Complex<double>> rhs,
+          BlasOutputView<Complex<double>> output,
+          Complex<double> alpha,
+          Complex<double> beta)
 {
     blas_int_type const bm = to_blas_int(m, "m");
     blas_int_type const bn = to_blas_int(n, "n");
     blas_int_type const bk = to_blas_int(k, "k");
     blas_int_type const blda = to_blas_int(lhs.m_leading_dimension, "lda");
     blas_int_type const bldb = to_blas_int(rhs.m_leading_dimension, "ldb");
+    blas_int_type const bldc = to_blas_int(output.m_leading_dimension, "ldc");
     CBLAS_TRANSPOSE const opa = to_cblas_transpose(lhs.m_transpose);
     CBLAS_TRANSPOSE const opb = to_cblas_transpose(rhs.m_transpose);
-    std::complex<double> const alpha{1.0, 0.0};
-    std::complex<double> const beta{0.0, 0.0};
     auto const * lhs_data = as_std_complex_pointer(lhs.m_data);
     auto const * rhs_data = as_std_complex_pointer(rhs.m_data);
-    auto * result_data = as_std_complex_pointer(result);
-    cblas_zgemm(CblasRowMajor, opa, opb, bm, bn, bk, &alpha, lhs_data, blda, rhs_data, bldb, &beta, result_data, bn);
+    auto * output_data = as_std_complex_pointer(output.m_data);
+    std::complex<double> const balpha = alpha.to_std_complex();
+    std::complex<double> const bbeta = beta.to_std_complex();
+    cblas_zgemm(
+        CblasRowMajor, opa, opb, bm, bn, bk, &balpha, lhs_data, blda, rhs_data, bldb, &bbeta, output_data, bldc);
 }
 
 } /* end namespace detail */

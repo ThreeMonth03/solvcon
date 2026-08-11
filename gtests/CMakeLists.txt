@@ -58,6 +58,7 @@ target_link_libraries(
     test_nopython
     GTest::gtest_main
     GTest::gmock_main
+    Threads::Threads
     ${APPLE_FWK_ACCELERATE}
 )
 

@@ -1123,9 +1123,11 @@ void MatmulExecutor<Array>::execute_strassen()
             m_plan.inner_size(),
             require_matrix_view(lhs_matrix_view(m_lhs_data)),
             require_matrix_view(rhs_matrix_view(m_rhs_data)),
-            m_output_data,
+            {m_output_data, m_plan.columns()},
+            value_type{1},
+            value_type{0},
         };
-        gemm_strassen<Depth>(gemm, workspace);
+        gemm_strassen<Depth>(gemm, workspace, strassen::TransformSchedule::Serial);
         return;
     }
 #endif
