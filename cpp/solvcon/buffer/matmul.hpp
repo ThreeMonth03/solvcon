@@ -1127,7 +1127,7 @@ void MatmulExecutor<Array>::execute_strassen()
             value_type{1},
             value_type{0},
         };
-        gemm_strassen<Depth>(gemm, workspace, strassen::TransformSchedule::Serial);
+        gemm_strassen<Depth>(gemm, workspace, strassen::TransformSchedule::PreferParallel);
         return;
     }
 #endif
