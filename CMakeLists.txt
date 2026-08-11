@@ -5,6 +5,7 @@ cmake_minimum_required(VERSION 4.0.1)
 project(solvcon)
 
 enable_testing()
+find_package(Threads REQUIRED)
 
 # The presets and the Makefile always state a build type. A configure that
 # names neither, which is a bare `cmake -S . -B <dir>`, would otherwise get an

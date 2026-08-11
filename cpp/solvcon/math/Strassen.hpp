@@ -36,8 +36,14 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <condition_variable>
+#include <exception>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <stdexcept>
+#include <system_error>
+#include <thread>
 
 namespace solvcon
 {
@@ -114,6 +120,107 @@ T * Workspace<T>::allocate(size_t count)
     return block;
 }
 
+/// Select serial execution or depth-one parallel execution for block transforms.
+enum class TransformSchedule
+{
+    Serial,
+    Parallel,
+}; /* end enum class TransformSchedule */
+
+/**
+ * @brief Reuse one worker team across the transforms of a Strassen step.
+ *
+ * The caller occupies one lane. Three persistent workers occupy the remaining
+ * lanes and sleep while a multiplication callback runs. One caller may submit
+ * one transform at a time. Callback exceptions are rethrown to that caller
+ * after every lane completes.
+ */
+class TransformTeam
+{
+public:
+    static constexpr size_t LANE_COUNT = 4;
+
+    TransformTeam();
+    ~TransformTeam();
+
+    TransformTeam(TransformTeam const &) = delete;
+    TransformTeam & operator=(TransformTeam const &) = delete;
+    TransformTeam(TransformTeam &&) = delete;
+    TransformTeam & operator=(TransformTeam &&) = delete;
+
+    template <typename Function>
+    void run(ssize_t rows, Function const & function);
+
+private:
+    static constexpr size_t WORKER_COUNT = LANE_COUNT - 1;
+    using invoke_type = void (*)(void const *, ssize_t, ssize_t);
+
+    template <typename Function>
+    static void invoke(void const * function, ssize_t first, ssize_t last);
+
+    void execute_lane(size_t lane) noexcept;
+    void worker_loop(size_t lane);
+    void stop() noexcept;
+
+    std::mutex m_mutex;
+    std::condition_variable m_job_ready;
+    std::condition_variable m_workers_done;
+    void const * m_function = nullptr;
+    invoke_type m_invoke = nullptr;
+    ssize_t m_rows = 0;
+    size_t m_generation = 0;
+    size_t m_completed_workers = 0;
+    bool m_stopping = false;
+    std::exception_ptr m_errors[LANE_COUNT]{}; // NOLINT(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
+    // Workers remain last so their destructors join before the job state is destroyed.
+    std::jthread m_workers[WORKER_COUNT]; // NOLINT(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
+}; /* end class TransformTeam */
+
+template <typename Function>
+void TransformTeam::run(ssize_t rows, Function const & function)
+{
+    {
+        std::lock_guard lock(m_mutex);
+        std::ranges::fill(m_errors, std::exception_ptr{});
+        m_function = &function;
+        m_invoke = invoke<Function>;
+        m_rows = rows;
+        m_completed_workers = 0;
+        ++m_generation;
+    }
+    m_job_ready.notify_all();
+    execute_lane(WORKER_COUNT);
+
+    std::unique_lock lock(m_mutex);
+    m_workers_done.wait(lock, [this]
+                        { return m_completed_workers == WORKER_COUNT; });
+    lock.unlock();
+    for (std::exception_ptr const & error : m_errors)
+    {
+        if (error)
+        {
+            std::rethrow_exception(error);
+        }
+    }
+}
+
+template <typename Function>
+void TransformTeam::invoke(void const * function, ssize_t first, ssize_t last)
+{
+    (*static_cast<Function const *>(function))(first, last);
+}
+
+template <typename Function>
+void run_transform_rows(TransformTeam * team, ssize_t rows, Function const & function)
+{
+    if (team)
+    {
+        team->run(rows, function);
+        return;
+    }
+    function(0, rows);
+}
+
 template <size_t Depth>
 size_t workspace_size(ssize_t rows, ssize_t columns, ssize_t inner_size)
 {
@@ -168,43 +275,75 @@ BlasMatrixView<T> make_subview(BlasMatrixView<T> matrix, ssize_t row, ssize_t co
 }
 
 template <typename T>
-void combine_block(BlasMatrixView<T> lhs, BlasMatrixView<T> rhs, T * output, ssize_t rows, ssize_t columns, T rhs_scale)
+void combine_block(
+    TransformTeam * team,
+    BlasMatrixView<T> lhs,
+    BlasMatrixView<T> rhs,
+    T * output,
+    ssize_t rows,
+    ssize_t columns,
+    T rhs_scale)
 {
-    for (ssize_t row = 0; row < rows; ++row)
+    auto const combine_rows = [=](ssize_t first, ssize_t last)
     {
-        T const * lhs_row = lhs.m_data + row * lhs.m_leading_dimension;
-        T const * rhs_row = rhs.m_data + row * rhs.m_leading_dimension;
-        T * output_row = output + row * columns;
-        for (ssize_t column = 0; column < columns; ++column)
+        for (ssize_t row = first; row < last; ++row)
         {
-            output_row[column] = lhs_row[column] + rhs_scale * rhs_row[column];
+            T const * lhs_row = lhs.m_data + row * lhs.m_leading_dimension;
+            T const * rhs_row = rhs.m_data + row * rhs.m_leading_dimension;
+            T * output_row = output + row * columns;
+            for (ssize_t column = 0; column < columns; ++column)
+            {
+                output_row[column] = lhs_row[column] + rhs_scale * rhs_row[column];
+            }
         }
-    }
+    };
+    run_transform_rows(team, rows, combine_rows);
 }
 
 template <typename T>
-void copy_block(T * output, ssize_t output_stride, T const * input, ssize_t rows, ssize_t columns)
+void copy_block(
+    TransformTeam * team,
+    T * output,
+    ssize_t output_stride,
+    T const * input,
+    ssize_t rows,
+    ssize_t columns)
 {
-    for (ssize_t row = 0; row < rows; ++row)
+    auto const copy_rows = [=](ssize_t first, ssize_t last)
     {
-        T * output_row = output + row * output_stride;
-        T const * input_row = input + row * columns;
-        std::copy_n(input_row, columns, output_row);
-    }
+        for (ssize_t row = first; row < last; ++row)
+        {
+            T * output_row = output + row * output_stride;
+            T const * input_row = input + row * columns;
+            std::copy_n(input_row, columns, output_row);
+        }
+    };
+    run_transform_rows(team, rows, copy_rows);
 }
 
 template <typename T>
-void add_block(T * output, ssize_t output_stride, T const * input, ssize_t rows, ssize_t columns, T scale)
+void add_block(
+    TransformTeam * team,
+    T * output,
+    ssize_t output_stride,
+    T const * input,
+    ssize_t rows,
+    ssize_t columns,
+    T scale)
 {
-    for (ssize_t row = 0; row < rows; ++row)
+    auto const add_rows = [=](ssize_t first, ssize_t last)
     {
-        T * output_row = output + row * output_stride;
-        T const * input_row = input + row * columns;
-        for (ssize_t column = 0; column < columns; ++column)
+        for (ssize_t row = first; row < last; ++row)
         {
-            output_row[column] += scale * input_row[column];
+            T * output_row = output + row * output_stride;
+            T const * input_row = input + row * columns;
+            for (ssize_t column = 0; column < columns; ++column)
+            {
+                output_row[column] += scale * input_row[column];
+            }
         }
-    }
+    };
+    run_transform_rows(team, rows, add_rows);
 }
 
 /**
@@ -214,8 +353,9 @@ void add_block(T * output, ssize_t output_stride, T const * input, ssize_t rows,
  * borrows three Workspace blocks to form the next lhs and rhs operands and to
  * store one product. evaluate() computes P1-P7 sequentially through a
  * caller-provided multiplication callback and assembles the four output
- * quadrants. The callback, rather than Step, decides whether a product recurses
- * or reaches the leaf backend.
+ * quadrants. An optional TransformTeam partitions each row-independent block
+ * transform; the callback, rather than Step, decides whether a product
+ * recurses or reaches the leaf backend.
  *
  * For an `8 x 12 x 16` contraction, one Step forms seven `4 x 6 x 8`
  * product descriptors while reusing the same three scratch blocks.
@@ -227,7 +367,7 @@ public:
     Step(Gemm<T> const & gemm, Workspace<T> & workspace);
 
     template <typename Multiply>
-    void evaluate(Multiply const & multiply) const;
+    void evaluate(Multiply const & multiply, TransformTeam * team) const;
 
 private:
     struct Product
@@ -242,25 +382,33 @@ private:
 
     BlasMatrixView<T> lhs_block() const { return {m_product.lhs, m_product.inner_size, BlasTranspose::None}; }
     BlasMatrixView<T> rhs_block() const { return {m_product.rhs, m_product.columns, BlasTranspose::None}; }
-    void form_lhs(BlasMatrixView<T> lhs, BlasMatrixView<T> rhs, T rhs_scale) const
+    void form_lhs(
+        TransformTeam * team,
+        BlasMatrixView<T> lhs,
+        BlasMatrixView<T> rhs,
+        T rhs_scale) const
     {
-        combine_block(lhs, rhs, m_product.lhs, m_product.rows, m_product.inner_size, rhs_scale);
+        combine_block(team, lhs, rhs, m_product.lhs, m_product.rows, m_product.inner_size, rhs_scale);
     }
-    void form_rhs(BlasMatrixView<T> lhs, BlasMatrixView<T> rhs, T rhs_scale) const
+    void form_rhs(
+        TransformTeam * team,
+        BlasMatrixView<T> lhs,
+        BlasMatrixView<T> rhs,
+        T rhs_scale) const
     {
-        combine_block(lhs, rhs, m_product.rhs, m_product.inner_size, m_product.columns, rhs_scale);
+        combine_block(team, lhs, rhs, m_product.rhs, m_product.inner_size, m_product.columns, rhs_scale);
     }
 
     template <typename Multiply>
     void multiply_product(BlasMatrixView<T> lhs, BlasMatrixView<T> rhs, Multiply const & multiply) const;
 
-    void initialize_output(T * destination) const
+    void initialize_output(TransformTeam * team, T * destination) const
     {
-        copy_block(destination, m_output_stride, m_product.output, m_product.rows, m_product.columns);
+        copy_block(team, destination, m_output_stride, m_product.output, m_product.rows, m_product.columns);
     }
-    void accumulate_output(T * destination, T scale) const
+    void accumulate_output(TransformTeam * team, T * destination, T scale) const
     {
-        add_block(destination, m_output_stride, m_product.output, m_product.rows, m_product.columns, scale);
+        add_block(team, destination, m_output_stride, m_product.output, m_product.rows, m_product.columns, scale);
     }
 
     Product m_product;
@@ -322,50 +470,50 @@ void Step<T>::multiply_product(BlasMatrixView<T> lhs, BlasMatrixView<T> rhs, Mul
 
 template <typename T>
 template <typename Multiply>
-void Step<T>::evaluate(Multiply const & multiply) const
+void Step<T>::evaluate(Multiply const & multiply, TransformTeam * team) const
 {
     // P1 = (A11 + A22)(B11 + B22); initialize C11 and C22.
-    form_lhs(m_a11, m_a22, T{1});
-    form_rhs(m_b11, m_b22, T{1});
+    form_lhs(team, m_a11, m_a22, T{1});
+    form_rhs(team, m_b11, m_b22, T{1});
     multiply_product(lhs_block(), rhs_block(), multiply);
-    initialize_output(m_c11);
-    initialize_output(m_c22);
+    initialize_output(team, m_c11);
+    initialize_output(team, m_c22);
 
     // P2 = (A21 + A22)B11; initialize C21 and subtract from C22.
-    form_lhs(m_a21, m_a22, T{1});
+    form_lhs(team, m_a21, m_a22, T{1});
     multiply_product(lhs_block(), m_b11, multiply);
-    initialize_output(m_c21);
-    accumulate_output(m_c22, T{-1});
+    initialize_output(team, m_c21);
+    accumulate_output(team, m_c22, T{-1});
 
     // P3 = A11(B12 - B22); initialize C12 and add to C22.
-    form_rhs(m_b12, m_b22, T{-1});
+    form_rhs(team, m_b12, m_b22, T{-1});
     multiply_product(m_a11, rhs_block(), multiply);
-    initialize_output(m_c12);
-    accumulate_output(m_c22, T{1});
+    initialize_output(team, m_c12);
+    accumulate_output(team, m_c22, T{1});
 
     // P4 = A22(B21 - B11); add to C11 and C21.
-    form_rhs(m_b21, m_b11, T{-1});
+    form_rhs(team, m_b21, m_b11, T{-1});
     multiply_product(m_a22, rhs_block(), multiply);
-    accumulate_output(m_c11, T{1});
-    accumulate_output(m_c21, T{1});
+    accumulate_output(team, m_c11, T{1});
+    accumulate_output(team, m_c21, T{1});
 
     // P5 = (A11 + A12)B22; subtract from C11 and add to C12.
-    form_lhs(m_a11, m_a12, T{1});
+    form_lhs(team, m_a11, m_a12, T{1});
     multiply_product(lhs_block(), m_b22, multiply);
-    accumulate_output(m_c11, T{-1});
-    accumulate_output(m_c12, T{1});
+    accumulate_output(team, m_c11, T{-1});
+    accumulate_output(team, m_c12, T{1});
 
     // P6 = (A21 - A11)(B11 + B12); add to C22.
-    form_lhs(m_a21, m_a11, T{-1});
-    form_rhs(m_b11, m_b12, T{1});
+    form_lhs(team, m_a21, m_a11, T{-1});
+    form_rhs(team, m_b11, m_b12, T{1});
     multiply_product(lhs_block(), rhs_block(), multiply);
-    accumulate_output(m_c22, T{1});
+    accumulate_output(team, m_c22, T{1});
 
     // P7 = (A12 - A22)(B21 + B22); add to C11.
-    form_lhs(m_a12, m_a22, T{-1});
-    form_rhs(m_b21, m_b22, T{1});
+    form_lhs(team, m_a12, m_a22, T{-1});
+    form_rhs(team, m_b21, m_b22, T{1});
     multiply_product(lhs_block(), rhs_block(), multiply);
-    accumulate_output(m_c11, T{1});
+    accumulate_output(team, m_c11, T{1});
 }
 
 template <typename T, typename Leaf>
@@ -379,11 +527,11 @@ public:
     }
 
     template <size_t Depth>
-    void multiply(Gemm<T> const & gemm);
+    void multiply(Gemm<T> const & gemm, TransformSchedule transform_schedule);
 
 private:
     template <size_t Depth>
-    void recurse(Gemm<T> const & gemm);
+    void recurse(Gemm<T> const & gemm, TransformTeam * team);
 
     Workspace<T> & m_workspace;
     Leaf const & m_leaf;
@@ -391,16 +539,34 @@ private:
 
 template <typename T, typename Leaf>
 template <size_t Depth>
-void Kernel<T, Leaf>::multiply(Gemm<T> const & gemm)
+void Kernel<T, Leaf>::multiply(
+    Gemm<T> const & gemm,
+    TransformSchedule transform_schedule)
 {
     validate<Depth>(gemm);
     m_workspace.prepare(workspace_size<Depth>(gemm.rows, gemm.columns, gemm.inner_size));
-    recurse<Depth>(gemm);
+
+    std::optional<TransformTeam> transform_team;
+    if constexpr (Depth == 1)
+    {
+        if (transform_schedule == TransformSchedule::Parallel)
+        {
+            try
+            {
+                transform_team.emplace();
+            }
+            catch (std::system_error const &)
+            {
+                // Continue serially when the operating system cannot create the workers.
+            }
+        }
+    }
+    recurse<Depth>(gemm, transform_team ? &*transform_team : nullptr);
 }
 
 template <typename T, typename Leaf>
 template <size_t Depth>
-void Kernel<T, Leaf>::recurse(Gemm<T> const & gemm)
+void Kernel<T, Leaf>::recurse(Gemm<T> const & gemm, TransformTeam * team)
 {
     if constexpr (Depth == 0)
     {
@@ -411,23 +577,30 @@ void Kernel<T, Leaf>::recurse(Gemm<T> const & gemm)
         size_t const mark = m_workspace.mark();
         Step<T> const step(gemm, m_workspace);
         auto const recurse_product = [this](Gemm<T> const & product)
-        { this->template recurse<Depth - 1>(product); };
-        step.evaluate(recurse_product);
+        { this->template recurse<Depth - 1>(product, nullptr); };
+        step.evaluate(recurse_product, team);
         m_workspace.rewind(mark);
     }
 }
 
 template <size_t Depth, typename T, typename Leaf>
-void multiply(Gemm<T> const & gemm, Workspace<T> & workspace, Leaf const & leaf)
+void multiply(
+    Gemm<T> const & gemm,
+    Workspace<T> & workspace,
+    Leaf const & leaf,
+    TransformSchedule transform_schedule)
 {
     Kernel<T, Leaf> kernel(workspace, leaf);
-    kernel.template multiply<Depth>(gemm);
+    kernel.template multiply<Depth>(gemm, transform_schedule);
 }
 
 } /* end namespace strassen */
 
 template <size_t Depth, typename T>
-void gemm_strassen(strassen::Gemm<T> const & gemm, strassen::Workspace<T> & workspace)
+void gemm_strassen(
+    strassen::Gemm<T> const & gemm,
+    strassen::Workspace<T> & workspace,
+    strassen::TransformSchedule transform_schedule)
 {
     auto const leaf = [](strassen::Gemm<T> const & leaf_gemm)
     {
@@ -439,7 +612,7 @@ void gemm_strassen(strassen::Gemm<T> const & gemm, strassen::Workspace<T> & work
             leaf_gemm.rhs,
             leaf_gemm.output);
     };
-    strassen::multiply<Depth>(gemm, workspace, leaf);
+    strassen::multiply<Depth>(gemm, workspace, leaf, transform_schedule);
 }
 
 } /* end namespace detail */

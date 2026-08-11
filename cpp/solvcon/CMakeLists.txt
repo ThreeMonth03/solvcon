@@ -122,6 +122,7 @@ add_library(
     STATIC
     ${SOLVCON_TERMINAL_FILES}
 )
+target_link_libraries(solvcon_primary PUBLIC Threads::Threads)
 
 set(SOLVCON_LIBRARIES solvcon_primary)
 

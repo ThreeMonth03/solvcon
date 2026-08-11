@@ -6,6 +6,8 @@
 #include <solvcon/math/Strassen.hpp>
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <limits>
@@ -24,6 +26,10 @@ namespace
 
 namespace detail = solvcon::detail;
 namespace strassen = solvcon::detail::strassen;
+constexpr strassen::TransformSchedule SERIAL_TRANSFORM_SCHEDULE =
+    strassen::TransformSchedule::Serial;
+constexpr strassen::TransformSchedule PARALLEL_TRANSFORM_SCHEDULE =
+    strassen::TransformSchedule::Parallel;
 
 template <typename T>
 void fill_operands(ssize_t rows, ssize_t columns, ssize_t inner_size, std::vector<T> & lhs, std::vector<T> & rhs)
@@ -80,7 +86,11 @@ void expect_near(std::vector<T> const & output, std::vector<T> const & expected)
 
 template <typename T, size_t Depth>
 size_t run_strassen(
-    ssize_t rows, ssize_t columns, ssize_t inner_size, strassen::Workspace<T> & workspace)
+    ssize_t rows,
+    ssize_t columns,
+    ssize_t inner_size,
+    strassen::Workspace<T> & workspace,
+    strassen::TransformSchedule transform_schedule)
 {
     std::vector<T> lhs;
     std::vector<T> rhs;
@@ -98,7 +108,7 @@ size_t run_strassen(
         ++leaf_calls;
         reference_gemm(leaf_gemm);
     };
-    strassen::multiply<Depth>(gemm, workspace, leaf);
+    strassen::multiply<Depth>(gemm, workspace, leaf, transform_schedule);
 
     expect_near(output, expected);
     return leaf_calls;
@@ -108,8 +118,34 @@ template <typename T, size_t Depth>
 void check_depth(size_t expected_leaf_calls)
 {
     strassen::Workspace<T> workspace;
-    size_t const leaf_calls = run_strassen<T, Depth>(8, 12, 16, workspace);
+    size_t const leaf_calls = run_strassen<T, Depth>(8, 12, 16, workspace, SERIAL_TRANSFORM_SCHEDULE);
     EXPECT_EQ(leaf_calls, expected_leaf_calls);
+}
+
+template <typename T>
+void check_parallel_transforms()
+{
+    constexpr ssize_t rows = 8;
+    constexpr ssize_t columns = 12;
+    constexpr ssize_t inner_size = 16;
+    std::vector<T> lhs;
+    std::vector<T> rhs;
+    fill_operands(rows, columns, inner_size, lhs, rhs);
+    std::vector<T> serial_output(static_cast<size_t>(rows * columns));
+    std::vector<T> parallel_output(static_cast<size_t>(rows * columns));
+    strassen::Gemm<T> const serial_gemm = make_gemm(
+        rows, columns, inner_size, lhs.data(), rhs.data(), serial_output.data());
+    strassen::Gemm<T> const parallel_gemm = make_gemm(
+        rows, columns, inner_size, lhs.data(), rhs.data(), parallel_output.data());
+    auto const leaf = [](strassen::Gemm<T> const & product)
+    { reference_gemm(product); };
+
+    strassen::Workspace<T> serial_workspace;
+    strassen::Workspace<T> parallel_workspace;
+    strassen::multiply<1>(serial_gemm, serial_workspace, leaf, SERIAL_TRANSFORM_SCHEDULE);
+    strassen::multiply<1>(parallel_gemm, parallel_workspace, leaf, PARALLEL_TRANSFORM_SCHEDULE);
+
+    EXPECT_EQ(serial_output, parallel_output);
 }
 
 } /* end namespace */
@@ -117,12 +153,81 @@ void check_depth(size_t expected_leaf_calls)
 TEST(StrassenKernel, matches_reference_at_each_depth)
 {
     strassen::Workspace<double> workspace;
-    size_t const leaf_calls = run_strassen<double, 0>(3, 5, 7, workspace);
+    size_t const leaf_calls = run_strassen<double, 0>(3, 5, 7, workspace, SERIAL_TRANSFORM_SCHEDULE);
     EXPECT_EQ(leaf_calls, 1);
     check_depth<float, 1>(7);
     check_depth<double, 1>(7);
     check_depth<float, 2>(49);
     check_depth<double, 2>(49);
+}
+
+TEST(StrassenKernel, matches_serial_with_parallel_transforms)
+{
+    check_parallel_transforms<float>();
+    check_parallel_transforms<double>();
+}
+
+TEST(StrassenKernel, partitions_parallel_transform_rows)
+{
+    constexpr size_t row_count = 8;
+    std::array<std::atomic_size_t, row_count> visits{};
+    std::atomic_size_t callback_count = 0;
+    auto const visit_rows = [&](ssize_t first, ssize_t last)
+    {
+        ++callback_count;
+        for (ssize_t row = first; row < last; ++row)
+        {
+            ++visits[static_cast<size_t>(row)];
+        }
+    };
+
+    strassen::TransformTeam team;
+    strassen::run_transform_rows(&team, row_count, visit_rows);
+
+    EXPECT_EQ(callback_count.load(), strassen::TransformTeam::LANE_COUNT);
+    for (std::atomic_size_t const & visit_count : visits)
+    {
+        EXPECT_EQ(visit_count, 1);
+    }
+}
+
+TEST(StrassenKernel, propagates_parallel_transform_errors_and_recovers)
+{
+    constexpr ssize_t row_count = 8;
+    auto const fail_in_worker = [](ssize_t first, ssize_t)
+    {
+        if (first == 0)
+        {
+            throw std::runtime_error("parallel transform failed");
+        }
+    };
+
+    strassen::TransformTeam team;
+    EXPECT_THAT(
+        [&]
+        { strassen::run_transform_rows(&team, row_count, fail_in_worker); },
+        testing::ThrowsMessage<std::runtime_error>("parallel transform failed"));
+
+    constexpr ssize_t caller_first =
+        row_count * (strassen::TransformTeam::LANE_COUNT - 1) /
+        strassen::TransformTeam::LANE_COUNT;
+    auto const fail_in_caller = [=](ssize_t first, ssize_t)
+    {
+        if (first == caller_first)
+        {
+            throw std::runtime_error("caller transform failed");
+        }
+    };
+    EXPECT_THAT(
+        [&]
+        { strassen::run_transform_rows(&team, row_count, fail_in_caller); },
+        testing::ThrowsMessage<std::runtime_error>("caller transform failed"));
+
+    std::atomic_size_t visits = 0;
+    auto const count_rows = [&](ssize_t first, ssize_t last)
+    { visits += static_cast<size_t>(last - first); };
+    strassen::run_transform_rows(&team, row_count, count_rows);
+    EXPECT_EQ(visits.load(), row_count);
 }
 
 TEST(StrassenKernel, rejects_invalid_gemm)
@@ -137,35 +242,35 @@ TEST(StrassenKernel, rejects_invalid_gemm)
     gemm.rows = 0;
     EXPECT_THAT(
         [&]
-        { strassen::multiply<1>(gemm, workspace, leaf); },
+        { strassen::multiply<1>(gemm, workspace, leaf, SERIAL_TRANSFORM_SCHEDULE); },
         testing::ThrowsMessage<std::invalid_argument>("Strassen GEMM dimensions must be positive"));
     gemm.rows = 7;
     EXPECT_THAT(
         [&]
-        { strassen::multiply<1>(gemm, workspace, leaf); },
+        { strassen::multiply<1>(gemm, workspace, leaf, SERIAL_TRANSFORM_SCHEDULE); },
         testing::ThrowsMessage<std::invalid_argument>("Strassen GEMM dimensions must be divisible by 2^depth"));
     gemm.rows = 8;
     gemm.lhs.m_transpose = solvcon::BlasTranspose::Transpose;
     EXPECT_THAT(
         [&]
-        { strassen::multiply<1>(gemm, workspace, leaf); },
+        { strassen::multiply<1>(gemm, workspace, leaf, SERIAL_TRANSFORM_SCHEDULE); },
         testing::ThrowsMessage<std::invalid_argument>("Strassen GEMM does not support transposed input views"));
     gemm.lhs.m_transpose = solvcon::BlasTranspose::None;
     gemm.lhs.m_leading_dimension = 15;
     EXPECT_THAT(
         [&]
-        { strassen::multiply<1>(gemm, workspace, leaf); },
+        { strassen::multiply<1>(gemm, workspace, leaf, SERIAL_TRANSFORM_SCHEDULE); },
         testing::ThrowsMessage<std::invalid_argument>("Strassen GEMM input leading dimensions are too small"));
 }
 
 TEST(StrassenKernel, reuses_workspace)
 {
     strassen::Workspace<double> workspace;
-    run_strassen<double, 2>(8, 12, 16, workspace);
+    run_strassen<double, 2>(8, 12, 16, workspace, SERIAL_TRANSFORM_SCHEDULE);
     size_t const capacity = workspace.capacity();
-    run_strassen<double, 1>(6, 10, 8, workspace);
+    run_strassen<double, 1>(6, 10, 8, workspace, SERIAL_TRANSFORM_SCHEDULE);
     EXPECT_EQ(workspace.capacity(), capacity);
-    run_strassen<double, 2>(8, 12, 16, workspace);
+    run_strassen<double, 2>(8, 12, 16, workspace, SERIAL_TRANSFORM_SCHEDULE);
     EXPECT_EQ(workspace.capacity(), capacity);
 }
 
@@ -177,12 +282,12 @@ TEST(StrassenKernel, blas_leaf)
     strassen::Workspace<double> workspace;
     strassen::Gemm<double> const gemm = make_gemm(1, 1, 1, &lhs, &rhs, &output);
 #if (defined(__APPLE__) && defined(__arm64__)) || defined(SC_HAS_CBLAS)
-    detail::gemm_strassen<0>(gemm, workspace);
+    detail::gemm_strassen<0>(gemm, workspace, SERIAL_TRANSFORM_SCHEDULE);
     EXPECT_EQ(output, 6);
 #else
     EXPECT_THAT(
         [&]
-        { detail::gemm_strassen<0>(gemm, workspace); },
+        { detail::gemm_strassen<0>(gemm, workspace, SERIAL_TRANSFORM_SCHEDULE); },
         testing::ThrowsMessage<std::runtime_error>("solvcon BLAS wrapper: CBLAS backend is unavailable"));
 #endif
 }
