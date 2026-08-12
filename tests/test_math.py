@@ -1,6 +1,7 @@
 # Copyright (c) 2025, solvcon team <contact@solvcon.net>
 # BSD 3-Clause License, see COPYING
 
+import operator
 import unittest
 
 import numpy as np
@@ -162,6 +163,29 @@ class ComplexTB(sc.testing.TestBase):
         self.assertFalse(cplx1 < same)
         self.assertFalse(cplx1 > same)
         self.assertTrue(cplx1 == same)
+
+    def test_operator_comparison_numpy(self):
+        cases = (
+            ((1.0, 2.0), (1.0, 2.0)),
+            ((1.0, 2.0), (1.0, 3.0)),
+            ((-1.0, np.nan), (100.0, 0.0)),
+            ((100.0, 0.0), (-1.0, np.nan)),
+            ((1.0, np.nan), (1.0, 0.0)),
+            ((np.nan, 0.0), (1.0, 0.0)),
+        )
+        operations = (operator.lt, operator.le, operator.gt, operator.ge)
+
+        for lhs_parts, rhs_parts in cases:
+            lhs = self.sc_complex(*lhs_parts)
+            rhs = self.sc_complex(*rhs_parts)
+            np_lhs = self.expected_dtype.type(complex(*lhs_parts))
+            np_rhs = self.expected_dtype.type(complex(*rhs_parts))
+            for operation in operations:
+                with self.subTest(lhs=lhs_parts, rhs=rhs_parts,
+                                  operation=operation.__name__):
+                    with np.errstate(invalid='ignore'):
+                        expected = operation(np_lhs, np_rhs)
+                    self.assertEqual(operation(lhs, rhs), expected)
 
     def test_norm(self):
         cplx = self.sc_complex(self.real1, self.imag1)

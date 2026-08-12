@@ -10,6 +10,11 @@ import numpy as np
 import solvcon
 
 
+def _assert_complex_equal(actual, expected):
+    np.testing.assert_equal(np.real(actual), np.real(expected))
+    np.testing.assert_equal(np.imag(actual), np.imag(expected))
+
+
 class ConcreteBufferBasicTC(unittest.TestCase):
 
     def test_ConcreteBuffer(self):
@@ -2174,6 +2179,55 @@ class SimpleArrayCalculatorsTC(unittest.TestCase):
         self.assertEqual(sarr.min(), -2.3)
         self.assertEqual(sarr.max(), 9.2)
 
+        sarr = solvcon.SimpleArrayFloat64(
+            array=np.array([1.0, np.nan, 0.0], dtype='float64'))
+        self.assertTrue(np.isnan(sarr.min()))
+        self.assertTrue(np.isnan(sarr.max()))
+
+    def test_minmax_complex(self):
+        nan = float('nan')
+        datasets = (
+            [2 + 3j, 1 + 4j],
+            [-4 + 10j, -2 - 9j],
+            [3 + 0j, complex(0, nan), complex(nan, 2)],
+        )
+
+        for dtype in ('complex64', 'complex128'):
+            array_type = getattr(solvcon, f'SimpleArray{dtype.capitalize()}')
+            for values in datasets:
+                with self.subTest(dtype=dtype, values=values):
+                    data = np.array(values, dtype=dtype)
+                    sarr = array_type(array=data)
+                    _assert_complex_equal(complex(sarr.min()), np.min(data))
+                    _assert_complex_equal(complex(sarr.max()), np.max(data))
+
+            scalar = np.array(1 + 2j, dtype=dtype)
+            sarr = array_type(array=scalar)
+            _assert_complex_equal(complex(sarr.min()), np.min(scalar))
+            _assert_complex_equal(complex(sarr.max()), np.max(scalar))
+
+            storage = np.array([
+                [5 + 0j, -999 + 0j, 1 + 2j],
+                [3 + 0j, 999 + 0j, 4 + 0j],
+            ], dtype=dtype)
+            data = storage[:, ::2]
+            sarr = array_type(array=data)
+            _assert_complex_equal(complex(sarr.min()), np.min(data))
+            _assert_complex_equal(complex(sarr.max()), np.max(data))
+
+            empty = np.array([], dtype=dtype)
+            sarr = array_type(array=empty)
+            with self.assertRaises(ValueError):
+                sarr.min()
+            with self.assertRaises(ValueError):
+                sarr.max()
+
+            uninitialized_scalar = array_type(())
+            with self.assertRaises(RuntimeError):
+                uninitialized_scalar.min()
+            with self.assertRaises(RuntimeError):
+                uninitialized_scalar.max()
+
     def test_sum_contiguous(self):
         # 1D contiguous: exercises the straight pointer loop in
         # sum_contiguous() with no shape/stride arithmetic involved.
@@ -2288,6 +2342,40 @@ class SimpleArrayCalculatorsTC(unittest.TestCase):
         sarr = solvcon.SimpleArrayFloat64(array=nparr)
         sarr.nghost = 1
         self.assertEqual(np.median(nparr), sarr.median())
+
+    def test_median_complex_nan(self):
+        nan = float('nan')
+        values = [
+            [1 + 4j, 0 + 2j, 3 + 0j],
+            [1 + 0j, complex(-2, nan), 5 + 0j],
+            [complex(nan, -1), 2 + 0j, 3 + 0j],
+        ]
+
+        for dtype in ('complex64', 'complex128'):
+            array_type = getattr(solvcon, f'SimpleArray{dtype.capitalize()}')
+            data = np.array(values, dtype=dtype)
+            sarr = array_type(array=data)
+            expected = np.median(data, axis=1)
+            actual = sarr.median(axis=1).ndarray
+            _assert_complex_equal(actual, expected)
+
+            data = np.array(
+                [3 + 0j, complex(0, nan), 1 + 0j], dtype=dtype)
+            sarr = array_type(array=data)
+            _assert_complex_equal(complex(sarr.median()), np.median(data))
+
+            scalar = np.array(1 + 2j, dtype=dtype)
+            _assert_complex_equal(
+                complex(array_type(array=scalar).median()), scalar)
+
+            empty = array_type(array=np.empty((0, 2), dtype=dtype))
+            self.assertEqual(empty.median(axis=1).shape, (0,))
+            with self.assertRaises(ValueError):
+                array_type(array=np.array([], dtype=dtype)).median()
+            with self.assertRaises(ValueError):
+                array_type(array=np.empty((2, 0), dtype=dtype)).median(axis=1)
+            with self.assertRaises(RuntimeError):
+                array_type(()).median()
 
     def test_median_with_axis(self):
         nparr = np.arange(120, dtype='float64').reshape((4, 5, 6))
@@ -4544,26 +4632,63 @@ class SimpleArrayCalculatorsTC(unittest.TestCase):
             sres = pyop(sarr1, sarr2)
             np.testing.assert_array_equal(sres.ndarray, nfunc(narr1, narr2))
 
-    def test_order_operator_complex_unsupported(self):
-        """Ordering is undefined for complex, matching numpy
+    def test_order_operator_complex(self):
+        nan = float('nan')
+        lhs_values = [1 + 2j, 1 + 3j, 1 + 9j,
+                      complex(-1, nan), complex(nan, 0), 1 + 0j]
+        rhs_values = [1 + 2j, 1 + 2j, 2 - 9j,
+                      100 + 0j, 1 + 0j, complex(1, nan)]
+        operations = ((operator.lt, np.less),
+                      (operator.le, np.less_equal),
+                      (operator.gt, np.greater),
+                      (operator.ge, np.greater_equal))
 
-        numpy raises TypeError for <, <=, >, >= on complex arrays. Leaving
-        those operators unbound makes SimpleArray behave the same way, while
-        equality (== and !=) stays element-wise.
-        """
-        narr = np.array([1 + 2j, 3 + 4j], dtype='complex128')
-        sarr = solvcon.SimpleArrayComplex128(array=narr)
+        for dtype in ('complex64', 'complex128'):
+            array_type = getattr(solvcon, f'SimpleArray{dtype.capitalize()}')
+            scalar_type = getattr(solvcon, dtype)
+            lhs = np.array(lhs_values, dtype=dtype).reshape(2, 3)[:, ::-1]
+            rhs = np.array(rhs_values, dtype=dtype).reshape(2, 3)[:, ::-1]
+            sarr_lhs = array_type(array=lhs)
+            sarr_rhs = array_type(array=rhs)
+            scalar = scalar_type(1.0, 2.0)
+            np_scalar = np.dtype(dtype).type(1 + 2j)
 
-        for pyop in (operator.lt, operator.le, operator.gt, operator.ge):
-            with self.assertRaises(TypeError):
-                pyop(sarr, sarr)
+            scalar_lhs = np.array(complex(-1, nan), dtype=dtype)
+            scalar_rhs = np.array(100 + 0j, dtype=dtype)
+            actual_0d = array_type(array=scalar_lhs).lt(
+                array_type(array=scalar_rhs)).ndarray
+            np.testing.assert_array_equal(
+                actual_0d, np.less(scalar_lhs, scalar_rhs))
+            actual_scalar_0d = array_type(array=scalar_lhs).lt(
+                scalar_type(100.0, 0.0)).ndarray
+            np.testing.assert_array_equal(
+                actual_scalar_0d, np.less(scalar_lhs, scalar_rhs))
 
-        self.assertFalse(hasattr(sarr, 'lt'))
-        self.assertFalse(hasattr(sarr, 'ge'))
+            uninitialized_scalar = array_type(())
+            with self.assertRaises(RuntimeError):
+                uninitialized_scalar.lt(uninitialized_scalar)
+            with self.assertRaises(RuntimeError):
+                uninitialized_scalar.lt(scalar)
 
-        sres = sarr == sarr
-        self.assertEqual(sres.ndarray.dtype, np.bool_)
-        np.testing.assert_array_equal(sres.ndarray, np.equal(narr, narr))
+            for pyop, nfunc in operations:
+                method = pyop.__name__
+                with self.subTest(dtype=dtype, operation=method):
+                    with np.errstate(invalid='ignore'):
+                        expected = nfunc(lhs, rhs)
+                        scalar_expected = nfunc(lhs, np_scalar)
+
+                    actual = getattr(sarr_lhs, method)(sarr_rhs)
+                    self.assertEqual(actual.ndarray.dtype, np.bool_)
+                    np.testing.assert_array_equal(
+                        actual.ndarray, expected)
+                    np.testing.assert_array_equal(
+                        pyop(sarr_lhs, sarr_rhs).ndarray, expected)
+                    np.testing.assert_array_equal(
+                        getattr(sarr_lhs, method)(scalar).ndarray,
+                        scalar_expected)
+                    np.testing.assert_array_equal(
+                        pyop(sarr_lhs, scalar).ndarray,
+                        scalar_expected)
 
     def test_eye(self):
         """Test eye() static method for creating identity matrices"""
@@ -4764,6 +4889,30 @@ class SimpleArraySearchTC(unittest.TestCase):
             self.assertEqual(sarr.argmax(), 0)
             self.assertEqual(narr.argmin(), sarr.argmin())
             self.assertEqual(narr.argmax(), sarr.argmax())
+
+    def test_argminmax_complex(self):
+        nan = float('nan')
+        values = [
+            [4 + 1j, complex(1, nan), -8 + 0j],
+            [complex(nan, -2), 9 + 0j, complex(0, nan)],
+            [2 + 2j, 1 + 5j, 1 + 5j],
+        ]
+
+        for dtype in ('complex64', 'complex128'):
+            array_type = getattr(solvcon, f'SimpleArray{dtype.capitalize()}')
+            data = np.array(values, dtype=dtype)
+            for view in (data, data[:, ::-1]):
+                with self.subTest(dtype=dtype, stride=view.strides):
+                    sarr = array_type(array=view)
+                    self.assertEqual(sarr.argmin(), np.argmin(view))
+                    self.assertEqual(sarr.argmax(), np.argmax(view))
+                    for axis in (0, 1):
+                        np.testing.assert_array_equal(
+                            sarr.argmin(axis=axis).ndarray,
+                            np.argmin(view, axis=axis))
+                        np.testing.assert_array_equal(
+                            sarr.argmax(axis=axis).ndarray,
+                            np.argmax(view, axis=axis))
 
     def test_argminmax_axis(self):
         with self.subTest(name='1d_contiguous'):
@@ -5122,6 +5271,16 @@ class SimpleArrayPlexTC(unittest.TestCase):
         sarr[0, 3] = -2.3
         self.assertEqual(sarr.min(), -2.3)
         self.assertEqual(sarr.max(), 9.2)
+
+    def test_minmax_complex(self):
+        nan = float('nan')
+        values = [3 + 0j, complex(0, nan), complex(nan, 2)]
+
+        for dtype in ('complex64', 'complex128'):
+            data = np.array(values, dtype=dtype)
+            sarr = solvcon.SimpleArray(data)
+            _assert_complex_equal(complex(sarr.min()), np.min(data))
+            _assert_complex_equal(complex(sarr.max()), np.max(data))
 
     def test_abs(self):
         sarr = solvcon.SimpleArray((3, 2), value=-2, dtype='int64')

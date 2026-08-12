@@ -345,10 +345,8 @@ class SOLVCON_PYTHON_WRAPPER_VISIBILITY WrapSimpleArray
                 { return self.ne(scalar); },
                 py::is_operator());
 
-        // Ordering comparisons are undefined for complex numbers, matching
-        // numpy. Leaving the operators unbound lets Python raise TypeError
-        // for <, <=, >, >= just as numpy does for a complex ndarray.
-        if constexpr (!is_complex_v<value_type>)
+        // Numpy defines ordering for both real and complex numeric arrays.
+        if constexpr (std::is_arithmetic_v<value_type> || is_complex_v<value_type>)
         {
             (*this)
                 .def(
