@@ -235,6 +235,52 @@ def profile_planned_suite(dtype, warmups=1, samples=1, rounds=3):
                 warmups, samples, rounds)
 
 
+def profile_winograd_boundary(
+        dtype, side, warmups, samples, rounds, rng):
+    dtype = np.dtype(dtype)
+    shape = (side, side)
+    lhs = rng.random(shape, dtype=dtype)
+    rhs = rng.random(shape, dtype=dtype)
+    lhs_sa = make_container(lhs)
+    rhs_sa = make_container(rhs)
+    methods = (
+        ("blas_sa", profile_matmul_blas_sa),
+        ("planned_sa", profile_matmul_planned_sa),
+    )
+
+    for _ in range(warmups):
+        for _, func in methods:
+            func(lhs_sa, rhs_sa)
+
+    timings = {name: [] for name, _ in methods}
+    for round_index in range(rounds):
+        for sample_index in range(samples):
+            shift = (round_index * samples + sample_index) % len(methods)
+            ordered_methods = (*methods[shift:], *methods[:shift])
+            for name, func in ordered_methods:
+                timings[name].append(profile_one_call(
+                    func, lhs_sa, rhs_sa))
+
+    medians = {
+        name: statistics.median(timings[name])
+        for name, _ in methods
+    }
+    print(f"## Winograd boundary: `{side} x {side} x {side}`, "
+          f"dtype: `{dtype.name}`\n")
+    print_profile_row("func", "median (ms)", "cmp to BLAS")
+    print_profile_row("-" * 20, "-" * 15, "-" * 15)
+    blas_time = medians["blas_sa"]
+    for name, _ in methods:
+        value = medians[name]
+        print_profile_row(name, f"{value:.3E}",
+                          f"{value / blas_time:.3f}")
+    print()
+    for name, _ in methods:
+        raw = ", ".join(f"{value:.6E}" for value in timings[name])
+        print(f"- {name} raw (ms): {raw}")
+    print()
+
+
 def parse_positive_count(value):
     count = int(value)
     if count < 1:
@@ -255,11 +301,23 @@ def parse_arguments(argv=None):
     parser.add_argument(
         "--rounds", type=parse_positive_count, default=3,
         help="planned profiling rounds; use 5 or more for stable results")
+    parser.add_argument(
+        "--winograd",
+        choices=("float32", "float64"),
+        metavar="DTYPE",
+        help="profile only the 16384 square Winograd boundary for DTYPE")
     return parser.parse_args(argv)
 
 
 def main(argv=None):
     args = parse_arguments(argv)
+
+    if args.winograd:
+        profile_winograd_boundary(
+            np.dtype(args.winograd), side=16_384,
+            warmups=args.warmups, samples=args.samples,
+            rounds=args.rounds, rng=np.random.default_rng(20260812))
+        return
 
     gemm_sides = (4, 9, 16, 27, 64, 81, 243, 256, 729, 1024)
     for dtype in (np.float32, np.float64):
@@ -269,6 +327,10 @@ def main(argv=None):
         profile_planned_suite(
             dtype, warmups=args.warmups, samples=args.samples,
             rounds=args.rounds)
+
+    profile_winograd_boundary(
+        np.float32, side=16_384, warmups=1, samples=1, rounds=1,
+        rng=np.random.default_rng(20260812))
 
 
 if __name__ == "__main__":
