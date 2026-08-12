@@ -1,0 +1,69 @@
+===== float32 =====
+## Winograd boundary: `16384 x 16384 x 16384`, dtype: `float32`
+
+| func                 | median (ms)     | cmp to BLAS     |
+| -------------------- | --------------- | --------------- |
+| blas_sa              | 8.954E+03       | 1.000           |
+| planned_sa           | 8.606E+03       | 0.961           |
+
+- blas_sa raw (ms): 8.988415E+03, 8.904240E+03, 8.918912E+03, 9.276072E+03
+- planned_sa raw (ms): 8.591333E+03, 8.621363E+03, 8.470205E+03, 8.889968E+03
+
+	Command being timed: "python3 profiling/profile_matrix_ops.py --winograd float32 --warmups 1 --samples 1 --rounds 4"
+	User time (seconds): 2058.14
+	System time (seconds): 17.27
+	Percent of CPU this job got: 2283%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 1:30.90
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 3750208
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 3414492
+	Voluntary context switches: 663
+	Involuntary context switches: 63452
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 0
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+===== float64 =====
+## Winograd boundary: `16384 x 16384 x 16384`, dtype: `float64`
+
+| func                 | median (ms)     | cmp to BLAS     |
+| -------------------- | --------------- | --------------- |
+| blas_sa              | 1.799E+04       | 1.000           |
+| planned_sa           | 1.714E+04       | 0.953           |
+
+- blas_sa raw (ms): 1.770229E+04, 1.953335E+04, 1.769055E+04, 1.827188E+04
+- planned_sa raw (ms): 1.691007E+04, 1.811246E+04, 1.736416E+04, 1.666002E+04
+
+	Command being timed: "python3 profiling/profile_matrix_ops.py --winograd float64 --warmups 1 --samples 1 --rounds 4"
+	User time (seconds): 3991.80
+	System time (seconds): 39.91
+	Percent of CPU this job got: 2237%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 3:00.15
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 7448508
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 1
+	Minor (reclaiming a frame) page faults: 6609216
+	Voluntary context switches: 846
+	Involuntary context switches: 223517
+	Swaps: 0
+	File system inputs: 256
+	File system outputs: 0
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
