@@ -1,0 +1,48 @@
+PR #1317 macOS reproduction
+
+Commit: 014c07e0a99cd37fb319f34d88cbbf4b5a42ffef
+Hardware: Apple M1 MacBook Air, 8 cores, 8 GB memory
+OS: macOS 26.5.1 (25F80)
+Python: 3.14.6
+NumPy: 2.5.1, Accelerate BLAS/LAPACK
+Build: Release, SOLVCON_PROFILE=ON, BUILD_QT=OFF
+BLAS threading: Accelerate-managed default
+
+Shape: 16384 x 16384 x 16384
+Dtype: float32
+
+Each route received one warmup in every round. Each round then measured one
+direct BLAS call and one planned Winograd call in the same process. Call order
+alternated between rounds. Each round ran in a fresh process so its 3.8 GB
+working set was released before the next round. Times are profiler wall times.
+
+round,order,direct_blas_ms,planned_winograd_ms,planned_over_direct
+1,direct-first,15658.979917,16581.867667,1.058936646
+2,planned-first,15855.334666,13463.855958,0.849168828
+3,direct-first,16670.158458,13244.929041,0.794529283
+4,planned-first,14870.747167,13156.341333,0.884712865
+
+median direct BLAS: 15757.157292 ms
+median planned Winograd: 13354.392500 ms
+median ratio: 0.847512800
+time reduction: 15.248720%
+maximum resident set size: 3.62-3.81 GB
+
+The float64 16384 x 16384 x 16384 case was not reportable on this 8 GB
+system. Its expected working set is approximately 7.4 GB. The first isolated
+round did not complete its first measured call after nine minutes; resident
+data had fallen below 1.2 GB while memory compression and page activity kept
+increasing. The process was terminated, and no float64 timing is reported.
+
+A preliminary float32 run kept all four rounds in one process. Its first two
+rounds were near the accepted range, but later calls slowed sharply as the
+working set remained resident. It was rejected before the isolated-process
+method was adopted:
+
+round,direct_blas_ms,planned_winograd_ms
+1,15671.074875,14641.256000
+2,15730.133416,14914.286208
+3,13831.158792,28862.749584
+4,37676.262375,82470.930791
+
+The rejected run is included only to document why process isolation was used.
