@@ -28,11 +28,36 @@ median ratio: 0.847512800
 time reduction: 15.248720%
 maximum resident set size: 3.62-3.81 GB
 
-The float64 16384 x 16384 x 16384 case was not reportable on this 8 GB
-system. Its expected working set is approximately 7.4 GB. The first isolated
-round did not complete its first measured call after nine minutes; resident
-data had fallen below 1.2 GB while memory compression and page activity kept
-increasing. The process was terminated, and no float64 timing is reported.
+Shape: 16384 x 16384 x 16384
+Dtype: float64
+
+The 8 GB system cannot retain this approximately 7.5 GB working set with
+enough headroom for an extra warmup. Each route therefore ran as one cold call
+in a fresh process. Call order alternated between rounds. SimpleArray inputs
+were allocated directly so no duplicate NumPy inputs remained resident. Times
+are profiler wall times and include the memory-system behavior during the
+call.
+
+round,order,direct_blas_ms,planned_winograd_ms,planned_over_direct
+1,direct-first,170882.506542,95685.604792,0.559949680
+2,planned-first,153618.999458,104224.374458,0.678460183
+3,direct-first,144835.104000,89385.620750,0.617154393
+4,planned-first,133015.651958,89607.295917,0.673659788
+
+median direct BLAS: 149227.051729 ms
+median planned Winograd: 92646.450355 ms
+ratio of medians: 0.620842195
+time reduction: 37.915780%
+paired time reduction range: 32.153982-44.005032%
+direct BLAS CV: 10.589933%
+planned Winograd CV: 7.361065%
+direct BLAS peak memory footprint: 6.48 GB
+planned Winograd peak memory footprint: 7.56 GB
+
+This float64 result is a memory-constrained cold-call reproduction, not an
+in-cache kernel-throughput measurement. All four pairs favored planned
+Winograd, but compression and page reclaim caused more variation than in the
+float32 result.
 
 A preliminary float32 run kept all four rounds in one process. Its first two
 rounds were near the accepted range, but later calls slowed sharply as the
