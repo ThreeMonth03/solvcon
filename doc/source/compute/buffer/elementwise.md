@@ -190,9 +190,8 @@ assert sarr1.add_simd(sarr2).ndarray.tolist() == [0, 2, 4, 6, 8]
 
 ### The Comparison Methods
 
-`eq` and `ne` are bound on every typed class; `lt`, `le`, `gt`, and `ge` are
-bound on every non-complex class, including `SimpleArrayBool`. Each takes an
-array operand of the same class and shape or a scalar, and returns a
+`eq`, `ne`, `lt`, `le`, `gt`, and `ge` are bound on every typed class. Each
+takes an array operand of the same class and shape or a scalar, and returns a
 `SimpleArrayBool` of the receiver's shape holding the elementwise result:
 
 ```python
@@ -229,21 +228,15 @@ The elementwise semantics match numpy for the supported operands. The operand
 scope is what still separates the two: the array operand must be the same
 class and shape, with no promotion and no broadcasting.
 
-### Complex Arrays Leave the Ordering Unbound
+### Complex Array Ordering
 
-Ordering is undefined for complex numbers, so the complex classes bind neither
-the ordering methods nor the ordering operators; numpy raises `TypeError` for
-`<`, `<=`, `>`, `>=` on a complex ndarray, and the unbound operators make the
-classes behave the same way. Equality stays elementwise:
-
-```python
-narr = np.array([1 + 2j, 3 + 4j], dtype='complex128')
-sarr = solvcon.SimpleArrayComplex128(array=narr)
-assert not hasattr(sarr, 'lt')
-sarr < sarr
-# TypeError: '<' not supported between instances of ...
-assert (sarr == sarr).ndarray.tolist() == [True, True]
-```
+Complex arrays follow numpy's ufuncs. Non-NaN values compare lexicographically
+by real and then imaginary component; if either operand has a NaN component,
+`<`, `<=`, `>`, and `>=` all return `False`. SimpleArray uses this
+[array implementation](https://github.com/numpy/numpy/blob/v2.5.1/numpy/_core/src/umath/loops.c.src#L2037-L2052)
+rule. Standalone `solvcon.complex64` and `solvcon.complex128` use numpy's
+[scalar implementation](https://github.com/numpy/numpy/blob/v2.5.1/numpy/_core/src/umath/scalarmath.c.src#L1843-L1858),
+which can still order unequal real parts when only an imaginary part is NaN.
 
 ### NaN Comparison
 
