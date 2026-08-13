@@ -5,6 +5,7 @@
 
 #include <solvcon/buffer/matmul.hpp>
 #include <solvcon/math/Winograd.hpp>
+#include <solvcon/math/Winograd_detail.hpp>
 
 #include <algorithm>
 #include <array>
@@ -196,7 +197,7 @@ void check_blas_winograd(ssize_t rows, ssize_t columns, ssize_t inner_size)
     reference.output.m_data = expected.data();
     reference_gemm(reference);
 
-    gemm_winograd(rows, columns, inner_size, gemm.lhs, gemm.rhs, gemm.output);
+    gemm_winograd(gemm);
     expect_near(output, expected);
 }
 
@@ -333,7 +334,7 @@ TEST(WinogradKernel, blas_products)
     std::vector<double> output(96);
     BlasGemmOperation<double> const gemm = make_gemm(8, 12, 16, lhs.data(), rhs.data(), output.data());
     auto const run_winograd = [&]
-    { gemm_winograd(8, 12, 16, gemm.lhs, gemm.rhs, gemm.output); };
+    { gemm_winograd(gemm); };
     EXPECT_THAT(
         run_winograd,
         testing::ThrowsMessage<std::runtime_error>("solvcon BLAS wrapper: CBLAS backend is unavailable"));

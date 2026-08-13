@@ -997,17 +997,20 @@ void MatmulExecutor<Array>::execute_winograd()
 #if (defined(__APPLE__) && defined(__arm64__)) || defined(SC_HAS_CBLAS)
     if constexpr (can_matmul_blas_v<value_type>)
     {
-        BlasOutputView<value_type> const output{
-            .m_data = m_output_data,
-            .m_leading_dimension = m_plan.columns(),
+        BlasGemmOperation<value_type> const operation{
+            .rows = m_plan.rows(),
+            .columns = m_plan.columns(),
+            .inner_size = m_plan.inner_size(),
+            .lhs = require_matrix_view(lhs_matrix_view(m_lhs_data)),
+            .rhs = require_matrix_view(rhs_matrix_view(m_rhs_data)),
+            .output = {
+                .m_data = m_output_data,
+                .m_leading_dimension = m_plan.columns(),
+            },
+            .alpha = value_type{1},
+            .beta = value_type{0},
         };
-        gemm_winograd(
-            m_plan.rows(),
-            m_plan.columns(),
-            m_plan.inner_size(),
-            require_matrix_view(lhs_matrix_view(m_lhs_data)),
-            require_matrix_view(rhs_matrix_view(m_rhs_data)),
-            output);
+        gemm_winograd(operation);
         return;
     }
 #endif
