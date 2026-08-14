@@ -1,0 +1,30 @@
+\begin{pspicture}(0,0)(14,5.5)
+
+\rput[l](0.2,5.1){\textbf{Before}}
+\psframe(0.2,3.8)(3.8,4.7)
+\rput(2,4.25){\texttt{matmul.hpp}}
+\psline{->}(2,3.8)(2,3.1)
+\psframe(0.2,1.3)(3.8,3.1)
+\rput(2,2.45){\texttt{Winograd.hpp}}
+\rput(2,1.85){interface + schedule + BLAS bridge}
+
+\rput[l](5.0,5.1){\textbf{After}}
+\psframe(5.0,3.8)(8.2,4.7)
+\rput(6.6,4.25){\texttt{matmul.hpp}}
+\psline{->}(8.2,4.25)(8.9,4.25)
+\psframe(8.9,3.8)(12.7,4.7)
+\rput(10.8,4.25){\texttt{Winograd.hpp}}
+
+\psline{->}(10.8,3.8)(10.8,3.1)
+\psframe(8.9,2.2)(12.7,3.1)
+\rput(10.8,2.65){\texttt{Winograd.cpp}}
+
+\psline{->}(10.8,2.2)(10.8,1.5)
+\psframe(8.1,0.6)(13.5,1.5)
+\rput(10.8,1.05){\texttt{Winograd\_detail.hpp}}
+
+\rput(6.6,3.25){operation}
+\rput(12.5,3.45){typed bridge}
+\rput(12.3,1.85){generic schedule}
+
+\end{pspicture}
