@@ -77,14 +77,6 @@ class FakeCase:
         self.events.append(('correctness', name))
         return self._result(name)
 
-    def benchmark_auto(self, repetitions):
-        self.events.append(('benchmark', 'auto'))
-        return self._result('auto'), self.durations['auto'] * repetitions
-
-    def benchmark_route(self, name, repetitions):
-        self.events.append(('benchmark', name))
-        return self._result(name), self.durations[name] * repetitions
-
 
 class FakeEngine:
     def __init__(self, wrong_route=None, nonfinite_route=None,
@@ -453,8 +445,7 @@ class MatmulBenchmarkBudgetTC(unittest.TestCase):
                 prepared = matmul_benchmark.collector._prepare_case(
                     request, engine)
 
-        self.assertEqual(
-            prepared.native_names, ('auto', 'blas_gemm'))
+        self.assertEqual(prepared.names, ('auto', 'blas_gemm'))
 
     def test_accelerated_schedule_is_not_charged_as_naive(self):
         operands = {
@@ -561,24 +552,26 @@ class MatmulBenchmarkScheduleTC(unittest.TestCase):
 
 
 class MatmulBenchmarkCollectorTC(unittest.TestCase):
-    def test_checks_every_route_before_interleaved_native_timing(self):
+    def test_checks_every_route_before_interleaved_timing(self):
         engine = FakeEngine()
         progress = []
 
         artifact = matmul_benchmark.collector.collect(
-            make_request(), engine=engine, progress=progress.append)
+            make_request(), engine=engine, clock=StepClock(100),
+            progress=progress.append)
 
         observation = artifact['observations'][0]
         candidates = observation['routes']
         self.assertEqual(set(candidates), {
             'auto', 'naive', 'blas_gemm'})
-        first_benchmark = next(
-            index for index, event in enumerate(engine.case.events)
-            if event[0] == 'benchmark')
-        self.assertTrue(all(
-            event[0] == 'correctness'
-            for event in engine.case.events[:first_benchmark]))
-        self.assertEqual(len(artifact['panels']), 12)
+        first_timing = next(
+            index for index, event in enumerate(progress)
+            if event.get('phase') == 'timing')
+        correctness = [
+            event for event in progress[:first_timing]
+            if event.get('phase') == 'correctness']
+        self.assertEqual(len(correctness), 6)
+        self.assertEqual(len(artifact['panels']), 6)
         panel_progress = [
             event for event in progress if 'state' not in event]
         activity = [event for event in progress if 'state' in event]
@@ -593,11 +586,10 @@ class MatmulBenchmarkCollectorTC(unittest.TestCase):
         self.assertEqual(
             {event['phase'] for event in activity}, {
                 'provenance', 'preparation', 'reference', 'correctness',
-                'warmup', 'native_batch', 'python_end_to_end',
-                'finalization'})
+                'warmup', 'timing', 'finalization'})
         required = {
             'type', 'phase', 'state', 'route', 'resolved_route',
-            'scope', 'cell_id', 'panel', 'panels', 'chunk',
+            'cell_id', 'panel', 'panels', 'chunk',
             'completed_calls', 'total_calls', 'chunk_calls',
             'event_at_ns', 'message',
         }
@@ -615,11 +607,8 @@ class MatmulBenchmarkCollectorTC(unittest.TestCase):
             and event['state'] == 'started')
         self.assertEqual(auto_started['resolved_route'], 'naive')
         self.assertEqual(
-            candidates['blas_gemm']['timing']['median_ns'], 5)
-        self.assertEqual(
-            {panel['scope'] for panel in artifact['panels']},
-            {'native_batch', 'python_end_to_end'})
-        self.assertEqual(observation['winner'], 'blas_gemm')
+            candidates['blas_gemm']['timing']['median_ns'], 25)
+        self.assertEqual(observation['winner'], 'naive')
         self.assertEqual(
             observation['routes']['blas_gemm']['packing'], {
                 'eager_lhs': False,
@@ -641,7 +630,7 @@ class MatmulBenchmarkCollectorTC(unittest.TestCase):
 
         def progress(event):
             events.append(event)
-            if (event.get('phase') == 'native_batch'
+            if (event.get('phase') == 'timing'
                     and event.get('state') == 'started'):
                 cancel[0] = True
 
@@ -651,8 +640,6 @@ class MatmulBenchmarkCollectorTC(unittest.TestCase):
                 request, engine=engine, progress=progress,
                 cancelled=lambda: cancel[0])
 
-        self.assertFalse(any(
-            phase == 'benchmark' for phase, _name in engine.case.events))
         self.assertEqual(events[-1]['state'], 'started')
         self.assertEqual(events[-1]['total_calls'], 4)
 
@@ -692,11 +679,10 @@ class MatmulBenchmarkCollectorTC(unittest.TestCase):
         observation = artifact['observations'][0]
         self.assertIsNone(observation['routes']['blas_gemm']['timing'])
         self.assertEqual(observation['winner'], 'naive')
-        benchmarked = [name for phase, name in engine.case.events
-                       if phase == 'benchmark']
-        self.assertNotIn('blas_gemm', benchmarked)
+        executed = [name for _phase, name in engine.case.events]
+        self.assertEqual(executed.count('blas_gemm'), 1)
 
-    def test_python_scope_uses_the_same_boundary_for_numpy_and_routes(self):
+    def test_timing_uses_the_same_boundary_for_numpy_and_routes(self):
         request = make_request(
             numpy_baseline=True,
             mode={
@@ -720,10 +706,9 @@ class MatmulBenchmarkCollectorTC(unittest.TestCase):
                             for sample in samples))
         self.assertTrue(all(sample['latency_ns'] == 20
                             for sample in samples))
-        self.assertTrue(all(
-            sample['scope'] == 'python_end_to_end' for sample in samples))
         observation = artifact['observations'][0]
-        self.assertIsNone(observation['routes']['numpy']['timing'])
+        self.assertEqual(
+            observation['routes']['numpy']['timing']['median_ns'], 20)
         self.assertEqual(set(observation['routes']), {
             'auto', 'naive', 'blas_gemm', 'numpy'})
         self.assertEqual(
@@ -923,7 +908,8 @@ class MatmulBenchmarkFeatureTC(unittest.TestCase):
 
         self.assertEqual(value, 5)
         self.assertEqual(projected[0]['coordinates'], [5, 12])
-        self.assertEqual(projected[0]['winner'], 'blas_gemm')
+        self.assertEqual(
+            projected[0]['winner'], self.observation['winner'])
 
     def test_rejects_code_execution_and_cyclic_definitions(self):
         registry = matmul_benchmark.features.FeatureRegistry()
@@ -1126,10 +1112,7 @@ class MatmulBenchmarkWorkerTC(unittest.TestCase):
                  if event.get('phase') == 'artifact_write'],
                 ['started', 'completed'])
             artifact = matmul_benchmark.artifact.load_artifact(output_path)
-            self.assertEqual(len(artifact['panels']), 2)
-            self.assertEqual(
-                {panel['scope'] for panel in artifact['panels']},
-                {'native_batch', 'python_end_to_end'})
+            self.assertEqual(len(artifact['panels']), 1)
             self.assertIsNotNone(artifact['observations'][0]['winner'])
 
 

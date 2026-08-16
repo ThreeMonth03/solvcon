@@ -131,7 +131,7 @@ def _collection_document(plan):
 def _activity(**updates):
     event = {
         'type': 'progress',
-        'phase': 'native_batch',
+        'phase': 'timing',
         'state': 'started',
         'route': 'auto',
         'resolved_route': 'blas_gemm',
@@ -144,7 +144,6 @@ def _activity(**updates):
         'chunk_calls': 5,
         'event_at_ns': 123,
         'message': 'timing auto with blas_gemm',
-        'scope': 'native_batch',
     }
     event.update(updates)
     return event

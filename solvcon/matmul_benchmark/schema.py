@@ -352,7 +352,7 @@ def _validate_candidate(data, name, with_timing=False):
         'correctness',
     }
     if with_timing:
-        allowed.update(('timing', 'python_timing', 'numpy_ratio'))
+        allowed.update(('timing', 'numpy_ratio'))
     _reject_unknown(data, name, allowed)
     _require_fields(data, name, ('name', 'kind', 'packing', 'correctness'))
     _require_str(data['name'], f'{name}.name')
@@ -368,23 +368,19 @@ def _validate_candidate(data, name, with_timing=False):
     _validate_packing(data['packing'], f'{name}.packing')
     _validate_correctness(data['correctness'], f'{name}.correctness')
     if with_timing:
-        _require_fields(
-            data, name, ('timing', 'python_timing', 'numpy_ratio'))
-        for field_name in ('timing', 'python_timing'):
-            if data.get(field_name) is not None:
-                _validate_summary(data[field_name], f'{name}.{field_name}')
+        _require_fields(data, name, ('timing', 'numpy_ratio'))
+        if data.get('timing') is not None:
+            _validate_summary(data['timing'], f'{name}.timing')
         _require_number(data.get('numpy_ratio'), f'{name}.numpy_ratio',
                         0, optional=True)
 
 
-def _validate_sample(data, name, panel_scope):
+def _validate_sample(data, name):
     data = _require_mapping(data, name)
-    fields = ('route', 'scope', 'repetitions', 'elapsed_ns', 'latency_ns')
+    fields = ('route', 'repetitions', 'elapsed_ns', 'latency_ns')
     _reject_unknown(data, name, fields)
     _require_fields(data, name, fields)
     _require_str(data['route'], f'{name}.route')
-    if data['scope'] != panel_scope:
-        raise SchemaError(f'{name}.scope does not match its panel')
     _require_int(data['repetitions'], f'{name}.repetitions', 1)
     _require_int(data['elapsed_ns'], f'{name}.elapsed_ns', 0)
     _require_number(data['latency_ns'], f'{name}.latency_ns', 0)
@@ -398,13 +394,10 @@ def _validate_sample(data, name, panel_scope):
 
 def _validate_panel(data, name):
     data = _require_mapping(data, name)
-    fields = ('index', 'scope', 'order', 'samples')
+    fields = ('index', 'order', 'samples')
     _reject_unknown(data, name, fields)
     _require_fields(data, name, fields)
     _require_int(data['index'], f'{name}.index', 0)
-    scope = _require_str(data['scope'], f'{name}.scope')
-    if scope not in ('native_batch', 'python_end_to_end'):
-        raise SchemaError(f'{name}.scope is unsupported')
     if not isinstance(data['order'], list):
         raise SchemaError(f'{name}.order must be an array')
     for index, route in enumerate(data['order']):
@@ -412,7 +405,7 @@ def _validate_panel(data, name):
     if not isinstance(data['samples'], list):
         raise SchemaError(f'{name}.samples must be an array')
     for index, sample in enumerate(data['samples']):
-        _validate_sample(sample, f'{name}.samples[{index}]', scope)
+        _validate_sample(sample, f'{name}.samples[{index}]')
     if [sample['route'] for sample in data['samples']] != data['order']:
         raise SchemaError(f'{name}.order does not match its samples')
 
@@ -653,7 +646,7 @@ def validate_collection(collection):
         _validate_metadata(source['metadata'], f'{name}.metadata')
         panel_count = _require_int(
             source['panel_count'], f'{name}.panel_count', 0)
-        if panel_count != 2 * request.mode.panels:
+        if panel_count != request.mode.panels:
             raise SchemaError(f'{name}.panel_count does not match its request')
         digest = _require_str(
             source['panels_sha256'], f'{name}.panels_sha256')
@@ -691,16 +684,11 @@ def validate_collection(collection):
                 'must be complete, contiguous, and unique')
         panels = [panel for _index, panel in indexed_panels]
         request = BenchmarkRequest.from_dict(source['request'])
-        expected_pairs = {
-            (index, scope)
-            for index in range(request.mode.panels)
-            for scope in ('native_batch', 'python_end_to_end')
-        }
-        if {(panel['index'], panel['scope']) for panel in panels} \
-                != expected_pairs:
+        if {panel['index'] for panel in panels} != set(
+                range(request.mode.panels)):
             raise SchemaError(
                 f'collection panels for {source_id!r} do not cover '
-                'every request panel and scope')
+                'every request panel')
         if any(
                 sample['repetitions'] != request.mode.repetitions
                 for panel in panels for sample in panel['samples']):

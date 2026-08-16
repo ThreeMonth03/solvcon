@@ -426,17 +426,28 @@ class SOLVCON_PYTHON_WRAPPER_VISIBILITY WrapSimpleArray
         }
 
         (*this)
-            .def("matmul", &wrapped_type::matmul)
+            .def(
+                "matmul",
+                [](wrapped_type const & self,
+                   wrapped_type const & other,
+                   py::object const & kernel)
+                {
+                    return kernel.is_none()
+                               ? self.matmul(other)
+                               : solvcon::detail::execute_matmul_kernel(
+                                     self, other, kernel.cast<std::string>());
+                },
+                py::arg("other"),
+                py::kw_only(),
+                py::arg("kernel") = py::none())
             .def("__matmul__", &wrapped_type::matmul)
             .def(
                 "matmul_routes",
                 [](wrapped_type const & self, wrapped_type const & other)
                 {
                     solvcon::detail::MatmulPlan plan = solvcon::detail::MatmulPlan::make(self, other);
-                    wrapped_type output(plan.output_shape());
-                    solvcon::detail::MatmulExecutor<wrapped_type> executor(
-                        std::move(plan), output, self, other);
-                    auto const routes = executor.routes();
+                    auto const routes = solvcon::detail::MatmulExecutor<wrapped_type>::routes(
+                        std::move(plan), self, other);
                     py::tuple result(routes.size());
                     for (size_t index = 0; index < routes.size(); ++index)
                     {
@@ -445,45 +456,6 @@ class SOLVCON_PYTHON_WRAPPER_VISIBILITY WrapSimpleArray
                     return result;
                 },
                 py::arg("other"))
-            .def(
-                "matmul_with_route",
-                [](wrapped_type const & self,
-                   wrapped_type const & other,
-                   solvcon::detail::MatmulRoute const & route)
-                { return solvcon::detail::execute_matmul_route(self, other, route); },
-                py::arg("other"),
-                py::arg("route"))
-            .def(
-                "benchmark_matmul",
-                [](wrapped_type const & self, wrapped_type const & other, size_t repetitions)
-                {
-                    auto result = [&]()
-                    {
-                        py::gil_scoped_release release;
-                        return solvcon::detail::benchmark_matmul(self, other, repetitions);
-                    }();
-                    return py::make_tuple(std::move(result.result), result.elapsed_ns);
-                },
-                py::arg("other"),
-                py::arg("repetitions"))
-            .def(
-                "benchmark_matmul_route",
-                [](wrapped_type const & self,
-                   wrapped_type const & other,
-                   solvcon::detail::MatmulRoute const & route,
-                   size_t repetitions)
-                {
-                    auto result = [&]()
-                    {
-                        py::gil_scoped_release release;
-                        return solvcon::detail::benchmark_matmul_route(
-                            self, other, route, repetitions);
-                    }();
-                    return py::make_tuple(std::move(result.result), result.elapsed_ns);
-                },
-                py::arg("other"),
-                py::arg("route"),
-                py::arg("repetitions"))
             // TODO: In-place operation should return reference to self to support function chaining
             /*
              * Regular in-place methods (iadd, imul, etc.) are procedural calls and do

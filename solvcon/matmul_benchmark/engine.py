@@ -1,7 +1,7 @@
 # Copyright (c) 2026, solvcon team <contact@solvcon.net>
 # BSD 3-Clause License, see COPYING
 
-"""Route inspection and native batched timing adapters."""
+"""Route inspection and forced matmul adapters."""
 
 import dataclasses
 
@@ -31,12 +31,12 @@ class RouteDescriptor:
 
 
 class SolvconCase:
-    """Hold native operands and their input-scoped opaque routes."""
+    """Hold native operands and their eligible route descriptions."""
 
     def __init__(self, lhs, rhs):
         self.lhs = lhs
         self.rhs = rhs
-        self._routes = {}
+        route_names = set()
         descriptors = []
         for route in lhs.matmul_routes(rhs):
             descriptor = RouteDescriptor(
@@ -47,10 +47,10 @@ class SolvconCase:
                 scratch_pack_lhs=route.scratch_pack_lhs,
                 scratch_pack_rhs=route.scratch_pack_rhs,
             )
-            if descriptor.name in self._routes:
+            if descriptor.name in route_names:
                 raise RuntimeError(
                     f'duplicate native route: {descriptor.name}')
-            self._routes[descriptor.name] = route
+            route_names.add(descriptor.name)
             descriptors.append(descriptor)
         self.routes = tuple(descriptors)
 
@@ -58,22 +58,12 @@ class SolvconCase:
         return self.lhs.matmul(self.rhs).ndarray
 
     def execute_route(self, name):
-        result = self.lhs.matmul_with_route(self.rhs, self._routes[name])
+        result = self.lhs.matmul(self.rhs, kernel=name)
         return result.ndarray
-
-    def benchmark_auto(self, repetitions):
-        result, elapsed_ns = self.lhs.benchmark_matmul(
-            self.rhs, repetitions)
-        return result.ndarray, int(elapsed_ns)
-
-    def benchmark_route(self, name, repetitions):
-        result, elapsed_ns = self.lhs.benchmark_matmul_route(
-            self.rhs, self._routes[name], repetitions)
-        return result.ndarray, int(elapsed_ns)
 
 
 class SolvconRouteEngine:
-    """Adapt the private native benchmark methods without Qt dependencies."""
+    """Adapt selectable matmul kernels without Qt dependencies."""
 
     _ARRAY_CLASSES = {
         'float32': 'SimpleArrayFloat32',
@@ -88,18 +78,13 @@ class SolvconRouteEngine:
         array_class = getattr(sc, self._ARRAY_CLASSES[dtype])
         native_lhs = array_class(array=lhs)
         native_rhs = array_class(array=rhs)
-        required = (
-            'matmul_routes',
-            'matmul_with_route',
-            'benchmark_matmul_route',
-            'benchmark_matmul',
-        )
+        required = ('matmul_routes', 'matmul')
         missing = [name for name in required
                    if not hasattr(native_lhs, name)]
         if missing:
             joined = ', '.join(missing)
             raise EngineUnavailableError(
-                f'this build lacks matmul benchmark methods: {joined}')
+                f'this build lacks selectable matmul methods: {joined}')
         return SolvconCase(native_lhs, native_rhs)
 
 

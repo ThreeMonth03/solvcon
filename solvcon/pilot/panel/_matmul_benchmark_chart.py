@@ -24,7 +24,6 @@ class _RouteTimingCanvas(QtWidgets.QWidget):
         self._candidates = []
         self._selected_name = ''
         self._winner_name = ''
-        self._scope = 'native_batch'
         self._current_row = -1
         self._hit_regions = []
         self.setMouseTracking(True)
@@ -37,10 +36,6 @@ class _RouteTimingCanvas(QtWidgets.QWidget):
         self._current_row = -1
         self.update()
 
-    def set_scope(self, scope):
-        self._scope = scope
-        self.update()
-
     def set_current_row(self, row):
         if self._current_row == row:
             return
@@ -51,8 +46,6 @@ class _RouteTimingCanvas(QtWidgets.QWidget):
         entries = []
         for row, candidate in enumerate(self._candidates):
             name = _process._candidate_name(candidate)
-            if self._scope == 'native_batch' and self._is_numpy(candidate):
-                continue
             summary = self._timing_summary(candidate)
             median = self._number(summary.get('median_ns'))
             p95 = self._number(summary.get('p95_ns'))
@@ -209,25 +202,17 @@ class _RouteTimingCanvas(QtWidgets.QWidget):
         return max(values, default=1.0) * 1.04 or 1.0
 
     def _timing_summary(self, candidate):
-        key = ('timing' if self._scope == 'native_batch'
-               else 'python_timing')
-        summary = candidate.get(key)
+        summary = candidate.get('timing')
         return summary if isinstance(summary, dict) else {}
 
-    def _baseline(self, entries):
-        baseline_name = ('auto' if self._scope == 'native_batch'
-                         else 'numpy')
+    @staticmethod
+    def _baseline(entries):
         return next(
             (entry for entry in entries
-             if entry['name'].lower() == baseline_name
+             if entry['name'].lower() == 'numpy'
              and entry['median'] is not None),
             None,
         )
-
-    @staticmethod
-    def _is_numpy(candidate):
-        return (candidate.get('kind') == 'numpy'
-                or _process._candidate_name(candidate).lower() == 'numpy')
 
     @staticmethod
     def _number(value):
@@ -298,7 +283,6 @@ class _RouteTimingCanvas(QtWidgets.QWidget):
             correctness = f'{correctness}: {reason}'
         lines = (
             f'Route: {entry["name"]}',
-            f'Scope: {self._scope_label()}',
             f'Median: {self._exact_time(entry["median"])}',
             f'P95: {self._exact_time(entry["p95"])}',
             f'Noise (MAD / median): {self._format_noise(entry["noise"])}',
@@ -311,10 +295,6 @@ class _RouteTimingCanvas(QtWidgets.QWidget):
             f'Eligible: {"yes" if entry["eligible"] else "no"}',
         )
         return '\n'.join(lines)
-
-    def _scope_label(self):
-        return ('Native batch' if self._scope == 'native_batch'
-                else 'Python end-to-end')
 
     @staticmethod
     def _exact_time(value):
@@ -339,52 +319,24 @@ class _RouteTimingCanvas(QtWidgets.QWidget):
 
 
 class RouteTimingChart(QtWidgets.QWidget):
-    """Switch between native and Python timing comparisons."""
+    """Compare route timings from a completed benchmark."""
 
     row_selected = QtCore.Signal(int)
 
-    _SCOPE_HELP = {
-        'native_batch': (
-            'Times repeated native calls inside one benchmark run. Most '
-            'Python call overhead is left out, so use this to compare '
-            'kernel routes. NumPy is not shown.'),
-        'python_end_to_end': (
-            'Times each complete call from Python, including the '
-            'Python-to-C++ boundary and input handling. Use this to compare '
-            'the delay a Python user sees. NumPy is included.'),
-    }
-
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._scope = QtWidgets.QComboBox()
-        self._scope.addItem('Native batch', 'native_batch')
-        self._scope.addItem('Python end-to-end', 'python_end_to_end')
-        for index in range(self._scope.count()):
-            help_text = self._SCOPE_HELP[self._scope.itemData(index)]
-            self._scope.setItemData(
-                index, help_text, QtCore.Qt.ItemDataRole.ToolTipRole)
-            self._scope.setItemData(
-                index, help_text, QtCore.Qt.ItemDataRole.StatusTipRole)
-        self._scope_help = QtWidgets.QLabel()
-        self._scope_help.setAccessibleName('Timing scope description')
-        self._scope_help.setWordWrap(True)
         self._canvas = _RouteTimingCanvas()
 
         controls = QtWidgets.QHBoxLayout()
-        controls.addWidget(QtWidgets.QLabel('Timing scope'))
-        controls.addWidget(self._scope)
         controls.addStretch(1)
         controls.addWidget(QtWidgets.QLabel('Lower is better; whisker = p95'))
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addLayout(controls)
-        layout.addWidget(self._scope_help)
         layout.addWidget(self._canvas, 1)
 
-        self._scope.currentIndexChanged.connect(self._change_scope)
         self._canvas.row_selected.connect(self.row_selected)
-        self._show_scope_help(self._scope.currentIndex())
 
     def set_candidates(self, candidates, selected_name, winner_name):
         self._canvas.set_candidates(
@@ -392,20 +344,6 @@ class RouteTimingChart(QtWidgets.QWidget):
 
     def set_current_row(self, row):
         self._canvas.set_current_row(row)
-
-    @QtCore.Slot()
-    def _change_scope(self):
-        self._canvas.set_scope(self._scope.currentData())
-        self._show_scope_help(self._scope.currentIndex())
-
-    @QtCore.Slot(int)
-    def _show_scope_help(self, index):
-        scope = self._scope.itemData(index)
-        help_text = self._SCOPE_HELP.get(scope, '')
-        self._scope_help.setText(help_text)
-        self._scope.setToolTip(help_text)
-        self._scope.setStatusTip(help_text)
-        self._scope.setAccessibleDescription(help_text)
 
 
 # vim: set ff=unix fenc=utf8 et sw=4 ts=4 sts=4 tw=79:

@@ -33,8 +33,7 @@ _ACTIVITY_PHASES = frozenset((
     'reference',
     'correctness',
     'warmup',
-    'native_batch',
-    'python_end_to_end',
+    'timing',
     'finalization',
     'partial_write',
     'artifact_write',
@@ -59,15 +58,10 @@ _PHASE_LABELS = {
     'reference': 'NumPy reference',
     'correctness': 'correctness check',
     'warmup': 'setup run',
-    'native_batch': 'native timing',
-    'python_end_to_end': 'Python end-to-end timing',
+    'timing': 'measurement',
     'finalization': 'building and validating result',
     'partial_write': 'saving completed measurement rounds',
     'artifact_write': 'saving final result',
-}
-_WARMUP_SCOPE_LABELS = {
-    'native_batch': 'native setup run',
-    'python_end_to_end': 'Python end-to-end setup run',
 }
 
 
@@ -165,14 +159,10 @@ def _correctness_text(candidate):
 
 def _summary_value(candidate, name):
     timing = candidate.get('timing')
-    python_timing = candidate.get('python_timing')
     if name == 'median_ns':
         return timing.get('median_ns') if isinstance(timing, dict) else None
     if name == 'p95_ns':
         return timing.get('p95_ns') if isinstance(timing, dict) else None
-    if name == 'python_median_ns':
-        return (python_timing.get('median_ns')
-                if isinstance(python_timing, dict) else None)
     if name == 'numpy_ratio':
         return candidate.get('numpy_ratio')
     if name == 'noise' and isinstance(timing, dict):
@@ -203,7 +193,6 @@ def _valid_activity(event):
     panel = event.get('panel')
     panels = event.get('panels')
     elapsed_ns = event.get('elapsed_ns')
-    scope = event.get('scope')
     valid_panel = (
         panel is None and panels is None
         or _is_integer(panel, 1) and _is_integer(panels, 1)
@@ -229,7 +218,6 @@ def _valid_activity(event):
              or isinstance(resolved_route, str) and bool(resolved_route))
         and (cell_id is None
              or isinstance(cell_id, str) and bool(cell_id))
-        and scope in (None, 'native_batch', 'python_end_to_end')
         and valid_panel
         and _is_integer(event.get('chunk'), 1)
         and valid_calls
@@ -345,8 +333,6 @@ class RunStatus(QtCore.QObject):
         if activity['phase'] == 'provenance':
             route = 'Environment'
         phase = _PHASE_LABELS[activity['phase']]
-        if activity['phase'] == 'warmup' and activity.get('scope'):
-            phase = _WARMUP_SCOPE_LABELS[activity['scope']]
         parts = [route, f'phase: {phase}']
         if activity['panel'] is not None:
             parts.append(

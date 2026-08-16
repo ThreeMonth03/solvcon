@@ -476,7 +476,7 @@ def _contraction(lhs_shape, rhs_shape, output_shape):
     }
 
 
-def _activity_event(phase, state, route, resolved_route, scope,
+def _activity_event(phase, state, route, resolved_route,
                     cell_id, panel, panels, total_calls,
                     elapsed_ns=None, error=None):
     event = {
@@ -485,7 +485,6 @@ def _activity_event(phase, state, route, resolved_route, scope,
         'state': state,
         'route': route,
         'resolved_route': resolved_route,
-        'scope': scope,
         'cell_id': cell_id,
         'panel': panel,
         'panels': panels,
@@ -509,14 +508,11 @@ def _activity_event(phase, state, route, resolved_route, scope,
 
 def _run_activity(operation, phase, route, total_calls, progress,
                   cancelled, resolved_route=None, cell_id=None,
-                  panel=None, panels=None, scope=None):
-    if scope is None and phase in ('native_batch', 'python_end_to_end'):
-        scope = phase
-
+                  panel=None, panels=None):
     def report(state, elapsed_ns=None, error=None):
         if progress is not None:
             progress(_activity_event(
-                phase, state, route, resolved_route, scope, cell_id,
+                phase, state, route, resolved_route, cell_id,
                 panel, panels, total_calls, elapsed_ns, error))
 
     _check_cancelled(cancelled)
@@ -596,14 +592,7 @@ def _route_candidates(case, request, reference, inner_size,
     return candidates
 
 
-def _run_native_benchmark(case, name, repetitions):
-    if name == 'auto':
-        return case.benchmark_auto(repetitions)
-    return case.benchmark_route(name, repetitions)
-
-
-def _make_observation(request, output_shape, candidates, summaries,
-                      python_summaries):
+def _make_observation(request, output_shape, candidates, summaries):
     solvcon_routes = [
         candidate for candidate in candidates
         if candidate['kind'] == 'solvcon_route'
@@ -624,17 +613,16 @@ def _make_observation(request, output_shape, candidates, summaries,
                   if winner_time else None)
     auto = next(item for item in candidates if item['name'] == 'auto')
     routes = {}
-    numpy_summary = python_summaries.get('numpy')
+    numpy_summary = summaries.get('numpy')
     numpy_median = (None if numpy_summary is None
                     else numpy_summary['median_ns'])
     for candidate in candidates:
         route = dict(candidate)
         route['timing'] = summaries.get(candidate['name'])
-        route['python_timing'] = python_summaries.get(candidate['name'])
-        python_timing = route['python_timing']
+        timing = route['timing']
         route['numpy_ratio'] = (
-            python_timing['median_ns'] / numpy_median
-            if python_timing is not None and numpy_median else None)
+            timing['median_ns'] / numpy_median
+            if timing is not None and numpy_median else None)
         routes[candidate['name']] = route
     return {
         'id': request.request_id,
@@ -659,13 +647,11 @@ class _PreparedCase:
     output_shape: tuple
     case: object
     candidates: list
-    native_names: tuple
-    python_names: tuple
+    names: tuple
     per_call_work: int
     cell_id: str | None = None
     panels: list = dataclasses.field(default_factory=list)
     samples_by_route: dict = dataclasses.field(default_factory=dict)
-    python_samples_by_route: dict = dataclasses.field(default_factory=dict)
 
 
 def _prepare_case(request, engine, cell_id=None, progress=None,
@@ -695,12 +681,7 @@ def _prepare_case(request, engine, cell_id=None, progress=None,
     candidates = _route_candidates(
         case, request, reference, request.lhs.shape[-1],
         progress=progress, cancelled=cancelled, cell_id=cell_id)
-    native_names = tuple(
-        candidate['name'] for candidate in candidates
-        if candidate['kind'] != 'numpy'
-        and candidate['correctness']['correct']
-    )
-    python_names = tuple(
+    names = tuple(
         candidate['name'] for candidate in candidates
         if candidate['correctness']['correct']
     )
@@ -711,12 +692,10 @@ def _prepare_case(request, engine, cell_id=None, progress=None,
         output_shape=output_shape,
         case=case,
         candidates=candidates,
-        native_names=native_names,
-        python_names=python_names,
+        names=names,
         per_call_work=per_call_work,
         cell_id=cell_id,
-        samples_by_route={name: [] for name in native_names},
-        python_samples_by_route={name: [] for name in python_names},
+        samples_by_route={name: [] for name in names},
     )
 
 
@@ -724,16 +703,7 @@ def _warm_up(prepared, warmups=None, progress=None, cancelled=None):
     request = prepared.request
     if warmups is None:
         warmups = request.mode.warmups
-    for order in schedule.balanced_orders(prepared.native_names, 1):
-        for name in order:
-            if warmups:
-                _run_activity(
-                    lambda name=name: _run_native_benchmark(
-                        prepared.case, name, warmups),
-                    'warmup', name, warmups, progress, cancelled,
-                    resolved_route=_resolved_route(prepared, name),
-                    cell_id=prepared.cell_id, scope='native_batch')
-    for order in schedule.balanced_orders(prepared.python_names, 1):
+    for order in schedule.balanced_orders(prepared.names, 1):
         for name in order:
             if warmups:
                 _run_activity(
@@ -741,8 +711,7 @@ def _warm_up(prepared, warmups=None, progress=None, cancelled=None):
                         prepared, name, warmups),
                     'warmup', name, warmups, progress, cancelled,
                     resolved_route=_resolved_route(prepared, name),
-                    cell_id=prepared.cell_id,
-                    scope='python_end_to_end')
+                    cell_id=prepared.cell_id)
 
 
 def _resolved_route(prepared, name):
@@ -768,59 +737,30 @@ def _measure_panel(prepared, panel_index, clock, order_index=None,
     request = prepared.request
     if order_index is None:
         order_index = panel_index
-    native_order = collection_module.balanced_order_at(
-        prepared.native_names, order_index)
-    native_samples = []
-    for name in native_order:
+    order = collection_module.balanced_order_at(
+        prepared.names, order_index)
+    samples = []
+    for name in order:
         _, elapsed_ns = _run_activity(
-            lambda name=name: _run_native_benchmark(
-                prepared.case, name, request.mode.repetitions),
-            'native_batch', name, request.mode.repetitions,
+            lambda name=name: _benchmark_python(
+                prepared.case, name, request.mode.repetitions,
+                prepared.lhs, prepared.rhs, clock),
+            'timing', name, request.mode.repetitions,
             progress, cancelled,
             resolved_route=_resolved_route(prepared, name),
             cell_id=prepared.cell_id, panel=panel, panels=panels)
         latency_ns = elapsed_ns / request.mode.repetitions
         prepared.samples_by_route[name].append(latency_ns)
-        native_samples.append({
+        samples.append({
             'route': name,
-            'scope': 'native_batch',
             'repetitions': request.mode.repetitions,
             'elapsed_ns': elapsed_ns,
             'latency_ns': latency_ns,
         })
     prepared.panels.append({
         'index': panel_index,
-        'scope': 'native_batch',
-        'order': list(native_order),
-        'samples': native_samples,
-    })
-
-    python_order = collection_module.balanced_order_at(
-        prepared.python_names, order_index)
-    python_samples = []
-    for name in python_order:
-        _, elapsed_ns = _run_activity(
-            lambda name=name: _benchmark_python(
-                prepared.case, name, request.mode.repetitions,
-                prepared.lhs, prepared.rhs, clock),
-            'python_end_to_end', name, request.mode.repetitions,
-            progress, cancelled,
-            resolved_route=_resolved_route(prepared, name),
-            cell_id=prepared.cell_id, panel=panel, panels=panels)
-        latency_ns = elapsed_ns / request.mode.repetitions
-        prepared.python_samples_by_route[name].append(latency_ns)
-        python_samples.append({
-            'route': name,
-            'scope': 'python_end_to_end',
-            'repetitions': request.mode.repetitions,
-            'elapsed_ns': elapsed_ns,
-            'latency_ns': latency_ns,
-        })
-    prepared.panels.append({
-        'index': panel_index,
-        'scope': 'python_end_to_end',
-        'order': list(python_order),
-        'samples': python_samples,
+        'order': list(order),
+        'samples': samples,
     })
 
 
@@ -829,13 +769,9 @@ def _finish_artifact(prepared, metadata):
         name: _summarize(samples)
         for name, samples in prepared.samples_by_route.items()
     }
-    python_summaries = {
-        name: _summarize(samples)
-        for name, samples in prepared.python_samples_by_route.items()
-    }
     observation = _make_observation(
         prepared.request, prepared.output_shape, prepared.candidates,
-        summaries, python_summaries)
+        summaries)
     return {
         'schema_version': schema.SCHEMA_VERSION,
         'schema_kind': schema.ARTIFACT_KIND,

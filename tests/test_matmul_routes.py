@@ -45,7 +45,7 @@ class MatmulRouteTestBase(sc.testing.TestBase):
             lhs_data.shape[-1], 1)
         for route in routes:
             with self.subTest(kernel=route.kernel):
-                result = lhs.matmul_with_route(rhs, route)
+                result = lhs.matmul(rhs, kernel=route.kernel)
                 np.testing.assert_allclose(
                     result.ndarray, expected, rtol=tol, atol=tol)
         return lhs, rhs, routes
@@ -113,7 +113,7 @@ class MatmulRouteTestBase(sc.testing.TestBase):
         self.assertFalse(gemm.eager_pack_lhs)
         self.assertFalse(gemm.scratch_pack_rhs)
 
-    def test_route_is_read_only_and_input_scoped(self):
+    def test_route_metadata_is_read_only_and_kernel_is_validated(self):
         lhs_data = self.make_data(4).reshape(2, 2)
         rhs_data = self.make_data(4).reshape(2, 2)
         lhs, rhs, routes = self.assert_route_results(
@@ -125,36 +125,10 @@ class MatmulRouteTestBase(sc.testing.TestBase):
         with self.assertRaises(AttributeError):
             route.kernel = 'blas_gemm'
 
-        other_lhs = self.SimpleArray(array=lhs_data.copy())
-        with self.assertRaisesRegex(ValueError, 'route is not eligible'):
-            other_lhs.matmul_with_route(rhs, route)
-
-        reshaped_lhs = lhs.reshape((1, 2, 2))
-        reshaped_rhs = rhs.reshape((1, 2, 2))
-        with self.assertRaisesRegex(ValueError, 'route is not eligible'):
-            reshaped_lhs.matmul_with_route(reshaped_rhs, route)
-        with self.assertRaisesRegex(ValueError, 'route is not eligible'):
-            reshaped_lhs.benchmark_matmul_route(
-                reshaped_rhs, route, 2)
-
-        result, elapsed_ns = lhs.benchmark_matmul(rhs, 2)
-        expected = np.matmul(lhs_data, rhs_data)
-        np.testing.assert_allclose(result.ndarray, expected)
-        self.assertGreater(elapsed_ns, 0)
-        for benchmark_route in routes:
-            with self.subTest(benchmark_kernel=benchmark_route.kernel):
-                route_result, route_ns = lhs.benchmark_matmul_route(
-                    rhs, benchmark_route, 2)
-                np.testing.assert_allclose(
-                    route_result.ndarray, expected)
-                self.assertGreater(route_ns, 0)
-
-        with self.assertRaisesRegex(
-                ValueError, 'repetitions must be positive'):
-            lhs.benchmark_matmul(rhs, 0)
-        with self.assertRaisesRegex(
-                ValueError, 'repetitions must be positive'):
-            lhs.benchmark_matmul_route(rhs, route, 0)
+        with self.assertRaisesRegex(ValueError, "kernel 'unknown'"):
+            lhs.matmul(rhs, kernel='unknown')
+        with self.assertRaises(TypeError):
+            lhs.matmul(rhs, route.kernel)
 
     def test_empty_contraction_and_batch_domains(self):
         dtype = np.dtype(self.dtype).name

@@ -51,17 +51,6 @@ class FakeCase:
         self.events.append(('execute', self.case_index, name, 1))
         return self._result()
 
-    def benchmark_auto(self, repetitions):
-        self.events.append(
-            ('benchmark', self.case_index, 'auto', repetitions))
-        return self._result(), 20 * repetitions
-
-    def benchmark_route(self, name, repetitions):
-        self.events.append(
-            ('benchmark', self.case_index, name, repetitions))
-        duration = 15 if name == 'naive' else 5
-        return self._result(), duration * repetitions
-
 
 class FakeEngine:
     def __init__(self):
@@ -238,7 +227,7 @@ class CollectionPlanTC(unittest.TestCase):
             plan.cells[0].routes,
             ('naive', 'blas_gemm', 'winograd'))
         self.assertEqual(estimate.route_count, 3)
-        self.assertGreater(estimate.measurement_work, 900_000_000_000)
+        self.assertGreater(estimate.measurement_work, 500_000_000_000)
 
     def test_estimate_counts_actual_routes(self):
         plan = matmul_benchmark.collection.default_shape_boundary_plan(
@@ -388,18 +377,18 @@ class CollectionPlanTC(unittest.TestCase):
         self.assertEqual(estimate.route_count, 2)
         self.assertEqual(estimate.panel_count, 3)
         self.assertEqual(estimate.preflight_calls, 4)
-        self.assertEqual(estimate.matmul_calls, 53)
-        self.assertEqual(estimate.scalar_contractions, 1272)
-        self.assertEqual(estimate.measurement_work, 2650)
+        self.assertEqual(estimate.matmul_calls, 32)
+        self.assertEqual(estimate.scalar_contractions, 768)
+        self.assertEqual(estimate.measurement_work, 1600)
         self.assertEqual(estimate.peak_bytes, 400)
         self.assertEqual(
             matmul_benchmark.collection.estimate_artifact_bytes(plan),
-            32_000)
+            20_480)
         with unittest.mock.patch.object(
                 matmul_benchmark.collection,
-                'MAX_COLLECTION_ARTIFACT_BYTES', 31_999):
+                'MAX_COLLECTION_ARTIFACT_BYTES', 20_479):
             with self.assertRaisesRegex(
-                    MemoryError, 'artifact estimate needs 32000'):
+                    MemoryError, 'artifact estimate needs 20480'):
                 matmul_benchmark.collection.estimate_plan(plan)
 
     def test_estimate_includes_logical_operand_materialization(self):
@@ -626,7 +615,7 @@ class PlanCollectorTC(unittest.TestCase):
                     prepared = matmul_benchmark.collector._prepare_case(
                         plan.request_at(0), FakeEngine())
 
-        self.assertEqual(prepared.native_names, ('auto', 'blas_gemm'))
+        self.assertEqual(prepared.names, ('auto', 'blas_gemm'))
 
     def test_prepared_case_keeps_output_shape_not_numpy_reference(self):
         plan = make_plan(
@@ -665,15 +654,16 @@ class PlanCollectorTC(unittest.TestCase):
         self.assertIsNone(activity[0]['cell_id'])
 
         measured = [
-            event for event in engine.events
-            if event[0] == 'benchmark' and event[3] == 2
+            event for event in activity
+            if event['phase'] == 'timing'
+            and event['state'] == 'started'
         ]
         measured_cells = [
-            measured[index][1]
+            measured[index]['cell_id']
             for index in range(0, len(measured), 3)
         ]
         expected_cells = [
-            cell_index
+            plan.cells[cell_index].cell_id
             for order in matmul_benchmark.collection.panel_cell_orders(plan)
             for cell_index in order
         ]
@@ -688,7 +678,7 @@ class PlanCollectorTC(unittest.TestCase):
         self.assertEqual(len(document['observations']), len(plan.cells))
         self.assertEqual(
             len(document['panels']),
-            2 * plan.mode.panels * len(plan.cells))
+            plan.mode.panels * len(plan.cells))
         self.assertEqual(document['cell_orders'], [
             [plan.cells[index].cell_id for index in order]
             for order in matmul_benchmark.collection.panel_cell_orders(plan)
@@ -697,7 +687,6 @@ class PlanCollectorTC(unittest.TestCase):
         first_panels = [
             item['panel'] for item in document['panels']
             if item['source_id'] == first_source
-            and item['panel']['scope'] == 'native_batch'
         ]
         naive_samples = [
             sample['latency_ns'] for panel in first_panels

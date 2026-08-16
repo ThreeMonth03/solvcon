@@ -57,10 +57,9 @@ class RouteInspectorWidget(QtWidgets.QWidget):
         'Eager pack',
         'Scratch pack',
         'Correctness',
-        'Native median',
-        'Native p95',
-        'Native MAD/median',
-        'Python E2E median',
+        'Median',
+        'p95',
+        'MAD/median',
         'vs NumPy',
     )
 
@@ -457,9 +456,6 @@ class RouteInspectorWidget(QtWidgets.QWidget):
                     _process._summary_value(candidate, 'p95_ns')),
                 self._format_ratio(
                     _process._summary_value(candidate, 'noise')),
-                _process._format_time(
-                    _process._summary_value(
-                        candidate, 'python_median_ns')),
                 self._format_ratio(numpy_ratio, suffix='x'),
             )
             for column, value in enumerate(values):

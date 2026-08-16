@@ -454,11 +454,11 @@ def _calculate_estimate(plan):
         routes = plan.routes if cell.routes is None else cell.routes
         actual_routes.update(routes)
         native_streams = 1 + len(routes)
-        python_streams = native_streams + int(plan.numpy_baseline)
+        timing_streams = native_streams + int(plan.numpy_baseline)
         cell_preflight_calls = 1 + native_streams
         calls_per_cell = (
             cell_preflight_calls
-            + (native_streams + python_streams) * calls_per_stream)
+            + timing_streams * calls_per_stream)
         (contractions, per_call_work, operand_peak, output_bytes,
          native_scratch_bytes) = \
             _cell_metrics(cell, plan.dtype, routes)
@@ -547,7 +547,7 @@ def estimate_artifact_bytes(plan, panel_count=None):
         route_count = len(
             plan.routes if cell.routes is None else cell.routes)
         samples_per_panel = (
-            2 + 2 * route_count + int(plan.numpy_baseline))
+            1 + route_count + int(plan.numpy_baseline))
         total += (
             ARTIFACT_FIXED_BYTES_PER_CELL
             + ARTIFACT_BYTES_PER_PANEL_SAMPLE
@@ -936,27 +936,16 @@ def validate_collection_provenance(document):
 
 
 def _validate_source_panels(panels, request, source_index):
-    by_scope = {
-        (panel['index'], panel['scope']): panel for panel in panels
-    }
-    native_names = ('auto', *request.routes)
-    python_names = native_names + (
+    by_index = {panel['index']: panel for panel in panels}
+    names = ('auto', *request.routes) + (
         ('numpy',) if request.numpy_baseline else ())
-    native_orders = schedule.balanced_orders(
-        native_names, request.mode.panels)
-    python_orders = schedule.balanced_orders(
-        python_names, request.mode.panels)
+    orders = schedule.balanced_orders(names, request.mode.panels)
     for panel_index in range(request.mode.panels):
-        expected = {
-            'native_batch': native_orders[panel_index],
-            'python_end_to_end': python_orders[panel_index],
-        }
-        for scope, order in expected.items():
-            panel = by_scope.get((panel_index, scope))
-            if panel is None or panel['order'] != list(order):
-                raise schema.SchemaError(
-                    f'collection source {source_index} panels do not '
-                    'match its request schedule')
+        panel = by_index.get(panel_index)
+        if panel is None or panel['order'] != list(orders[panel_index]):
+            raise schema.SchemaError(
+                f'collection source {source_index} panels do not '
+                'match its request schedule')
 
 
 # vim: set ff=unix fenc=utf8 et sw=4 ts=4 sts=4 tw=79:

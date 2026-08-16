@@ -139,11 +139,10 @@ def _artifact():
             'correct': True, 'max_absolute_error': None,
         },
         'timing': {
-            'sample_count': 2, 'median_ns': 520.0,
-            'p95_ns': 550.0, 'mad_ns': 10.4,
-            'minimum_ns': 500.0, 'maximum_ns': 550.0,
+            'sample_count': 2, 'median_ns': 800.0,
+            'p95_ns': 850.0, 'mad_ns': 16.0,
+            'minimum_ns': 780.0, 'maximum_ns': 850.0,
         },
-        'python_timing': {'median_ns': 800.0},
         'numpy_ratio': 0.8,
     }
     blas = {
@@ -158,11 +157,10 @@ def _artifact():
             'correct': True, 'max_absolute_error': 1e-7,
         },
         'timing': {
-            'sample_count': 2, 'median_ns': 400.0,
-            'p95_ns': 430.0, 'mad_ns': 12.0,
-            'minimum_ns': 390.0, 'maximum_ns': 430.0,
+            'sample_count': 2, 'median_ns': 620.0,
+            'p95_ns': 680.0, 'mad_ns': 31.0,
+            'minimum_ns': 600.0, 'maximum_ns': 680.0,
         },
-        'python_timing': {'median_ns': 620.0},
         'numpy_ratio': 0.62,
     }
     noisy = dict(naive)
@@ -207,7 +205,7 @@ def _collection():
 def _activity(**updates):
     event = {
         'type': 'progress',
-        'phase': 'native_batch',
+        'phase': 'timing',
         'state': 'started',
         'route': 'auto',
         'resolved_route': 'winograd',
@@ -220,7 +218,6 @@ def _activity(**updates):
         'chunk_calls': 5,
         'event_at_ns': 123,
         'message': 'timing auto with winograd',
-        'scope': 'native_batch',
     }
     event.update(updates)
     return event
@@ -319,20 +316,6 @@ class BenchmarkProcessTC(unittest.TestCase):
         process = self.processes[0]
 
         process.emit_json(_activity(chunk=0))
-        process.exit(1)
-
-        self.assertEqual(
-            failures,
-            ['Invalid worker output: malformed activity event'])
-        self.assertTrue(process.terminated)
-
-    def test_unknown_activity_scope_fails_closed(self):
-        failures = []
-        self.runner.failed.connect(failures.append)
-        self.runner.start({'schema_version': 1, 'threads': 1})
-        process = self.processes[0]
-
-        process.emit_json(_activity(scope='mixed_timing'))
         process.exit(1)
 
         self.assertEqual(
@@ -802,7 +785,7 @@ class RouteInspectorTC(unittest.TestCase):
 
         self.assertIn('Running: Auto -> Winograd',
                       self.widget._status.text())
-        self.assertIn('phase: native timing', self.widget._status.text())
+        self.assertIn('phase: measurement', self.widget._status.text())
         self.assertIn('call 1-5/5', self.widget._status.text())
         self.widget.stop()
 
@@ -824,8 +807,7 @@ class RouteInspectorTC(unittest.TestCase):
 
         process.emit_json(_activity(
             phase='preparation', route='input', resolved_route=None,
-            panel=None, panels=None, total_calls=1, chunk_calls=1,
-            scope=None))
+            panel=None, panels=None, total_calls=1, chunk_calls=1))
 
         self.assertIn('Running: Inputs', self.widget._status.text())
         self.assertIn('phase: input preparation',
@@ -839,8 +821,7 @@ class RouteInspectorTC(unittest.TestCase):
 
         process.emit_json(_activity(
             phase='provenance', route='input', resolved_route=None,
-            panel=None, panels=None, total_calls=1, chunk_calls=1,
-            scope=None))
+            panel=None, panels=None, total_calls=1, chunk_calls=1))
 
         self.assertIn('Running: Environment', self.widget._status.text())
         self.assertIn('phase: recording machine and build details',
@@ -848,15 +829,15 @@ class RouteInspectorTC(unittest.TestCase):
         self.widget.stop()
         process.exit(1)
 
-    def test_setup_activity_explains_its_timing_scope(self):
+    def test_setup_activity_uses_plain_status_label(self):
         self.widget.start_benchmark()
         process = self.widget._runner._process
 
         process.emit_json(_activity(
             phase='warmup', route='winograd', resolved_route=None,
-            panel=None, panels=None, scope='python_end_to_end'))
+            panel=None, panels=None))
 
-        self.assertIn('phase: Python end-to-end setup run',
+        self.assertIn('phase: setup run',
                       self.widget._status.text())
         self.widget.stop()
         process.exit(1)
@@ -878,7 +859,7 @@ class RouteInspectorTC(unittest.TestCase):
                 process.emit_json(_activity(
                     phase=phase, route=route, resolved_route=None,
                     panel=None, panels=None, total_calls=1,
-                    chunk_calls=1, scope=None))
+                    chunk_calls=1))
                 self.assertIn(f'Running: {route_label}',
                               self.widget._status.text())
                 self.assertIn(f'phase: {phase_label}',
@@ -1049,10 +1030,7 @@ class RouteInspectorTC(unittest.TestCase):
                 blas_row, columns['Correctness']).text().startswith('pass'))
         self.assertEqual(
             self.widget._table.item(
-                blas_row, columns['Native median']).text(), '400.0 ns')
-        self.assertEqual(
-            self.widget._table.item(
-                blas_row, columns['Python E2E median']).text(), '620.0 ns')
+                blas_row, columns['Median']).text(), '620.0 ns')
         self.assertEqual(
             self.widget._table.item(
                 blas_row, columns['vs NumPy']).text(), '0.620x')
@@ -1245,7 +1223,7 @@ class AtlasTC(unittest.TestCase):
         observation['winner_margin'] = 0.1
         routes = observation['routes']
         routes['blas_gemm']['timing']['mad_ns'] = 4.0
-        routes['naive']['timing']['mad_ns'] = 156.0
+        routes['naive']['timing']['mad_ns'] = 240.0
 
         point = self.widget._make_point(observation, 16.0, 32.0)
 
