@@ -371,6 +371,12 @@ private:
     using matrix_view_type = BlasMatrixView<value_type>;
     using vector_view_type = BlasVectorView<value_type>;
 
+    MatmulExecutor(
+        MatmulPlan plan,
+        value_type * output_data,
+        Array const & lhs,
+        Array const & rhs);
+
     enum class MappingSlot : std::uint8_t
     {
         Output,
@@ -402,7 +408,6 @@ private:
         std::numeric_limits<size_t>::max() / sizeof(value_type),
         static_cast<size_t>(std::numeric_limits<ssize_t>::max()));
 
-    MatmulExecutor(MatmulPlan plan, Array const & lhs, Array const & rhs);
     small_vector<MatmulRoute> routes() const;
     MatmulSelection select_execution() const;
     MatmulSelection select_dot() const;
@@ -714,11 +719,15 @@ std::string MatmulPlan::shape_string(Array const & array)
 }
 
 template <typename Array>
-MatmulExecutor<Array>::MatmulExecutor(MatmulPlan plan, Array const & lhs, Array const & rhs)
+MatmulExecutor<Array>::MatmulExecutor(
+    MatmulPlan plan,
+    value_type * output_data,
+    Array const & lhs,
+    Array const & rhs)
     : m_plan(std::move(plan))
     , m_lhs(lhs)
     , m_rhs(rhs)
-    , m_output_data(nullptr)
+    , m_output_data(output_data)
     , m_lhs_data(lhs.logical_data())
     , m_rhs_data(rhs.logical_data())
 {
@@ -726,9 +735,8 @@ MatmulExecutor<Array>::MatmulExecutor(MatmulPlan plan, Array const & lhs, Array 
 
 template <typename Array>
 MatmulExecutor<Array>::MatmulExecutor(MatmulPlan plan, Array & output, Array const & lhs, Array const & rhs)
-    : MatmulExecutor(std::move(plan), lhs, rhs)
+    : MatmulExecutor(std::move(plan), output.logical_data(), lhs, rhs)
 {
-    m_output_data = output.logical_data();
 }
 
 template <typename Array>
@@ -737,7 +745,7 @@ small_vector<MatmulRoute> MatmulExecutor<Array>::routes(
     Array const & lhs,
     Array const & rhs)
 {
-    MatmulExecutor executor(std::move(plan), lhs, rhs);
+    MatmulExecutor executor(std::move(plan), nullptr, lhs, rhs);
     return executor.routes();
 }
 
