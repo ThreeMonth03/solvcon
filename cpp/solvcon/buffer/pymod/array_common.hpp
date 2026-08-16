@@ -238,7 +238,7 @@ public:
         T * logical_data = nullptr;
         if (array.device() == BufferDevice::Metal)
         {
-            pybind11::gil_scoped_release release;
+            pybind11::gil_scoped_release const release;
             logical_data = array.logical_data();
         }
         else

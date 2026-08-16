@@ -152,7 +152,7 @@ class SOLVCON_PYTHON_WRAPPER_VISIBILITY WrapSimpleArray
                 "wait",
                 [](wrapped_type const & self)
                 {
-                    py::gil_scoped_release release;
+                    py::gil_scoped_release const release;
                     self.wait();
                 })
             .def(
@@ -160,7 +160,7 @@ class SOLVCON_PYTHON_WRAPPER_VISIBILITY WrapSimpleArray
                 [](wrapped_type const & self, std::string const & device)
                 {
                     BufferDevice const target = detail::parse_buffer_device(device);
-                    py::gil_scoped_release release;
+                    py::gil_scoped_release const release;
                     return self.to(target);
                 },
                 py::arg("device"))
@@ -168,7 +168,7 @@ class SOLVCON_PYTHON_WRAPPER_VISIBILITY WrapSimpleArray
                 "cpu",
                 [](wrapped_type const & self)
                 {
-                    py::gil_scoped_release release;
+                    py::gil_scoped_release const release;
                     return self.to(BufferDevice::Cpu);
                 })
             .def_property_readonly(

@@ -202,7 +202,7 @@ std::enable_if_t<is_simple_array_v<S>, pybind11::array> to_ndarray(S && sarr)
     pointer_type logical_data = nullptr;
     if (sarr.device() == BufferDevice::Metal)
     {
-        py::gil_scoped_release release;
+        py::gil_scoped_release const release;
         logical_data = sarr.logical_data();
     }
     else

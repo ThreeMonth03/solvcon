@@ -439,7 +439,7 @@ inline ConcreteBuffer::InternalHostAccessGuard::~InternalHostAccessGuard()
 inline void ConcreteBuffer::copy_from(ConcreteBuffer const & other)
 {
     std::array<remover_type const *, 2> removers{remover(), other.remover()};
-    std::ranges::sort(removers, std::less<remover_type const *>());
+    std::ranges::sort(removers, std::less<>());
 
     std::optional<InternalHostAccessGuard> first;
     std::optional<InternalHostAccessGuard> second;
