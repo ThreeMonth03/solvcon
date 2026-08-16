@@ -11,8 +11,7 @@ The prototype adds two connected pages:
 
 1. Route Inspector builds one input pair from dtype, complete shapes, and
    element strides. It verifies every selected dispatch against NumPy, records
-   native and Python end-to-end timing, and shows a table plus hoverable timing
-   chart.
+   timings, and shows a table plus hoverable timing chart.
 2. Dispatch Atlas collects or loads many completed observations and renders
    exact feature coordinates as a rotatable 3-D point cloud. Rendering,
    filtering, and changing axes never start a benchmark.
@@ -42,10 +41,9 @@ Route Inspector or Atlas collection dialog
 ```
 
 Public matmul enters `MatmulPlan` and `MatmulExecutor` in
-`cpp/solvcon/buffer/matmul.hpp`. The prototype adds immutable input-scoped
-`MatmulRoute` objects, route enumeration, forced execution, and native timed
-batches. Forced execution rejects a route created for a different operand
-pair.
+`cpp/solvcon/buffer/matmul.hpp`. The prototype adds kernel enumeration and a
+keyword-only `kernel` argument to `matmul()`. Omitting the argument preserves
+automatic selection, while a named kernel executes one eligible alternative.
 
 The headless request, collection, artifact, and feature code lives in
 `solvcon/matmul_benchmark/`. Pilot integration lives in adjacent
@@ -97,17 +95,13 @@ Correctness runs before timing. A wrong or non-finite result is recorded but
 excluded from timing and winner selection. Requested routes and cells use a
 deterministic balanced order.
 
-Each measurement round has two independent scopes:
-
-- `native_batch` measures repeated native calls with a C++ steady clock. It
-  excludes Python call overhead.
-- `python_end_to_end` measures complete calls from Python with
-  `perf_counter_ns`. NumPy appears only in this scope, so `vs NumPy` compares
-  the same call boundary.
+Each measurement round times complete route calls with `perf_counter_ns`.
+Solvcon kernels and NumPy use the same measurement loop, and `vs NumPy` is
+derived from their summaries.
 
 Summaries contain median, MAD, p95, minimum, and maximum. Winner and runner-up
-use native medians from correct forced routes. Auto and NumPy cannot become
-the winner.
+use medians from correct forced routes. Auto and NumPy cannot become the
+winner.
 
 The quality selector always shows its schedule in plain language:
 
@@ -169,7 +163,7 @@ A benchmark artifact records:
 
 - dtype, complete shapes, element strides, and derived contraction facts;
 - enumerated dispatches, Auto selection, and packing recipes;
-- correctness results and raw timing blocks for both scopes;
+- correctness results and raw timing blocks;
 - timing summaries, winner, runner-up, margin, and NumPy ratios; and
 - process, machine, build, NumPy, loader, threading, and affinity metadata.
 
@@ -184,11 +178,9 @@ aliases are intentionally not retained.
 
 ## Route Inspector presentation
 
-The timing chart uses horizontal median bars and p95 whiskers. Native and
-Python end-to-end scopes are selectable, with visible helper text explaining
-what each includes. Exact median, p95, noise, speedup, packing, correctness,
-and selection details appear on hover. Chart and table selection stay
-synchronized.
+The timing chart uses horizontal median bars and p95 whiskers. Exact median,
+p95, noise, speedup, packing, correctness, and selection details appear on
+hover. Chart and table selection stay synchronized.
 
 Dispatch checkboxes use Naive, BLAS DOT, BLAS GEVM, BLAS GEMV, BLAS GEMM, and
 Winograd labels. They are generated in canonical request order and react to
@@ -220,9 +212,9 @@ dependency.
 
 Native route tests force every enumerated dispatch across float and complex
 dtypes, compact and strided storage, broadcast and batch cases, empty domains,
-and input identity checks. Backend tests cover correctness gating, balanced
-schedules, timing scopes, strict artifacts, merging, resource validation,
-complete-round partials, worker failure, and parent-death cleanup.
+and keyword validation. Backend tests cover correctness gating, balanced
+schedules, strict artifacts, merging, resource validation, complete-round
+partials, worker failure, and parent-death cleanup.
 
 Pilot tests cover protocol validation, activity rendering, Stop races,
 partial-result fallback, schedule controls, exact and swept inputs, timing
