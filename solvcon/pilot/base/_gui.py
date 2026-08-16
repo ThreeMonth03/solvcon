@@ -27,6 +27,7 @@ if _pcore.enable:
     # _gui" would shadow this module's own name at every use site.
     from .. import painter as _painter
     from ..panel import _profiling
+    from ..panel import _matmul_benchmark
     from ..agent import _agent_gui
     from . import _theme
     from . import _ui_state
@@ -74,6 +75,7 @@ class _Controller(metaclass=_Singleton):
         self.save_2d_canvas = None
         self.openprofiledata = None
         self.runprofiling = None
+        self.matmul_benchmark = None
         self.agent = None
         self.theme_menu = None
         self.window_manager = None
@@ -125,6 +127,8 @@ class _Controller(metaclass=_Singleton):
         self.save_2d_canvas = _canvas_gui.Save2DCanvasDialog(mgr=self._rmgr)
         self.openprofiledata = _profiling.Profiling(mgr=self._rmgr)
         self.runprofiling = _profiling.RunProfiling(mgr=self._rmgr)
+        self.matmul_benchmark = _matmul_benchmark.MatmulBenchmark(
+            mgr=self._rmgr)
         self.agent = _agent_gui.AgentPanel(mgr=self._rmgr)
         self.theme_menu = _theme.ThemeMenu(mgr=self._rmgr)
         self.window_manager = _window_manager.WindowManager(mgr=self._rmgr)
@@ -171,6 +175,7 @@ class _Controller(metaclass=_Singleton):
         self.canvas.populate_menu()
         self.openprofiledata.populate_menu()
         self.runprofiling.populate_menu()
+        self.matmul_benchmark.populate_menu()
         self.agent.populate_menu()
         self.theme_menu.populate_menu()
         self.window_manager.populate_menu()
