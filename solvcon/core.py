@@ -96,6 +96,8 @@ list_of_toggle = [
     'ToggleSubscription',
     'METAL_BUILT',
     'metal_running',
+    'metal_statistics',
+    'reset_metal_statistics',
 ]
 
 # transform directory symbols

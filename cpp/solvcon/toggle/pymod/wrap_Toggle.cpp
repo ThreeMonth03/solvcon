@@ -786,6 +786,33 @@ void wrap_Toggle(pybind11::module & mod)
             return false;
 #endif // SOLVCON_METAL
         });
+    mod.def(
+        "metal_statistics",
+        []()
+        {
+#ifdef SOLVCON_METAL
+            device::MetalStatistics const statistics = device::MetalManager::instance().statistics();
+            py::dict result;
+            result["allocated_buffers"] = statistics.m_allocated_buffers;
+            result["submitted_commands"] = statistics.m_submitted_commands;
+            result["host_waits"] = statistics.m_host_waits;
+            return result;
+#else // SOLVCON_METAL
+            py::dict result;
+            result["allocated_buffers"] = 0;
+            result["submitted_commands"] = 0;
+            result["host_waits"] = 0;
+            return result;
+#endif // SOLVCON_METAL
+        });
+    mod.def(
+        "reset_metal_statistics",
+        []()
+        {
+#ifdef SOLVCON_METAL
+            device::MetalManager::instance().reset_statistics();
+#endif // SOLVCON_METAL
+        });
 }
 
 } /* end namespace python */

@@ -235,6 +235,17 @@ public:
 
     static pybind11::buffer_info get_buffer_info(SimpleArray<T> & array)
     {
+        T * logical_data = nullptr;
+        if (array.device() == BufferDevice::Metal)
+        {
+            pybind11::gil_scoped_release release;
+            logical_data = array.logical_data();
+        }
+        else
+        {
+            logical_data = array.logical_data();
+        }
+
         std::vector<pybind11::ssize_t> stride;
         auto const itemsize = static_cast<pybind11::ssize_t>(sizeof(T));
         for (ssize_t const i : array.stride())
@@ -261,7 +272,7 @@ public:
         }
 
         return pybind11::buffer_info(
-            array.logical_data(), /* Pointer to buffer */
+            logical_data, /* Pointer to buffer */
             sizeof(T), /* Size of one scalar */
             format, /* Python struct-style format descriptor */
             array.ndim(), /* Number of dimensions */

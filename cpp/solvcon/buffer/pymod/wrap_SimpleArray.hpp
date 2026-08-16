@@ -9,8 +9,13 @@
 
 #include <solvcon/buffer/pymod/array_common.hpp>
 
+#include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <format>
+#include <iterator>
+#include <ranges>
+#include <string>
 
 namespace solvcon
 {
@@ -26,6 +31,22 @@ namespace detail
 inline char lower_ascii(char ch)
 {
     return static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+}
+
+inline BufferDevice parse_buffer_device(std::string const & name)
+{
+    std::string normalized;
+    normalized.reserve(name.size());
+    std::ranges::transform(name, std::back_inserter(normalized), lower_ascii);
+    if (normalized == "cpu")
+    {
+        return BufferDevice::Cpu;
+    }
+    if (normalized == "metal")
+    {
+        return BufferDevice::Metal;
+    }
+    throw std::invalid_argument(std::format("unsupported SimpleArray device '{}'", name));
 }
 
 } /* end namespace detail */
@@ -54,29 +75,55 @@ class SOLVCON_PYTHON_WRAPPER_VISIBILITY WrapSimpleArray
         (*this)
             .def_timed(
                 py::init(
-                    [](py::object const & shape)
-                    { return wrapped_type(make_shape(shape)); }),
-                py::arg("shape"))
-            .def_timed(
-                py::init(
-                    [](py::object const & shape, size_t alignment)
-                    { return wrapped_type(make_shape(shape), alignment, with_alignment_t{}); }),
+                    [](py::object const & shape, std::string const & device)
+                    { return wrapped_type(make_shape(shape), detail::parse_buffer_device(device)); }),
                 py::arg("shape"),
-                py::arg("alignment"))
+                py::kw_only(),
+                py::arg("device") = "cpu")
             .def_timed(
                 py::init(
-                    [](py::object const & shape, value_type const & value)
-                    { return wrapped_type(make_shape(shape), value); }),
+                    [](py::object const & shape, size_t alignment, std::string const & device)
+                    { return wrapped_type(make_shape(shape), detail::parse_buffer_device(device), alignment); }),
                 py::arg("shape"),
-                py::arg("value"))
+                py::arg("alignment"),
+                py::kw_only(),
+                py::arg("device") = "cpu")
             .def_timed(
                 py::init(
-                    [](py::object const & shape, value_type const & value, size_t alignment)
-                    { return wrapped_type(make_shape(shape), value, alignment); }),
+                    [](py::object const & shape, value_type const & value, std::string const & device)
+                    { return wrapped_type(make_shape(shape), value, detail::parse_buffer_device(device)); }),
                 py::arg("shape"),
                 py::arg("value"),
-                py::arg("alignment"))
-            .def(py::init(&WrapSimpleArray::make_array_from_numpy), py::arg("array"))
+                py::kw_only(),
+                py::arg("device") = "cpu")
+            .def_timed(
+                py::init(
+                    [](py::object const & shape, value_type const & value, size_t alignment, std::string const & device)
+                    {
+                        return wrapped_type(
+                            make_shape(shape),
+                            value,
+                            detail::parse_buffer_device(device),
+                            alignment);
+                    }),
+                py::arg("shape"),
+                py::arg("value"),
+                py::arg("alignment"),
+                py::kw_only(),
+                py::arg("device") = "cpu")
+            .def(
+                py::init(
+                    [](py::array & array, std::string const & device)
+                    {
+                        wrapped_type result = WrapSimpleArray::make_array_from_numpy(array);
+                        BufferDevice const target = detail::parse_buffer_device(device);
+                        return target == BufferDevice::Cpu ? std::move(result) : result.to(target);
+                    }),
+                py::arg("array"),
+                py::kw_only(),
+                py::arg("device") = "cpu");
+
+        (*this)
             .def_buffer(&property_helper::get_buffer_info)
             .def("clone",
                  [](wrapped_type const & self)
@@ -95,6 +142,35 @@ class SOLVCON_PYTHON_WRAPPER_VISIBILITY WrapSimpleArray
             .def_property_readonly("size", &wrapped_type::size)
             .def_property_readonly("itemsize", &wrapped_type::itemsize)
             .def_property_readonly("alignment", &wrapped_type::alignment)
+            .def_property_readonly(
+                "device",
+                [](wrapped_type const & self)
+                { return std::string(buffer_device_name(self.device())); })
+            .def_property_readonly("ready", &wrapped_type::ready)
+            .def_property_readonly("host_exported", &wrapped_type::host_exported)
+            .def(
+                "wait",
+                [](wrapped_type const & self)
+                {
+                    py::gil_scoped_release release;
+                    self.wait();
+                })
+            .def(
+                "to",
+                [](wrapped_type const & self, std::string const & device)
+                {
+                    BufferDevice const target = detail::parse_buffer_device(device);
+                    py::gil_scoped_release release;
+                    return self.to(target);
+                },
+                py::arg("device"))
+            .def(
+                "cpu",
+                [](wrapped_type const & self)
+                {
+                    py::gil_scoped_release release;
+                    return self.to(BufferDevice::Cpu);
+                })
             .def_property_readonly(
                 "shape",
                 [](wrapped_type const & self)
@@ -489,6 +565,17 @@ class SOLVCON_PYTHON_WRAPPER_VISIBILITY WrapSimpleArray
                  { self.idiv_simd(other); })
             //
             ;
+
+#ifdef SOLVCON_METAL
+        if constexpr (std::is_same_v<value_type, float>)
+        {
+            (*this)
+                .def(
+                    "matmul_metal",
+                    [](wrapped_type const & self, wrapped_type const & other)
+                    { return self.matmul_metal(other); });
+        }
+#endif
 
         return *this;
     }

@@ -18,6 +18,10 @@
 #include <solvcon/math/math.hpp>
 #include <solvcon/simd/simd.hpp>
 
+#ifdef SOLVCON_METAL
+#include <solvcon/device/metal/metal.hpp>
+#endif
+
 // TODO: Solve circular include between <solvcon/toggle/toggle.hpp> and SimpleArray class.
 // Since it will happen circulate include when using <solvcon/toggle/toggle.hpp>,
 // I use <solvcon/profiling/RadixTree.hpp> instead.
@@ -1187,6 +1191,9 @@ public:
 
     A matmul(A const & other) const;
     A & imatmul(A const & other);
+#ifdef SOLVCON_METAL
+    A matmul_metal(A const & other) const;
+#endif
 
 private:
     static void find_two_bins(const uint32_t * freq, size_t n, int & bin1, int & bin2);
@@ -1394,6 +1401,73 @@ A & SimpleArrayMixinCalculators<A, T>::imatmul(A const & other)
 
     return *athis;
 }
+
+#ifdef SOLVCON_METAL
+template <typename A, typename T>
+A SimpleArrayMixinCalculators<A, T>::matmul_metal(A const & other) const
+{
+    using value_type = typename A::value_type;
+    if constexpr (!std::is_same_v<value_type, float>)
+    {
+        throw std::invalid_argument("matmul_metal supports only float32");
+    }
+    else
+    {
+        auto const * athis = static_cast<A const *>(this);
+        MatmulPlan plan = MatmulPlan::make(*athis, other);
+        if (athis->device() != BufferDevice::Metal || other.device() != BufferDevice::Metal)
+        {
+            throw std::invalid_argument("matmul_metal requires Metal-backed operands");
+        }
+        if (athis->ndim() != 2 || other.ndim() != 2 || plan.has_batch_axes())
+        {
+            throw std::invalid_argument("matmul_metal currently supports only two-dimensional matrices");
+        }
+        if (plan.rows() == 0 || plan.columns() == 0)
+        {
+            return A(plan.output_shape(), BufferDevice::Metal);
+        }
+        if (plan.inner_size() == 0)
+        {
+            return A(plan.output_shape(), value_type{}, BufferDevice::Metal);
+        }
+
+        bool const lhs_supported = plan.lhs_inner_stride() == 1 &&
+                                   plan.lhs_row_stride() >= plan.inner_size();
+        bool const rhs_supported = plan.rhs_column_stride() == 1 &&
+                                   plan.rhs_inner_stride() >= plan.columns();
+        if (!lhs_supported || !rhs_supported)
+        {
+            throw std::invalid_argument("matmul_metal requires positive row-major matrix strides");
+        }
+
+        A output(plan.output_shape(), BufferDevice::Metal);
+        device::MetalGemmOperation const operation{
+            .m_rows = plan.rows(),
+            .m_columns = plan.columns(),
+            .m_inner_size = plan.inner_size(),
+            .m_lhs = {
+                .m_buffer = &athis->buffer(),
+                .m_byte_offset = athis->data_offset(),
+                .m_leading_dimension = plan.lhs_row_stride(),
+            },
+            .m_rhs = {
+                .m_buffer = &other.buffer(),
+                .m_byte_offset = other.data_offset(),
+                .m_leading_dimension = plan.rhs_inner_stride(),
+            },
+            .m_output = {
+                .m_buffer = &output.buffer(),
+                .m_byte_offset = output.data_offset(),
+                .m_leading_dimension = plan.columns(),
+            },
+        };
+        device::MetalManager::instance().gemm_async(operation);
+        return output;
+    }
+}
+
+#endif
 
 /**
  * Find the two bins that correspond to the median values for frequency-based median calculation.
@@ -1889,6 +1963,11 @@ public:
     {
     }
 
+    SimpleArray(ssize_t length, BufferDevice device, size_t alignment = 0)
+        : SimpleArray(shape_type{length}, device, alignment)
+    {
+    }
+
     template <InputIterator InputIt>
     SimpleArray(InputIt first, InputIt last, size_t alignment = 0)
         : SimpleArray(last - first, alignment)
@@ -1898,24 +1977,34 @@ public:
 
     // NOLINTNEXTLINE(modernize-pass-by-value)
     explicit SimpleArray(shape_type const & shape)
-        : m_shape(shape)
-        , m_stride(calc_stride(m_shape))
+        : SimpleArray(shape, BufferDevice::Cpu, 0)
     {
-        if (!m_shape.empty())
-        {
-            m_buffer = buffer_type::construct(static_cast<size_t>(storage_size(m_shape, m_stride)) * ITEMSIZE, 0);
-            update_data_pointers();
-        }
     }
 
     // NOLINTNEXTLINE(modernize-pass-by-value)
     SimpleArray(shape_type const & shape, size_t alignment, with_alignment_t const & /* unnamed argument for tagging */)
+        : SimpleArray(shape, BufferDevice::Cpu, alignment)
+    {
+    }
+
+    // NOLINTNEXTLINE(modernize-pass-by-value)
+    SimpleArray(shape_type const & shape, BufferDevice device, size_t alignment = 0)
         : m_shape(shape)
         , m_stride(calc_stride(m_shape))
     {
-        if (!m_shape.empty())
+        if (m_shape.empty())
         {
-            m_buffer = buffer_type::construct(static_cast<size_t>(storage_size(m_shape, m_stride)) * ITEMSIZE, alignment);
+            if (device == BufferDevice::Metal)
+            {
+                throw std::invalid_argument("SimpleArray: scalar Metal storage is not supported by this prototype");
+            }
+        }
+        else
+        {
+            m_buffer = buffer_type::construct(
+                static_cast<size_t>(storage_size(m_shape, m_stride)) * ITEMSIZE,
+                alignment,
+                device);
             update_data_pointers();
         }
     }
@@ -1932,8 +2021,19 @@ public:
         std::fill(begin(), end(), value);
     }
 
+    SimpleArray(shape_type const & shape, value_type const & value, BufferDevice device, size_t alignment = 0)
+        : SimpleArray(shape, device, alignment)
+    {
+        std::fill_n(m_logical_data, size(), value);
+    }
+
     explicit SimpleArray(std::vector<ssize_t> const & shape)
         : SimpleArray(shape_type(shape))
+    {
+    }
+
+    SimpleArray(std::vector<ssize_t> const & shape, BufferDevice device, size_t alignment = 0)
+        : SimpleArray(shape_type(shape), device, alignment)
     {
     }
 
@@ -2176,18 +2276,36 @@ public:
     /// Return the underlying buffer alignment in bytes. If no buffer or no alignment, return 0.
     size_t alignment() const noexcept { return m_buffer ? m_buffer->alignment() : 0; }
 
+    /// Return the device that owns the underlying storage.
+    BufferDevice device() const noexcept { return m_buffer ? m_buffer->device() : BufferDevice::Cpu; }
+    /// Return true when the last asynchronous use has completed.
+    bool ready() const { return !m_buffer || m_buffer->ready(); }
+    /// Wait for the last asynchronous use without exporting host memory.
+    void wait() const
+    {
+        if (m_buffer)
+        {
+            m_buffer->wait();
+        }
+    }
+    /// Return true after a raw host pointer or view has escaped.
+    bool host_exported() const noexcept { return m_buffer && m_buffer->host_exported(); }
+
+    /// Deep-copy this logical storage to the requested device.
+    SimpleArray to(BufferDevice target_device) const;
+
     using iterator = T *;
     using const_iterator = T const *;
 
-    iterator begin() noexcept { return data(); }
-    iterator end() noexcept { return data() + size(); }
-    const_iterator begin() const noexcept { return data(); }
-    const_iterator end() const noexcept { return data() + size(); }
-    const_iterator cbegin() const noexcept { return begin(); }
-    const_iterator cend() const noexcept { return end(); }
+    iterator begin() { return data(); }
+    iterator end() { return data() + size(); }
+    const_iterator begin() const { return data(); }
+    const_iterator end() const { return data() + size(); }
+    const_iterator cbegin() const { return begin(); }
+    const_iterator cend() const { return end(); }
 
-    value_type const & operator[](size_t it) const noexcept { return data(it); }
-    value_type & operator[](size_t it) noexcept { return data(it); }
+    value_type const & operator[](size_t it) const { return data(it); }
+    value_type & operator[](size_t it) { return data(it); }
 
     value_type const & at(ssize_t it) const
     {
@@ -2254,7 +2372,7 @@ public:
         m_nghost = nghost;
         if (bool(*this))
         {
-            m_body = calc_body(logical_data(), m_stride, m_nghost);
+            m_body = calc_body(m_logical_data, m_stride, m_nghost);
         }
     }
 
@@ -2345,9 +2463,17 @@ public:
     value_type & operator()(Args... args) { return *vptr(args...); }
 
     template <typename... Args>
-    value_type const * vptr(Args... args) const { return m_body + buffer_offset(m_stride, args...); }
+    value_type const * vptr(Args... args) const
+    {
+        m_buffer->prepare_buffer_host_access();
+        return m_body + buffer_offset(m_stride, args...);
+    }
     template <typename... Args>
-    value_type * vptr(Args... args) { return m_body + buffer_offset(m_stride, args...); }
+    value_type * vptr(Args... args)
+    {
+        m_buffer->prepare_buffer_host_access();
+        return m_body + buffer_offset(m_stride, args...);
+    }
 
     std::span<value_type> as_span()
     {
@@ -2370,20 +2496,50 @@ public:
     value_type const * data() const { return buffer().template data<value_type>(); }
     value_type * data() { return buffer().template data<value_type>(); }
 
-    value_type const * logical_data() const { return m_logical_data; }
-    value_type * logical_data() { return m_logical_data; }
+    value_type const * logical_data() const
+    {
+        if (m_buffer)
+        {
+            m_buffer->prepare_buffer_host_access();
+        }
+        return m_logical_data;
+    }
+    value_type * logical_data()
+    {
+        if (m_buffer)
+        {
+            m_buffer->prepare_buffer_host_access();
+        }
+        return m_logical_data;
+    }
 
     buffer_type const & buffer() const { return *m_buffer; }
     buffer_type & buffer() { return *m_buffer; }
 
-    value_type const * body() const { return m_body; }
-    value_type * body() { return m_body; }
+    value_type const * body() const
+    {
+        if (m_buffer)
+        {
+            m_buffer->prepare_buffer_host_access();
+        }
+        return m_body;
+    }
+    value_type * body()
+    {
+        if (m_buffer)
+        {
+            m_buffer->prepare_buffer_host_access();
+        }
+        return m_body;
+    }
+
+    size_t data_offset() const noexcept { return logical_data_offset(); }
 
     bool is_c_contiguous() const { return is_c_contiguous(m_shape, m_stride); }
     bool is_f_contiguous() const { return is_f_contiguous(m_shape, m_stride); }
 
 private:
-    size_t logical_data_offset() const;
+    size_t logical_data_offset() const noexcept;
     void update_data_pointers(size_t data_offset = 0);
     void copy_logical_into(SimpleArray & out) const;
 
@@ -2685,20 +2841,40 @@ SimpleArray<T>::as_mdspan() const
 }
 
 template <typename T>
-size_t SimpleArray<T>::logical_data_offset() const
+SimpleArray<T> SimpleArray<T>::to(BufferDevice target_device) const
+{
+    if (!m_buffer)
+    {
+        if (target_device == BufferDevice::Metal)
+        {
+            throw std::invalid_argument("SimpleArray: scalar Metal storage is not supported by this prototype");
+        }
+        SimpleArray result(m_shape, BufferDevice::Cpu);
+        result.m_nghost = m_nghost;
+        return result;
+    }
+    size_t const data_offset = logical_data_offset();
+    SimpleArray result(m_shape, m_stride, m_buffer->clone_to(target_device), data_offset);
+    result.m_nghost = m_nghost;
+    result.update_data_pointers(data_offset);
+    return result;
+}
+
+template <typename T>
+size_t SimpleArray<T>::logical_data_offset() const noexcept
 {
     if (!m_logical_data)
     {
         return 0;
     }
-    value_type const * data_ptr = m_buffer->template data<value_type>();
+    value_type const * data_ptr = m_buffer->template data_unchecked<value_type>();
     return static_cast<size_t>(m_logical_data - data_ptr) * ITEMSIZE;
 }
 
 template <typename T>
 void SimpleArray<T>::update_data_pointers(size_t data_offset)
 {
-    value_type * data_ptr = m_buffer ? m_buffer->template data<value_type>() : nullptr;
+    value_type * data_ptr = m_buffer ? m_buffer->template data_unchecked<value_type>() : nullptr;
     m_logical_data = data_ptr ? data_ptr + data_offset / ITEMSIZE : nullptr;
     m_body = calc_body(m_logical_data, m_stride, m_nghost);
 }

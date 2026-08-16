@@ -39,7 +39,7 @@ inline void validate_size_alignment(std::size_t size, std::size_t alignment, con
 }
 
 /// Base class for buffer-like objects.
-template <typename Derived>
+template <typename Derived, bool HostAccessMayThrow = false>
 class BufferBase
 {
 public:
@@ -71,24 +71,40 @@ public:
     using iterator = int8_t *;
     using const_iterator = int8_t const *;
 
-    iterator begin() noexcept { return m_begin; }
-    iterator end() noexcept { return m_end; }
-    const_iterator begin() const noexcept { return m_begin; }
-    const_iterator end() const noexcept { return m_end; }
-    const_iterator cbegin() const noexcept { return m_begin; }
-    const_iterator cend() const noexcept { return m_end; }
+    iterator begin() noexcept(!HostAccessMayThrow)
+    {
+        prepare_host_access();
+        return m_begin;
+    }
+    iterator end() noexcept(!HostAccessMayThrow)
+    {
+        prepare_host_access();
+        return m_end;
+    }
+    const_iterator begin() const noexcept(!HostAccessMayThrow)
+    {
+        prepare_host_access();
+        return m_begin;
+    }
+    const_iterator end() const noexcept(!HostAccessMayThrow)
+    {
+        prepare_host_access();
+        return m_end;
+    }
+    const_iterator cbegin() const noexcept(!HostAccessMayThrow) { return begin(); }
+    const_iterator cend() const noexcept(!HostAccessMayThrow) { return end(); }
 
     /* Backdoor */
     int8_t data(size_type it) const { return data()[it]; }
     int8_t & data(size_type it) { return data()[it]; }
-    int8_t const * data() const noexcept { return data<int8_t>(); }
-    int8_t * data() noexcept { return data<int8_t>(); }
+    int8_t const * data() const noexcept(!HostAccessMayThrow) { return data<int8_t>(); }
+    int8_t * data() noexcept(!HostAccessMayThrow) { return data<int8_t>(); }
 
     // clang-format off
     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
-    template <typename T> T const * data() const noexcept { return reinterpret_cast<T *>(m_begin); }
+    template <typename T> T const * data() const noexcept(!HostAccessMayThrow) { prepare_host_access(); return reinterpret_cast<T *>(m_begin); }
     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
-    template <typename T> T * data() noexcept { return reinterpret_cast<T *>(m_begin); }
+    template <typename T> T * data() noexcept(!HostAccessMayThrow) { prepare_host_access(); return reinterpret_cast<T *>(m_begin); }
     // clang-format on
 
     constexpr const char * name() const
@@ -113,6 +129,14 @@ public:
     ~BufferBase() = default;
 
 protected:
+    void prepare_host_access() const noexcept(!HostAccessMayThrow)
+    {
+        if constexpr (requires(Derived const & derived) { derived.prepare_buffer_host_access(); })
+        {
+            static_cast<Derived const *>(this)->prepare_buffer_host_access();
+        }
+    }
+
     void validate_range(size_t it) const
     {
         if (it >= size())

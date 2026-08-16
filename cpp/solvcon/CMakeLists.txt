@@ -245,6 +245,14 @@ if (APPLE)
         ${APPLE_FWK_QUARTZ_CORE}
         ${APPLE_FWK_METAL}
     )
+    if (BUILD_METAL)
+        find_library(APPLE_FWK_MPS MetalPerformanceShaders REQUIRED)
+        target_link_libraries(solvcon_primary PRIVATE ${APPLE_FWK_MPS})
+        target_compile_options(
+            solvcon_primary PRIVATE
+            "$<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>"
+        )
+    endif () # BUILD_METAL
     # Accelerate/vecLib provides BLAS + LAPACK.
     target_compile_definitions(solvcon_primary PUBLIC SC_HAS_VENDOR_LAPACK)
     if (CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64)$")

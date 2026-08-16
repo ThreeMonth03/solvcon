@@ -198,6 +198,17 @@ std::enable_if_t<is_simple_array_v<S>, pybind11::array> to_ndarray(S && sarr)
 {
     namespace py = pybind11;
     using T = typename std::remove_reference_t<S>::value_type;
+    using pointer_type = decltype(sarr.logical_data());
+    pointer_type logical_data = nullptr;
+    if (sarr.device() == BufferDevice::Metal)
+    {
+        py::gil_scoped_release release;
+        logical_data = sarr.logical_data();
+    }
+    else
+    {
+        logical_data = sarr.logical_data();
+    }
     std::vector<py::ssize_t> const shape(sarr.shape().begin(), sarr.shape().end());
     std::vector<py::ssize_t> stride;
     stride.reserve(sarr.stride().size());
@@ -210,7 +221,7 @@ std::enable_if_t<is_simple_array_v<S>, pybind11::array> to_ndarray(S && sarr)
         py::detail::npy_format_descriptor<T>::dtype(), // Numpy dtype
         shape, // Buffer dimensions
         stride, // Strides (in bytes) for each index
-        sarr.logical_data(), // Pointer to buffer
+        logical_data, // Pointer to buffer
         py::cast(sarr.buffer().shared_from_this()) // Create the Python object owning the buffer
     );
 }
