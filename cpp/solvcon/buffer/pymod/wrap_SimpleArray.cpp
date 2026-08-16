@@ -13,6 +13,20 @@ namespace python
 
 void wrap_SimpleArray(pybind11::module & mod)
 {
+    namespace py = pybind11;
+
+    py::class_<solvcon::detail::MatmulRoute>(mod, "MatmulRoute")
+        .def_property_readonly("kernel", &solvcon::detail::MatmulRoute::kernel_name)
+        .def_property_readonly("selected_by_auto", &solvcon::detail::MatmulRoute::selected_by_auto)
+        .def_property_readonly("eager_pack_lhs", &solvcon::detail::MatmulRoute::eager_pack_lhs)
+        .def_property_readonly("eager_pack_rhs", &solvcon::detail::MatmulRoute::eager_pack_rhs)
+        .def_property_readonly("scratch_pack_lhs", &solvcon::detail::MatmulRoute::scratch_pack_lhs)
+        .def_property_readonly("scratch_pack_rhs", &solvcon::detail::MatmulRoute::scratch_pack_rhs)
+        .def(
+            "__repr__",
+            [](solvcon::detail::MatmulRoute const & route)
+            { return std::string("<MatmulRoute kernel='") + route.kernel_name() + "'>"; });
+
     wrap_SimpleArray_bool(mod);
     wrap_SimpleArray_int(mod);
     wrap_SimpleArray_uint(mod);

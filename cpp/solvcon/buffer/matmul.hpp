@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <format>
@@ -63,6 +64,7 @@ struct PackingState
     bool rhs = false;
 
     explicit operator bool() const noexcept { return lhs || rhs; }
+    bool operator==(PackingState const &) const = default;
 }; /* end struct PackingState */
 
 /**
@@ -146,7 +148,109 @@ struct MatmulSelection
 {
     MatmulKernel kernel = MatmulKernel::Generic;
     PackingState packing;
+
+    bool operator==(MatmulSelection const &) const = default;
 }; /* end struct MatmulSelection */
+
+struct MatmulOperandIdentity
+{
+    void const * m_object = nullptr;
+    void const * m_data = nullptr;
+    small_vector<ssize_t> m_shape;
+    small_vector<ssize_t> m_stride;
+
+    bool operator==(MatmulOperandIdentity const &) const = default;
+}; /* end struct MatmulOperandIdentity */
+
+struct MatmulRouteIdentity
+{
+    void const * m_array_type = nullptr;
+    MatmulOperandIdentity m_lhs;
+    MatmulOperandIdentity m_rhs;
+
+    bool operator==(MatmulRouteIdentity const &) const = default;
+}; /* end struct MatmulRouteIdentity */
+
+constexpr char const * matmul_kernel_name(MatmulKernel kernel) noexcept
+{
+    switch (kernel)
+    {
+    case MatmulKernel::Generic:
+        return "generic";
+    case MatmulKernel::BlasDot:
+        return "blas_dot";
+    case MatmulKernel::BlasGevm:
+        return "blas_gevm";
+    case MatmulKernel::BlasGemv:
+        return "blas_gemv";
+    case MatmulKernel::BlasGemm:
+        return "blas_gemm";
+    case MatmulKernel::Winograd:
+        return "winograd";
+    }
+    return "unknown";
+}
+
+template <typename Array>
+class MatmulExecutor;
+
+/**
+ * @brief Identify one structurally eligible matmul execution recipe.
+ *
+ * Routes are produced for a particular operand pair. They expose preparation
+ * requirements for inspection but do not expose a constructor or mutation in
+ * Python. MatmulExecutor revalidates a route before forced execution.
+ */
+class MatmulRoute
+{
+public:
+    MatmulRoute() = default;
+
+    char const * kernel_name() const noexcept { return matmul_kernel_name(m_selection.kernel); }
+    bool selected_by_auto() const noexcept { return m_selected_by_auto; }
+    bool eager_pack_lhs() const noexcept { return m_selection.packing.lhs; }
+    bool eager_pack_rhs() const noexcept { return m_selection.packing.rhs; }
+    bool scratch_pack_lhs() const noexcept { return m_scratch_packing.lhs; }
+    bool scratch_pack_rhs() const noexcept { return m_scratch_packing.rhs; }
+
+private:
+    template <typename Array>
+    friend class MatmulExecutor;
+
+    MatmulRoute(
+        MatmulSelection selection,
+        PackingState scratch_packing,
+        bool selected_by_auto,
+        MatmulRouteIdentity identity);
+    bool operator==(MatmulRoute const &) const = default;
+
+    MatmulSelection m_selection;
+    PackingState m_scratch_packing;
+    bool m_selected_by_auto = false;
+    MatmulRouteIdentity m_identity;
+}; /* end class MatmulRoute */
+
+inline MatmulRoute::MatmulRoute(
+    MatmulSelection selection,
+    PackingState scratch_packing,
+    bool selected_by_auto,
+    MatmulRouteIdentity identity)
+    : m_selection(selection)
+    , m_scratch_packing(scratch_packing)
+    , m_selected_by_auto(selected_by_auto)
+    , m_identity(std::move(identity))
+{
+}
+
+template <typename Array>
+struct MatmulBenchmarkResult;
+
+template <typename Array>
+MatmulBenchmarkResult<Array> benchmark_matmul_route(
+    Array const & lhs,
+    Array const & rhs,
+    MatmulRoute const & route,
+    size_t repetitions);
 
 /**
  * @brief Describe matmul operands as an execution-independent contraction.
@@ -295,7 +399,9 @@ public:
     MatmulExecutor & operator=(MatmulExecutor const &) = delete;
     MatmulExecutor & operator=(MatmulExecutor &&) = delete;
 
+    small_vector<MatmulRoute> routes() const;
     void execute();
+    void execute(MatmulRoute const & route);
 
 private:
     using value_type = typename Array::value_type;
@@ -338,10 +444,22 @@ private:
     MatmulSelection select_gevm() const;
     MatmulSelection select_gemv() const;
     MatmulSelection select_gemm() const;
+    MatmulSelection validate_route(MatmulRoute const & route) const;
+    MatmulRouteIdentity route_identity() const;
+    static void const * route_type_identity() noexcept;
     PackingState select_matrix_packing(PackingState required) const;
     PackingState select_vector_packing(PackingState required) const;
     bool should_pack_vector() const;
     void pack(PackingState const & packing);
+    void execute_prevalidated(MatmulSelection const & selection);
+    void execute_selection(MatmulSelection const & selection);
+
+    template <typename BenchmarkArray>
+    friend MatmulBenchmarkResult<BenchmarkArray> benchmark_matmul_route(
+        BenchmarkArray const & lhs,
+        BenchmarkArray const & rhs,
+        MatmulRoute const & route,
+        size_t repetitions);
 
     template <MatmulKernel Kernel>
     void execute_contractions();
@@ -652,6 +770,88 @@ MatmulExecutor<Array>::MatmulExecutor(MatmulPlan plan, Array & output, Array con
 }
 
 template <typename Array>
+small_vector<MatmulRoute> MatmulExecutor<Array>::routes() const
+{
+    MatmulSelection const automatic = select_execution();
+    MatmulRouteIdentity const identity = route_identity();
+    small_vector<MatmulRoute> result;
+    auto const append_route = [&](MatmulSelection selection, PackingState scratch_packing = PackingState{})
+    {
+        result.push_back(MatmulRoute(selection, scratch_packing, selection == automatic, identity));
+    };
+    append_route(MatmulSelection{});
+
+    if constexpr (!use_matmul_blas_v<value_type>)
+    {
+        return result;
+    }
+
+    if (m_plan.rows() <= 0 || m_plan.columns() <= 0 || m_plan.inner_size() <= 0)
+    {
+        return result;
+    }
+
+    if (m_plan.lhs_is_vector() && m_plan.rhs_is_vector())
+    {
+        ssize_t const lhs_stride = m_plan.lhs_inner_stride();
+        ssize_t const rhs_stride = m_plan.rhs_inner_stride();
+        bool const direct_negative = lhs_stride == -1 && rhs_stride == -1;
+        PackingState const eager{
+            .lhs = lhs_stride <= 0 && !direct_negative,
+            .rhs = rhs_stride <= 0 && !direct_negative,
+        };
+        append_route(MatmulSelection{.kernel = MatmulKernel::BlasDot, .packing = eager});
+        return result;
+    }
+
+    if (m_plan.lhs_is_vector())
+    {
+        PackingState const eager{
+            .lhs = m_plan.lhs_inner_stride() <= 0,
+            .rhs = !rhs_matrix_view(m_rhs_data),
+        };
+        append_route(MatmulSelection{.kernel = MatmulKernel::BlasGevm, .packing = eager});
+        return result;
+    }
+
+    if (m_plan.rhs_is_vector())
+    {
+        PackingState const eager{
+            .lhs = !lhs_matrix_view(m_lhs_data),
+            .rhs = m_plan.rhs_inner_stride() <= 0,
+        };
+        append_route(MatmulSelection{.kernel = MatmulKernel::BlasGemv, .packing = eager});
+        return result;
+    }
+
+    PackingState const required{
+        .lhs = !lhs_matrix_view(m_lhs_data),
+        .rhs = !rhs_matrix_view(m_rhs_data),
+    };
+    PackingState const eager = select_matrix_packing(required);
+    PackingState const scratch{
+        .lhs = required.lhs && !eager.lhs,
+        .rhs = required.rhs && !eager.rhs,
+    };
+    append_route(MatmulSelection{.kernel = MatmulKernel::BlasGemm, .packing = eager}, scratch);
+
+    bool const even_dimensions = m_plan.rows() % 2 == 0 &&
+                                 m_plan.columns() % 2 == 0 &&
+                                 m_plan.inner_size() % 2 == 0;
+    if (!m_plan.has_batch_axes() && even_dimensions)
+    {
+        std::optional<matrix_view_type> const lhs_view = lhs_matrix_view(m_lhs_data);
+        std::optional<matrix_view_type> const rhs_view = rhs_matrix_view(m_rhs_data);
+        PackingState const winograd_packing{
+            .lhs = !lhs_view || lhs_view->m_transpose != BlasTranspose::None,
+            .rhs = !rhs_view || rhs_view->m_transpose != BlasTranspose::None,
+        };
+        append_route(MatmulSelection{.kernel = MatmulKernel::Winograd, .packing = winograd_packing});
+    }
+    return result;
+}
+
+template <typename Array>
 void MatmulExecutor<Array>::execute()
 {
     if (m_plan.batch_size() == 0)
@@ -659,16 +859,34 @@ void MatmulExecutor<Array>::execute()
         return;
     }
 
-    MatmulSelection const selection = select_execution();
+    execute_selection(select_execution());
+}
 
+template <typename Array>
+void MatmulExecutor<Array>::execute(MatmulRoute const & route)
+{
+    execute_prevalidated(validate_route(route));
+}
+
+template <typename Array>
+void MatmulExecutor<Array>::execute_prevalidated(MatmulSelection const & selection)
+{
+    if (m_plan.batch_size() != 0)
+    {
+        execute_selection(selection);
+    }
+}
+
+template <typename Array>
+void MatmulExecutor<Array>::execute_selection(MatmulSelection const & selection)
+{
     if (selection.packing)
     {
         pack(selection.packing);
     }
 
-    // `select_execution()` names a BLAS kernel only where one exists, so the
-    // dispatch stays uninstantiated for a value type that has none, and the
-    // generic kernel is the one path every instantiation keeps.
+    // Non-generic selections exist only for value types with a BLAS backend,
+    // so other instantiations keep only the generic dispatch.
     if constexpr (use_matmul_blas_v<value_type>)
     {
         switch (selection.kernel)
@@ -839,6 +1057,48 @@ MatmulSelection MatmulExecutor<Array>::select_gemm() const
         };
     }
     return MatmulSelection{};
+}
+
+template <typename Array>
+MatmulSelection MatmulExecutor<Array>::validate_route(MatmulRoute const & route) const
+{
+    small_vector<MatmulRoute> const eligible_routes = routes();
+    auto const found = std::ranges::find_if(
+        eligible_routes,
+        [&route](MatmulRoute const & eligible)
+        { return route == eligible; });
+    if (found == eligible_routes.end())
+    {
+        throw std::invalid_argument(
+            "MatmulExecutor::execute(): route is not eligible for these operands");
+    }
+    return found->m_selection;
+}
+
+template <typename Array>
+MatmulRouteIdentity MatmulExecutor<Array>::route_identity() const
+{
+    auto const make_operand_identity = [](Array const & array)
+    {
+        return MatmulOperandIdentity{
+            .m_object = &array,
+            .m_data = array.logical_data(),
+            .m_shape = array.shape(),
+            .m_stride = array.stride(),
+        };
+    };
+    return MatmulRouteIdentity{
+        .m_array_type = route_type_identity(),
+        .m_lhs = make_operand_identity(m_lhs),
+        .m_rhs = make_operand_identity(m_rhs),
+    };
+}
+
+template <typename Array>
+void const * MatmulExecutor<Array>::route_type_identity() noexcept
+{
+    static char identity;
+    return &identity;
 }
 
 template <typename Array>
@@ -1275,6 +1535,84 @@ void MatmulExecutor<Array>::execute_generic(ssize_t output_base, ssize_t lhs_bas
             m_output_data[output_row_base + column] = total;
         }
     }
+}
+
+template <typename Array>
+struct MatmulBenchmarkResult
+{
+    Array result;
+    std::uint64_t elapsed_ns;
+}; /* end struct MatmulBenchmarkResult */
+
+template <typename Array, typename Execute>
+MatmulBenchmarkResult<Array> benchmark_matmul_impl(
+    Array const & lhs,
+    Array const & rhs,
+    size_t repetitions,
+    Execute const & execute)
+{
+    Array result;
+    auto const start = std::chrono::steady_clock::now();
+    for (size_t repetition = 0; repetition < repetitions; ++repetition)
+    {
+        MatmulPlan plan = MatmulPlan::make(lhs, rhs);
+        Array output(plan.output_shape());
+        MatmulExecutor<Array> executor(std::move(plan), output, lhs, rhs);
+        execute(executor);
+        result = std::move(output);
+    }
+    auto const elapsed = std::chrono::steady_clock::now() - start;
+    return MatmulBenchmarkResult<Array>{
+        .result = std::move(result),
+        .elapsed_ns = static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count()),
+    };
+}
+
+template <typename Array>
+Array execute_matmul_route(Array const & lhs, Array const & rhs, MatmulRoute const & route)
+{
+    MatmulPlan plan = MatmulPlan::make(lhs, rhs);
+    Array output(plan.output_shape());
+    MatmulExecutor<Array> executor(std::move(plan), output, lhs, rhs);
+    executor.execute(route);
+    return output;
+}
+
+template <typename Array>
+MatmulBenchmarkResult<Array> benchmark_matmul(Array const & lhs, Array const & rhs, size_t repetitions)
+{
+    if (repetitions == 0)
+    {
+        throw std::invalid_argument("benchmark_matmul(): repetitions must be positive");
+    }
+    auto const execute = [](MatmulExecutor<Array> & executor)
+    { executor.execute(); };
+    return benchmark_matmul_impl(lhs, rhs, repetitions, execute);
+}
+
+template <typename Array>
+MatmulBenchmarkResult<Array> benchmark_matmul_route(
+    Array const & lhs,
+    Array const & rhs,
+    MatmulRoute const & route,
+    size_t repetitions)
+{
+    if (repetitions == 0)
+    {
+        throw std::invalid_argument("benchmark_matmul_route(): repetitions must be positive");
+    }
+
+    MatmulSelection const selection = [&]
+    {
+        MatmulPlan validation_plan = MatmulPlan::make(lhs, rhs);
+        Array validation_output(validation_plan.output_shape());
+        MatmulExecutor<Array> validator(std::move(validation_plan), validation_output, lhs, rhs);
+        return validator.validate_route(route);
+    }();
+    auto const execute = [&selection](MatmulExecutor<Array> & executor)
+    { executor.execute_prevalidated(selection); };
+    return benchmark_matmul_impl(lhs, rhs, repetitions, execute);
 }
 
 } /* end namespace detail */
