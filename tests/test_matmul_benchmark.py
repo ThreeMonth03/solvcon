@@ -40,7 +40,7 @@ class FakeRoute:
 
 class FakeCase:
     def __init__(self, lhs, rhs, wrong_route=None, nonfinite_route=None,
-                 auto_route='generic'):
+                 auto_route='naive'):
         self.lhs = lhs
         self.rhs = rhs
         self.wrong_route = wrong_route
@@ -48,14 +48,14 @@ class FakeCase:
         self.events = []
         self.routes = (
             FakeRoute(
-                'generic', selected_by_auto=auto_route == 'generic'),
+                'naive', selected_by_auto=auto_route == 'naive'),
             FakeRoute(
                 'blas_gemm', selected_by_auto=auto_route == 'blas_gemm',
                 packing={'scratch_rhs': True}),
         )
         self.durations = {
             'auto': 20,
-            'generic': 15,
+            'naive': 15,
             'blas_gemm': 5,
         }
 
@@ -88,7 +88,7 @@ class FakeCase:
 
 class FakeEngine:
     def __init__(self, wrong_route=None, nonfinite_route=None,
-                 auto_route='generic'):
+                 auto_route='naive'):
         self.wrong_route = wrong_route
         self.nonfinite_route = nonfinite_route
         self.auto_route = auto_route
@@ -168,7 +168,7 @@ class MatmulBenchmarkSchemaTC(unittest.TestCase):
             make_request(schema_version=2)
         with self.assertRaisesRegex(
                 matmul_benchmark.schema.SchemaError, 'routes'):
-            make_request(routes='generic')
+            make_request(routes='naive')
         with self.assertRaisesRegex(
                 matmul_benchmark.schema.SchemaError, 'unknown fields'):
             make_request(thread=1)
@@ -409,7 +409,7 @@ class MatmulBenchmarkBudgetTC(unittest.TestCase):
 
         self._assert_rejected_before_allocation('lhs logical size', request)
 
-    def test_generic_work_does_not_make_a_request_ineligible(self):
+    def test_naive_work_does_not_make_a_request_ineligible(self):
         request = make_request(
             lhs={'shape': [2000, 26000], 'strides': [0, 0]},
             rhs={'shape': [26000, 2000], 'strides': [0, 0]},
@@ -421,7 +421,7 @@ class MatmulBenchmarkBudgetTC(unittest.TestCase):
 
         self.assertGreater(work, 100_000_000_000)
 
-    def test_stable_generic_schedule_has_no_runtime_work_cap(self):
+    def test_stable_naive_schedule_has_no_runtime_work_cap(self):
         request = make_request(
             lhs={'shape': [2200, 2200], 'strides': [2200, 1]},
             rhs={'shape': [2200, 2200], 'strides': [2200, 1]},
@@ -433,7 +433,7 @@ class MatmulBenchmarkBudgetTC(unittest.TestCase):
 
         self.assertGreater(work, 10_000_000_000)
 
-    def test_accelerated_2048_preview_is_not_charged_as_generic(self):
+    def test_accelerated_2048_preview_is_not_charged_as_naive(self):
         request = make_request(
             lhs={'shape': [2048, 2048], 'strides': [2048, 1]},
             rhs={'shape': [2048, 2048], 'strides': [2048, 1]},
@@ -456,7 +456,7 @@ class MatmulBenchmarkBudgetTC(unittest.TestCase):
         self.assertEqual(
             prepared.native_names, ('auto', 'blas_gemm'))
 
-    def test_accelerated_schedule_is_not_charged_as_generic(self):
+    def test_accelerated_schedule_is_not_charged_as_naive(self):
         operands = {
             'lhs': {'shape': [2048, 2048], 'strides': [2048, 1]},
             'rhs': {'shape': [2048, 2048], 'strides': [2048, 1]},
@@ -536,7 +536,7 @@ class MatmulBenchmarkBudgetTC(unittest.TestCase):
         request = make_request(
             lhs={'shape': [6000, 1], 'strides': [1, 1]},
             rhs={'shape': [1, 6000], 'strides': [6000, 1]},
-            dtype='float32', routes=('generic',),
+            dtype='float32', routes=('naive',),
             numpy_baseline=False)
 
         with unittest.mock.patch.object(
@@ -568,10 +568,10 @@ class MatmulBenchmarkCollectorTC(unittest.TestCase):
         artifact = matmul_benchmark.collector.collect(
             make_request(), engine=engine, progress=progress.append)
 
-        candidates = {item['name']: item
-                      for item in artifact['candidates']}
+        observation = artifact['observations'][0]
+        candidates = observation['routes']
         self.assertEqual(set(candidates), {
-            'auto', 'generic', 'blas_gemm'})
+            'auto', 'naive', 'blas_gemm'})
         first_benchmark = next(
             index for index, event in enumerate(engine.case.events)
             if event[0] == 'benchmark')
@@ -613,12 +613,12 @@ class MatmulBenchmarkCollectorTC(unittest.TestCase):
             if event['phase'] == 'correctness'
             and event['route'] == 'auto'
             and event['state'] == 'started')
-        self.assertEqual(auto_started['resolved_route'], 'generic')
-        self.assertEqual(artifact['summaries']['blas_gemm']['median_ns'], 5)
+        self.assertEqual(auto_started['resolved_route'], 'naive')
+        self.assertEqual(
+            candidates['blas_gemm']['timing']['median_ns'], 5)
         self.assertEqual(
             {panel['scope'] for panel in artifact['panels']},
             {'native_batch', 'python_end_to_end'})
-        observation = artifact['observations'][0]
         self.assertEqual(observation['winner'], 'blas_gemm')
         self.assertEqual(
             observation['routes']['blas_gemm']['packing'], {
@@ -661,7 +661,7 @@ class MatmulBenchmarkCollectorTC(unittest.TestCase):
         events = []
 
         def execute_route(case, name):
-            if name == 'generic':
+            if name == 'naive':
                 raise RuntimeError('forced correctness failure')
             return original(case, name)
 
@@ -673,15 +673,15 @@ class MatmulBenchmarkCollectorTC(unittest.TestCase):
                     make_request(), engine=FakeEngine(),
                     progress=events.append)
 
-        generic = [
+        naive = [
             event for event in events
             if event.get('phase') == 'correctness'
-            and event.get('route') == 'generic'
+            and event.get('route') == 'naive'
         ]
         self.assertEqual(
-            [event['state'] for event in generic], ['started', 'failed'])
-        self.assertEqual(generic[-1]['error_type'], 'RuntimeError')
-        self.assertGreaterEqual(generic[-1]['elapsed_ns'], 0)
+            [event['state'] for event in naive], ['started', 'failed'])
+        self.assertEqual(naive[-1]['error_type'], 'RuntimeError')
+        self.assertGreaterEqual(naive[-1]['elapsed_ns'], 0)
 
     def test_excludes_an_incorrect_route_from_timing_and_winner(self):
         engine = FakeEngine(wrong_route='blas_gemm')
@@ -689,8 +689,9 @@ class MatmulBenchmarkCollectorTC(unittest.TestCase):
         artifact = matmul_benchmark.collector.collect(
             make_request(), engine=engine)
 
-        self.assertNotIn('blas_gemm', artifact['summaries'])
-        self.assertEqual(artifact['observations'][0]['winner'], 'generic')
+        observation = artifact['observations'][0]
+        self.assertIsNone(observation['routes']['blas_gemm']['timing'])
+        self.assertEqual(observation['winner'], 'naive')
         benchmarked = [name for phase, name in engine.case.events
                        if phase == 'benchmark']
         self.assertNotIn('blas_gemm', benchmarked)
@@ -721,10 +722,10 @@ class MatmulBenchmarkCollectorTC(unittest.TestCase):
                             for sample in samples))
         self.assertTrue(all(
             sample['scope'] == 'python_end_to_end' for sample in samples))
-        self.assertNotIn('numpy', artifact['summaries'])
-        self.assertEqual(set(artifact['python_summaries']), {
-            'auto', 'generic', 'blas_gemm', 'numpy'})
         observation = artifact['observations'][0]
+        self.assertIsNone(observation['routes']['numpy']['timing'])
+        self.assertEqual(set(observation['routes']), {
+            'auto', 'naive', 'blas_gemm', 'numpy'})
         self.assertEqual(
             observation['routes']['blas_gemm']['numpy_ratio'], 1)
         self.assertEqual(
@@ -740,7 +741,7 @@ class MatmulBenchmarkCollectorTC(unittest.TestCase):
         self.assertTrue(route['correctness']['nonfinite_result'])
         self.assertIsNone(
             route['correctness']['max_absolute_error'])
-        self.assertNotIn('blas_gemm', artifact['summaries'])
+        self.assertIsNone(route['timing'])
         with tempfile.TemporaryDirectory() as directory:
             path = pathlib.Path(directory) / 'nonfinite.json'
             matmul_benchmark.artifact.write_artifact(artifact, path)
@@ -872,7 +873,7 @@ class MatmulBenchmarkArtifactTC(unittest.TestCase):
             make_request(), engine=FakeEngine())
         mutations = (
             ('routes', lambda item: item['observations'][0]['routes']
-             ['generic'].__setitem__('name', 'typo')),
+             ['naive'].__setitem__('name', 'typo')),
             ('winner', lambda item: item['observations'][0].__setitem__(
                 'winner', 'typo')),
             ('runner_up', lambda item: item['observations'][0].__setitem__(

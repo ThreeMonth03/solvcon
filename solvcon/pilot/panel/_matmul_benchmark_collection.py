@@ -40,7 +40,7 @@ DEFAULT_DIMENSION_RANGES = {
     },
 }
 ROUTE_CHOICES = (
-    ('generic', 'Generic',
+    ('naive', 'Naive',
      'Direct native loop. It is the baseline and is often useful for '
      'small matrices.'),
     ('blas_gemm', 'BLAS GEMM',
@@ -58,23 +58,6 @@ QUALITY_CHOICES = (
     ('Stable', 'stable'),
     ('Custom fixed schedule', 'custom'),
 )
-BUDGET_HELP = {
-    'Fixed sample count': (
-        'Run the exact setup, averaging, and measurement-round counts shown '
-        'by the selected quality setting.'),
-    'Target duration': (
-        'Calibrate every selected input and dispatch on this machine, then '
-        'choose calls per result and complete balanced measurement rounds '
-        'near the requested wall-time budget. The conservative uncertainty '
-        'bound and safety margin may finish early. Long runs use bounded '
-        'saved chunks.'),
-}
-DURATION_PRESETS = (
-    ('1 minute', 60.0),
-    ('10 minutes', 600.0),
-    ('1 hour', 3600.0),
-    ('Custom', None),
-)
 
 
 def recommended_max_threads():
@@ -82,16 +65,10 @@ def recommended_max_threads():
     return max(1, (os.cpu_count() or 1) - 1)
 
 
-def _quality_description(mode, target_duration=False):
+def _quality_description(mode):
     """Describe one sampling schedule without backend terminology."""
     setup_runs = mode.warmups
     rounds = mode.panels
-    if target_duration:
-        return (
-            f'Discard {setup_runs} setup runs before calibration and each '
-            f'saved chunk. Collect at least {rounds} measurement rounds; '
-            f'calibration chooses calls averaged per result and the final '
-            f'number of rounds.')
     return (
         f'Discard {setup_runs} setup runs, then record {rounds} measurement '
         f'rounds. Each result averages {mode.repetitions} back-to-back calls.')
@@ -107,11 +84,7 @@ def humanize_sampling_text(text):
             ('Panels', 'Measurement rounds'),
             ('panels', 'measurement rounds'),
             ('Panel', 'Measurement round'),
-            ('panel', 'measurement round'),
-            ('Shards', 'Saved chunks'),
-            ('shards', 'saved chunks'),
-            ('Shard', 'Saved chunk'),
-            ('shard', 'saved chunk')):
+            ('panel', 'measurement round')):
         text = text.replace(backend, plain)
     return text
 
@@ -124,7 +97,6 @@ class SamplingControls(QtWidgets.QWidget):
     def __init__(self, quality='preview', warmups=2, repetitions=5,
                  rounds=2, parent=None):
         super().__init__(parent)
-        self._target_duration = False
         self.quality = QtWidgets.QComboBox()
         for label, name in QUALITY_CHOICES:
             self.quality.addItem(label, name)
@@ -190,14 +162,6 @@ class SamplingControls(QtWidgets.QWidget):
             return False
         return True
 
-    def set_target_duration(self, enabled):
-        self._target_duration = bool(enabled)
-        custom_index = self.quality.findData('custom')
-        if enabled and self.quality_name() == 'custom':
-            self.quality.setCurrentIndex(self.quality.findData('preview'))
-        self.quality.view().setRowHidden(custom_index, enabled)
-        self._refresh()
-
     @QtCore.Slot()
     def _controls_changed(self):
         self._refresh()
@@ -205,15 +169,14 @@ class SamplingControls(QtWidgets.QWidget):
 
     def _refresh(self):
         custom = self.quality_name() == 'custom'
-        show_custom = custom and not self._target_duration
-        self.custom_schedule.setVisible(show_custom)
-        self.custom_schedule.setEnabled(show_custom)
+        self.custom_schedule.setVisible(custom)
+        self.custom_schedule.setEnabled(custom)
         try:
             mode = self.mode_spec()
         except ValueError as exc:
             text = f'This custom schedule is invalid: {exc}.'
         else:
-            text = _quality_description(mode, self._target_duration)
+            text = _quality_description(mode)
         self.helper.setText(text)
         self.quality.setToolTip(text)
         for index in range(self.quality.count()):
@@ -221,11 +184,10 @@ class SamplingControls(QtWidgets.QWidget):
             if name == 'custom':
                 item_text = (
                     'Choose exact setup runs, calls averaged per result, and '
-                    'measurement rounds. Available only with a fixed budget.')
+                    'measurement rounds.')
             else:
                 item_text = _quality_description(
-                    matmul_benchmark.schema.ModeSpec.preset(name),
-                    self._target_duration)
+                    matmul_benchmark.schema.ModeSpec.preset(name))
             self.quality.setItemData(
                 index, item_text, QtCore.Qt.ToolTipRole)
 
@@ -283,9 +245,6 @@ def default_options(dtype='float32', threads=1):
         'custom_warmups': 2,
         'custom_repetitions': 5,
         'custom_rounds': 2,
-        'budget': 'fixed',
-        'target_duration_seconds': 60.0,
-        'checkpoint_seconds': 60.0,
         'routes': matmul_benchmark.collection.DEFAULT_ROUTES,
         'numpy_baseline': True,
         'seed': 20260815,
@@ -308,44 +267,26 @@ def make_plan(options):
     input_profiles = tuple(
         matmul_benchmark.profiles.InputProfile.from_dict(profile)
         for profile in raw_profiles)
-    budget = plan_options.pop('budget')
-    target_seconds = plan_options.pop('target_duration_seconds')
-    checkpoint_seconds = plan_options.pop('checkpoint_seconds')
     quality = plan_options.pop('mode')
     custom_values = {
         'warmups': plan_options.pop('custom_warmups', 2),
         'repetitions': plan_options.pop('custom_repetitions', 5),
         'panels': plan_options.pop('custom_rounds', 2),
     }
-    if budget == 'fixed':
-        target_duration = None
-        mode = (
-            matmul_benchmark.schema.ModeSpec(
-                name='preview', **custom_values)
-            if quality == 'custom' else
-            matmul_benchmark.schema.ModeSpec.preset(quality))
-    elif budget == 'target_duration':
-        if quality == 'custom':
-            raise ValueError(
-                'Custom sampling is available only with a fixed budget')
-        if not plan_options.get('output_path'):
-            raise ValueError(
-                'Target-duration runs require an Output JSON path so '
-                'checkpoints survive worker restarts')
-        target_duration = matmul_benchmark.duration.TargetDurationSpec(
-            seconds=target_seconds, mode=quality,
-            checkpoint_seconds=checkpoint_seconds)
-        mode = matmul_benchmark.schema.ModeSpec.preset(quality)
-    else:
-        raise ValueError(f'Unsupported run budget: {budget!r}')
+    mode = (
+        matmul_benchmark.schema.ModeSpec(
+            name='preview', **custom_values)
+        if quality == 'custom' else
+        matmul_benchmark.schema.ModeSpec.preset(quality))
     return matmul_benchmark.collection.input_profile_plan(
-        input_profiles=input_profiles, target_duration=target_duration,
-        mode=mode, **plan_options)
+        input_profiles=input_profiles, mode=mode, **plan_options)
 
 
-def format_estimate(estimate, plan=None):
+def plan_estimate_text(estimate, plan):
+    """Describe the exact fixed schedule."""
     resource_budget = matmul_benchmark.arrays.resolve_resource_budget()
     text = (
+        'Fixed schedule: '
         f'{estimate.cell_count:,} input points, '
         f'{estimate.route_count} dispatches, '
         f'{estimate.panel_count} measurement rounds, '
@@ -357,29 +298,10 @@ def format_estimate(estimate, plan=None):
         f'{_format_bytes(resource_budget.peak_bytes)} current worker-safe '
         f'budget from {_format_bytes(resource_budget.available_bytes)} '
         'available')
-    if plan is not None:
-        artifact_bytes = \
-            matmul_benchmark.collection.estimate_artifact_bytes(plan)
-        text += f', about {_format_bytes(artifact_bytes)} artifact JSON'
+    artifact_bytes = matmul_benchmark.collection.estimate_artifact_bytes(
+        plan)
+    text += f', about {_format_bytes(artifact_bytes)} artifact JSON'
     return text
-
-
-def plan_estimate_text(estimate, plan):
-    """Describe either an exact fixed run or a pre-calibration floor."""
-    details = format_estimate(estimate, plan)
-    target = plan.target_duration
-    if target is None:
-        return f'Fixed schedule: {details}'
-    return (
-        f'Target wall-time budget: {_format_duration(target.seconds)}. '
-        f'Calibration is required before the worker can predict calls per '
-        f'result, measurement rounds, saved chunks, or active time. The '
-        f'conservative upper estimate '
-        f'must fit a {target.safety_fraction:.0%} safety budget, so the run '
-        f'may finish early. Minimum {target.mode} quality schedule: '
-        f'{details}. '
-        f'Work units are a hardware-neutral size estimate, not elapsed time '
-        f'or an execution limit.')
 
 
 def _format_bytes(value):
@@ -389,21 +311,6 @@ def _format_bytes(value):
             return f'{value:.0f} {suffix}' if suffix == 'B' \
                 else f'{value:.2f} {suffix}'
         value /= 1024
-
-
-def _format_duration(seconds):
-    seconds = float(seconds)
-    if seconds >= 3600:
-        count = seconds / 3600
-        unit = 'hour' if count == 1 else 'hours'
-    elif seconds >= 60:
-        count = seconds / 60
-        unit = 'minute' if count == 1 else 'minutes'
-    else:
-        count = seconds
-        unit = 'second' if count == 1 else 'seconds'
-    value = f'{count:.3g}'
-    return f'{value} {unit}'
 
 
 class DimensionRangeEditor(QtWidgets.QWidget):
@@ -553,45 +460,6 @@ class StarterPlanDialog(QtWidgets.QDialog):
             warmups=options.get('custom_warmups', 2),
             repetitions=options.get('custom_repetitions', 5),
             rounds=options.get('custom_rounds', 2))
-        self._budget = QtWidgets.QComboBox()
-        for name, value in (
-                ('Fixed sample count', 'fixed'),
-                ('Target duration', 'target_duration')):
-            self._budget.addItem(name, value)
-            self._budget.setItemData(
-                self._budget.count() - 1, BUDGET_HELP[name],
-                QtCore.Qt.ToolTipRole)
-        budget_index = self._budget.findData(options['budget'])
-        if budget_index < 0:
-            raise ValueError('unsupported run budget')
-        self._budget.setCurrentIndex(budget_index)
-        self._duration_preset = QtWidgets.QComboBox()
-        for name, seconds in DURATION_PRESETS:
-            self._duration_preset.addItem(name, seconds)
-        self._custom_duration = QtWidgets.QDoubleSpinBox()
-        self._custom_duration.setDecimals(0)
-        self._custom_duration.setRange(1, 604_800)
-        self._custom_duration.setSuffix(' s')
-        self._custom_duration.setValue(options['target_duration_seconds'])
-        self._set_duration_preset(options['target_duration_seconds'])
-        duration_control = QtWidgets.QWidget()
-        duration_layout = QtWidgets.QHBoxLayout(duration_control)
-        duration_layout.setContentsMargins(0, 0, 0, 0)
-        duration_layout.addWidget(self._duration_preset)
-        duration_layout.addWidget(self._custom_duration)
-        duration_layout.addStretch(1)
-        self._duration_control = duration_control
-        self._checkpoint = QtWidgets.QDoubleSpinBox()
-        self._checkpoint.setDecimals(0)
-        self._checkpoint.setRange(1, 86_400)
-        self._checkpoint.setSuffix(' s')
-        self._checkpoint.setValue(options['checkpoint_seconds'])
-        self._checkpoint.setToolTip(
-            'Maximum requested duration of each saved chunk. A checkpoint is '
-            'published only after its complete measurement rounds finish. One '
-            'timed block may make the practical interval longer.')
-        self._budget_helper = QtWidgets.QLabel()
-        self._budget_helper.setWordWrap(True)
         self._routes = _CheckGrid(ROUTE_CHOICES, options['routes'])
         self._route_helper = QtWidgets.QLabel()
         self._route_helper.setWordWrap(True)
@@ -627,10 +495,6 @@ class StarterPlanDialog(QtWidgets.QDialog):
         form.addRow('BLAS threads', self._threads)
         form.addRow('Input cases', self._profiles)
         form.addRow('Measurement quality', self._sampling)
-        form.addRow('Run budget', self._budget)
-        form.addRow('', self._budget_helper)
-        form.addRow('Target duration', self._duration_control)
-        form.addRow('Checkpoint interval', self._checkpoint)
         form.addRow('Dispatches', route_control)
         form.addRow('', self._numpy)
         form.addRow('Shuffle seed', self._seed)
@@ -653,7 +517,6 @@ class StarterPlanDialog(QtWidgets.QDialog):
         layout.addLayout(form)
         layout.addWidget(self._estimate)
         layout.addWidget(self._buttons)
-        self._update_budget_controls()
 
     def _build_output_control(self, options):
         self._output_path = QtWidgets.QLineEdit(
@@ -675,12 +538,6 @@ class StarterPlanDialog(QtWidgets.QDialog):
         self._routes.changed.connect(self._profiles_changed)
         self._dtype.currentTextChanged.connect(self._update_estimate)
         self._sampling.changed.connect(self._update_estimate)
-        self._budget.currentIndexChanged.connect(
-            self._budget_changed)
-        self._duration_preset.currentIndexChanged.connect(
-            self._duration_preset_changed)
-        self._custom_duration.valueChanged.connect(self._update_estimate)
-        self._checkpoint.valueChanged.connect(self._update_estimate)
         for control in (self._threads, self._seed):
             control.valueChanged.connect(self._update_estimate)
         self._numpy.toggled.connect(self._update_estimate)
@@ -700,9 +557,6 @@ class StarterPlanDialog(QtWidgets.QDialog):
             'custom_warmups': self._sampling.warmups.value(),
             'custom_repetitions': self._sampling.repetitions.value(),
             'custom_rounds': self._sampling.rounds.value(),
-            'budget': self._budget.currentData(),
-            'target_duration_seconds': self._target_duration_seconds(),
-            'checkpoint_seconds': self._checkpoint.value(),
             'routes': self._routes.selected(),
             'numpy_baseline': self._numpy.isChecked(),
             'seed': self._seed.value(),
@@ -720,46 +574,6 @@ class StarterPlanDialog(QtWidgets.QDialog):
             preview_shape=self._preview_shape(),
             routes=self._routes.selected())
         self._update_estimate()
-
-    @QtCore.Slot()
-    def _budget_changed(self):
-        self._update_budget_controls()
-        self._update_estimate()
-
-    @QtCore.Slot()
-    def _duration_preset_changed(self):
-        seconds = self._duration_preset.currentData()
-        custom = seconds is None
-        self._custom_duration.setEnabled(custom)
-        if not custom:
-            self._custom_duration.setValue(seconds)
-        self._update_estimate()
-
-    def _set_duration_preset(self, seconds):
-        index = next((
-            index for index in range(self._duration_preset.count())
-            if self._duration_preset.itemData(index) == seconds
-        ), self._duration_preset.count() - 1)
-        self._duration_preset.setCurrentIndex(index)
-        self._custom_duration.setEnabled(
-            self._duration_preset.currentData() is None)
-
-    def _target_duration_seconds(self):
-        seconds = self._duration_preset.currentData()
-        return self._custom_duration.value() if seconds is None else seconds
-
-    def _update_budget_controls(self):
-        target = self._budget.currentData() == 'target_duration'
-        self._sampling.set_target_duration(target)
-        self._duration_control.setEnabled(target)
-        self._checkpoint.setEnabled(target)
-        self._budget.setToolTip(BUDGET_HELP[self._budget.currentText()])
-        self._budget_helper.setText(BUDGET_HELP[self._budget.currentText()])
-        placeholder = (
-            'required for target duration; checkpoints are stored beside it'
-            if target else
-            'blank = keep in memory, then use Save collection')
-        self._output_path.setPlaceholderText(placeholder)
 
     def _preview_shape(self):
         values = tuple(
@@ -819,13 +633,7 @@ class StarterPlanDialog(QtWidgets.QDialog):
             valid = False
         else:
             self._plan = plan
-            text = plan_estimate_text(estimate, plan)
-            warnings = \
-                matmul_benchmark.collection.recommended_budget_warnings(
-                    estimate, plan)
-            if warnings:
-                text += '\nPlan scale: ' + '; '.join(warnings)
-            self._estimate.setText(text)
+            self._estimate.setText(plan_estimate_text(estimate, plan))
             valid = True
         self._update_route_coverage(plan)
         self._buttons.button(

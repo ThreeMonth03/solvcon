@@ -30,14 +30,14 @@ def _candidates():
         {
             'name': 'auto',
             'kind': 'solvcon_auto',
-            'selected_route': 'generic',
+            'selected_route': 'naive',
             'packing': {},
             'correctness': {'correct': True},
             'timing': _summary(420.0, 460.0, 8.4),
             'python_timing': _summary(660.0, 700.0, 19.8),
         },
         {
-            'name': 'generic',
+            'name': 'naive',
             'kind': 'solvcon_route',
             'selected_by_auto': True,
             'packing': {
@@ -82,11 +82,14 @@ def _candidates():
 
 
 def _artifact():
+    candidates = _candidates()
     return {
         'observations': [{
-            'selected': 'generic',
+            'auto_route': 'naive',
             'winner': 'blas_gemm',
-            'candidates': _candidates(),
+            'routes': {
+                candidate['name']: candidate for candidate in candidates
+            },
         }],
         'panels': [],
     }
@@ -103,7 +106,7 @@ class RouteTimingChartTC(unittest.TestCase):
     def setUp(self):
         self.chart = _matmul_benchmark_chart.RouteTimingChart()
         self.chart.set_candidates(
-            _candidates(), 'generic', 'blas_gemm')
+            _candidates(), 'naive', 'blas_gemm')
 
     def test_scope_switches_measurements_and_only_e2e_shows_numpy(self):
         native = self.chart._canvas.entries()

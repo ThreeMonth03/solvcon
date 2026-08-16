@@ -47,7 +47,7 @@ inline constexpr bool use_matmul_blas_v = has_blas_backend && can_matmul_blas_v<
  */
 enum class MatmulKernel : std::uint8_t
 {
-    Generic,
+    Naive,
     BlasDot,
     BlasGevm,
     BlasGemv,
@@ -70,7 +70,7 @@ struct PackingState
 /**
  * @brief Group measured thresholds by matmul dispatch decision.
  *
- * A tuning table supplies the workload boundaries used to compare generic,
+ * A tuning table supplies the workload boundaries used to compare naive,
  * direct BLAS, and packing routes. Keeping the values separate from dispatch
  * code allows a backend or value type to provide another table.
  *
@@ -146,7 +146,7 @@ inline constexpr MatmulTuning::Winograd WINOGRAD_TUNING{
  */
 struct MatmulSelection
 {
-    MatmulKernel kernel = MatmulKernel::Generic;
+    MatmulKernel kernel = MatmulKernel::Naive;
     PackingState packing;
 
     bool operator==(MatmulSelection const &) const = default;
@@ -175,8 +175,8 @@ constexpr char const * matmul_kernel_name(MatmulKernel kernel) noexcept
 {
     switch (kernel)
     {
-    case MatmulKernel::Generic:
-        return "generic";
+    case MatmulKernel::Naive:
+        return "naive";
     case MatmulKernel::BlasDot:
         return "blas_dot";
     case MatmulKernel::BlasGevm:
@@ -374,7 +374,7 @@ private:
  * MatmulExecutor combines plan metadata with MatmulTuning to select a
  * MatmulSelection. It applies the selected operand preparation, rebuilds the
  * plan when a physical layout changes, and traverses every batch offset with
- * the same kernel. Generic kernels read signed strides directly, while BLAS
+ * the same kernel. Naive kernels read signed strides directly, while BLAS
  * kernels consume compatible vector and matrix descriptors. Eligible compact
  * square GEMMs may use one-level Winograd multiplication.
  *
@@ -382,7 +382,7 @@ private:
  * evaluates one `(3,4) @ (4,6)` contraction at each offset. The results are
  * written into the allocated `(2,5,3,6)` output.
  *
- * @note The current implementation selects generic, BLAS, or Winograd kernels
+ * @note The current implementation selects naive, BLAS, or Winograd kernels
  * using measured thresholds. Packing materializes reused broadcast operands
  * once and streams the remaining operands one matrix at a time through
  * bounded row-major scratch.
@@ -495,8 +495,8 @@ private:
         ssize_t rows,
         ssize_t columns);
     template <size_t ColumnBlock>
-    void multiply_generic_column_block(value_type * output, value_type const * lhs, value_type const * rhs);
-    void execute_generic(ssize_t output_base, ssize_t lhs_base, ssize_t rhs_base);
+    void multiply_naive_column_block(value_type * output, value_type const * lhs, value_type const * rhs);
+    void execute_naive(ssize_t output_base, ssize_t lhs_base, ssize_t rhs_base);
 
     MatmulPlan m_plan;
     Array const & m_lhs;
@@ -885,13 +885,13 @@ void MatmulExecutor<Array>::execute_selection(MatmulSelection const & selection)
         pack(selection.packing);
     }
 
-    // Non-generic selections exist only for value types with a BLAS backend,
-    // so other instantiations keep only the generic dispatch.
+    // Non-naive selections exist only for value types with a BLAS backend,
+    // so other instantiations keep only the naive dispatch.
     if constexpr (use_matmul_blas_v<value_type>)
     {
         switch (selection.kernel)
         {
-        case MatmulKernel::Generic:
+        case MatmulKernel::Naive:
             break;
         case MatmulKernel::BlasDot:
             execute_contractions<MatmulKernel::BlasDot>();
@@ -911,7 +911,7 @@ void MatmulExecutor<Array>::execute_selection(MatmulSelection const & selection)
             return;
         }
     }
-    execute_contractions<MatmulKernel::Generic>();
+    execute_contractions<MatmulKernel::Naive>();
 }
 
 template <typename Array>
@@ -948,7 +948,7 @@ MatmulSelection MatmulExecutor<Array>::select_dot() const
                                    (lhs_stride == -1 && rhs_stride == -1);
     bool const use_blas = m_plan.inner_size() >= TUNING.direct_blas.dot_min_length && strides_supported;
     return MatmulSelection{
-        .kernel = use_blas ? MatmulKernel::BlasDot : MatmulKernel::Generic,
+        .kernel = use_blas ? MatmulKernel::BlasDot : MatmulKernel::Naive,
         .packing = {},
     };
 }
@@ -970,7 +970,7 @@ MatmulSelection MatmulExecutor<Array>::select_gevm() const
                                m_plan.inner_size() * m_plan.columns() >=
                                    TUNING.batched_vector.direct_min_matrix_elements);
         return MatmulSelection{
-            .kernel = use_blas ? MatmulKernel::BlasGevm : MatmulKernel::Generic,
+            .kernel = use_blas ? MatmulKernel::BlasGevm : MatmulKernel::Naive,
             .packing = packing,
         };
     }
@@ -987,7 +987,7 @@ MatmulSelection MatmulExecutor<Array>::select_gevm() const
                               : std::min(m_plan.inner_size(), m_plan.columns()) >=
                                     TUNING.direct_blas.gemv_min_dimension;
     return MatmulSelection{
-        .kernel = use_blas ? MatmulKernel::BlasGevm : MatmulKernel::Generic,
+        .kernel = use_blas ? MatmulKernel::BlasGevm : MatmulKernel::Naive,
         .packing = {},
     };
 }
@@ -1009,7 +1009,7 @@ MatmulSelection MatmulExecutor<Array>::select_gemv() const
                                m_plan.rows() * m_plan.inner_size() >=
                                    TUNING.batched_vector.direct_min_matrix_elements);
         return MatmulSelection{
-            .kernel = use_blas ? MatmulKernel::BlasGemv : MatmulKernel::Generic,
+            .kernel = use_blas ? MatmulKernel::BlasGemv : MatmulKernel::Naive,
             .packing = packing,
         };
     }
@@ -1017,7 +1017,7 @@ MatmulSelection MatmulExecutor<Array>::select_gemv() const
     bool const use_blas = m_plan.rhs_inner_stride() > 0 &&
                           std::min(m_plan.rows(), m_plan.inner_size()) >= TUNING.direct_blas.gemv_min_dimension;
     return MatmulSelection{
-        .kernel = use_blas ? MatmulKernel::BlasGemv : MatmulKernel::Generic,
+        .kernel = use_blas ? MatmulKernel::BlasGemv : MatmulKernel::Naive,
         .packing = {},
     };
 }
@@ -1190,9 +1190,9 @@ void MatmulExecutor<Array>::execute_at(
     ssize_t lhs_base,
     ssize_t rhs_base)
 {
-    if constexpr (Kernel == MatmulKernel::Generic)
+    if constexpr (Kernel == MatmulKernel::Naive)
     {
-        execute_generic(output_base, lhs_base, rhs_base);
+        execute_naive(output_base, lhs_base, rhs_base);
     }
     else
     {
@@ -1465,7 +1465,7 @@ std::optional<typename MatmulExecutor<Array>::matrix_view_type> MatmulExecutor<A
 
 template <typename Array>
 template <size_t ColumnBlock>
-void MatmulExecutor<Array>::multiply_generic_column_block(
+void MatmulExecutor<Array>::multiply_naive_column_block(
     value_type * output,
     value_type const * lhs,
     value_type const * rhs)
@@ -1489,7 +1489,7 @@ void MatmulExecutor<Array>::multiply_generic_column_block(
 }
 
 template <typename Array>
-void MatmulExecutor<Array>::execute_generic(ssize_t output_base, ssize_t lhs_base, ssize_t rhs_base)
+void MatmulExecutor<Array>::execute_naive(ssize_t output_base, ssize_t lhs_base, ssize_t rhs_base)
 {
     constexpr ssize_t LARGE_COLUMN_BLOCK = 8;
     constexpr ssize_t SMALL_COLUMN_BLOCK = 4;
@@ -1507,14 +1507,14 @@ void MatmulExecutor<Array>::execute_generic(ssize_t output_base, ssize_t lhs_bas
             value_type const * lhs = m_lhs_data + lhs_row_base;
             for (; column + LARGE_COLUMN_BLOCK <= m_plan.columns(); column += LARGE_COLUMN_BLOCK)
             {
-                multiply_generic_column_block<LARGE_COLUMN_BLOCK>(
+                multiply_naive_column_block<LARGE_COLUMN_BLOCK>(
                     m_output_data + output_row_base + column,
                     lhs,
                     m_rhs_data + rhs_base + column * m_plan.rhs_column_stride());
             }
             if (column + SMALL_COLUMN_BLOCK <= m_plan.columns())
             {
-                multiply_generic_column_block<SMALL_COLUMN_BLOCK>(
+                multiply_naive_column_block<SMALL_COLUMN_BLOCK>(
                     m_output_data + output_row_base + column,
                     lhs,
                     m_rhs_data + rhs_base + column * m_plan.rhs_column_stride());

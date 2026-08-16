@@ -18,12 +18,7 @@ __all__ = [
 ]
 
 _ROUTE_COLORS = {
-    'GenericIjk': '#0077bb',
-    'DynamicIkj': '#66ccee',
-    'BlasGemm': '#ee7733',
-    'Strassen': '#228833',
-    'Numpy': '#332288',
-    'generic': '#0077bb',
+    'naive': '#0077bb',
     'blas_dot': '#f0e442',
     'blas_gevm': '#66ccee',
     'blas_gemv': '#aa3377',

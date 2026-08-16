@@ -80,7 +80,7 @@ STRIDE_CHOICES = (
 )
 DEFAULT_ROUTES = _collection.DEFAULT_ROUTES
 ROUTE_LABELS = {
-    'generic': 'Generic',
+    'naive': 'Naive',
     'blas_dot': 'BLAS DOT',
     'blas_gevm': 'BLAS GEVM',
     'blas_gemv': 'BLAS GEMV',
@@ -278,8 +278,8 @@ def _blas_packing_text(resolved):
 
 def _packing_text(resolved, routes):
     details = []
-    if 'generic' in routes:
-        details.append('Generic: none')
+    if 'naive' in routes:
+        details.append('Naive: none')
     if 'blas_gemm' in routes:
         details.append('BLAS GEMM: ' + _blas_packing_text(resolved))
     if 'winograd' in routes:

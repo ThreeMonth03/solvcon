@@ -85,10 +85,12 @@ if QtCore is not None:
 class _FeatureRegistry:
     def __init__(self):
         self._features = {
-            'K': lambda observation: observation['K'],
-            'M': lambda observation: observation['M'],
-            'N': lambda observation: observation['N'],
-            'layout': lambda observation: observation['layout'],
+            'K': lambda observation: observation['contraction']['k'],
+            'M': lambda observation: observation['contraction']['m'],
+            'N': lambda observation: observation['contraction']['n'],
+            'layout': lambda observation: (
+                _matmul_benchmark._atlas.FeatureRegistryAdapter._layout_kind(
+                    observation['lhs'])),
         }
 
     def names(self):
@@ -101,10 +103,71 @@ class _FeatureRegistry:
         if expression != 'M * K':
             raise ValueError('test registry accepts only M * K')
         self._features[name] = (
-            lambda observation: observation['M'] * observation['K'])
+            lambda observation: observation['contraction']['m']
+            * observation['contraction']['k'])
 
 
 def _artifact():
+    def observation(identifier, size, lhs_strides, winner, margin, routes):
+        return {
+            'id': identifier,
+            'dtype': 'float64',
+            'lhs': {'shape': [size, size], 'strides': lhs_strides},
+            'rhs': {'shape': [size, 16], 'strides': [16, 1]},
+            'contraction': {
+                'batch_shape': [], 'batch_count': 1,
+                'm': size, 'k': size, 'n': 16,
+                'output_shape': [size, 16],
+                'lhs_vector': False, 'rhs_vector': False,
+            },
+            'routes': routes,
+            'auto_route': 'naive',
+            'winner': winner,
+            'runner_up': None,
+            'winner_margin': margin,
+        }
+
+    naive = {
+        'name': 'naive',
+        'kind': 'solvcon_route',
+        'selected_by_auto': True,
+        'packing': {
+            'eager_lhs': False, 'eager_rhs': False,
+            'scratch_lhs': False, 'scratch_rhs': False,
+        },
+        'correctness': {
+            'correct': True, 'max_absolute_error': None,
+        },
+        'timing': {
+            'sample_count': 2, 'median_ns': 520.0,
+            'p95_ns': 550.0, 'mad_ns': 10.4,
+            'minimum_ns': 500.0, 'maximum_ns': 550.0,
+        },
+        'python_timing': {'median_ns': 800.0},
+        'numpy_ratio': 0.8,
+    }
+    blas = {
+        'name': 'blas_gemm',
+        'kind': 'solvcon_route',
+        'selected_by_auto': False,
+        'packing': {
+            'eager_lhs': True, 'eager_rhs': False,
+            'scratch_lhs': False, 'scratch_rhs': True,
+        },
+        'correctness': {
+            'correct': True, 'max_absolute_error': 1e-7,
+        },
+        'timing': {
+            'sample_count': 2, 'median_ns': 400.0,
+            'p95_ns': 430.0, 'mad_ns': 12.0,
+            'minimum_ns': 390.0, 'maximum_ns': 430.0,
+        },
+        'python_timing': {'median_ns': 620.0},
+        'numpy_ratio': 0.62,
+    }
+    noisy = dict(naive)
+    noisy['timing'] = dict(naive['timing'])
+    noisy['timing']['mad_ns'] = 78.0
     return {
         'schema_version': 1,
         'schema_kind': 'solvcon.matmul_benchmark',
@@ -117,77 +180,13 @@ def _artifact():
         'metadata': {},
         'panels': [],
         'observations': [
-            {
-                'M': 16,
-                'K': 32,
-                'N': 16,
-                'layout': 'contiguous',
-                'selected': 'generic',
-                'winner': 'blas_gemm',
-                'winner_margin': 0.25,
-                'noise': 0.03,
-                'candidates': [
-                    {
-                        'name': 'generic',
-                        'eligible': True,
-                        'packing': {
-                            'eager_lhs': False,
-                            'eager_rhs': False,
-                            'scratch_lhs': False,
-                            'scratch_rhs': False,
-                        },
-                        'correctness': {'passed': True},
-                        'timing': {
-                            'median_ns': 520.0,
-                            'p95_ns': 550.0,
-                            'mad_ns': 10.4,
-                        },
-                        'python_timing': {'median_ns': 800.0},
-                        'numpy_ratio': 0.8,
-                    },
-                    {
-                        'name': 'blas_gemm',
-                        'eligible': True,
-                        'packing': {
-                            'eager_lhs': True,
-                            'eager_rhs': False,
-                            'scratch_lhs': False,
-                            'scratch_rhs': True,
-                        },
-                        'correctness': {
-                            'passed': True,
-                            'max_error': 1e-7,
-                        },
-                        'timing': {
-                            'median_ns': 400.0,
-                            'p95_ns': 430.0,
-                            'mad_ns': 12.0,
-                        },
-                        'python_timing': {'median_ns': 620.0},
-                        'numpy_ratio': 0.62,
-                    },
-                ],
-            },
-            {
-                'M': 32,
-                'K': 32,
-                'N': 16,
-                'layout': 'lhs_packed',
-                'winner': 'generic',
-                'winner_margin': 0.02,
-                'noise': 0.15,
-                'ambiguous': True,
-                'candidates': [],
-            },
-            {
-                'M': 64,
-                'K': 64,
-                'N': 64,
-                'layout': 'contiguous',
-                'winner': '',
-                'invalid': True,
-                'candidates': [],
-            },
+            observation(
+                'case-16', 16, [16, 1], 'blas_gemm', 0.25,
+                {'naive': naive, 'blas_gemm': blas}),
+            observation(
+                'case-32', 32, [1, 32], 'naive', 0.02,
+                {'naive': noisy}),
+            observation('case-64', 64, [64, 1], None, None, {}),
         ],
     }
 
@@ -244,17 +243,6 @@ class BenchmarkProcessTC(unittest.TestCase):
             return process
 
         self.runner = _matmul_benchmark._process.BenchmarkProcess(factory)
-
-    def test_duration_collection_prefers_logical_aggregates(self):
-        raw = [{'source_id': 'raw-1'}, {'source_id': 'raw-2'}]
-        aggregate = [{'cell_id': 'cell-1', 'source_ids': ['raw-1']}]
-
-        observations = _matmul_benchmark._process._artifact_observations({
-            'observations': raw,
-            'aggregate_observations': aggregate,
-        })
-
-        self.assertIs(observations, aggregate)
 
     def test_worker_uses_json_lines_and_thread_environment(self):
         completed = []
@@ -429,10 +417,10 @@ class BenchmarkProcessTC(unittest.TestCase):
             ['Invalid worker output: malformed progress event'])
         self.assertTrue(process.terminated)
 
-    def test_checkpoint_reports_progress_without_loading_partial_json(self):
-        checkpoints = []
-        self.runner.checkpoint.connect(
-            lambda *values: checkpoints.append(values))
+    def test_partial_reports_progress_without_loading_json(self):
+        partials = []
+        self.runner.partial.connect(
+            lambda *values: partials.append(values))
         self.runner.start({'schema_version': 1, 'threads': 1})
         process = self.processes[0]
 
@@ -440,40 +428,36 @@ class BenchmarkProcessTC(unittest.TestCase):
                 solvcon.matmul_benchmark.artifact,
                 'load_artifact') as load_artifact:
             process.emit_json({
-                'type': 'checkpoint',
-                'artifact_path': '/tmp/atlas.checkpoint.json',
-                'completed_shards': 2,
-                'total_shards': 5,
-                'completed_panels': 20,
-                'total_panels': 50,
+                'type': 'partial',
+                'artifact_path': '/tmp/atlas.partial.json',
+                'completed_panels': 2,
+                'total_panels': 5,
             })
 
-        self.assertEqual(checkpoints, [(
-            '/tmp/atlas.checkpoint.json', 2, 5, 20, 50)])
+        self.assertEqual(
+            partials, [('/tmp/atlas.partial.json', 2, 5)])
         load_artifact.assert_not_called()
         self.assertTrue(self.runner.running)
         self.runner.cancel()
         process.exit(1)
 
-    def test_malformed_checkpoint_fails_closed(self):
+    def test_malformed_partial_fails_closed(self):
         failures = []
         self.runner.failed.connect(failures.append)
         self.runner.start({'schema_version': 1, 'threads': 1})
         process = self.processes[0]
 
         process.emit_json({
-            'type': 'checkpoint',
-            'artifact_path': '/tmp/atlas.checkpoint.json',
-            'completed_shards': 3,
-            'total_shards': 2,
-            'completed_panels': 20,
-            'total_panels': 50,
+            'type': 'partial',
+            'artifact_path': '/tmp/atlas.partial.json',
+            'completed_panels': 3,
+            'total_panels': 2,
         })
         process.exit(1)
 
         self.assertEqual(
             failures,
-            ['Invalid worker output: malformed checkpoint event'])
+            ['Invalid worker output: malformed partial event'])
         self.assertTrue(process.terminated)
 
     def test_malformed_output_reports_one_failure(self):
@@ -558,7 +542,7 @@ class BenchmarkProcessTC(unittest.TestCase):
         self.assertEqual(failures, [])
         self.assertEqual(cancelled, [True])
 
-    def test_cancel_ignores_a_malformed_late_checkpoint(self):
+    def test_cancel_ignores_a_malformed_late_partial(self):
         failures = []
         cancelled = []
         self.runner.failed.connect(failures.append)
@@ -568,10 +552,8 @@ class BenchmarkProcessTC(unittest.TestCase):
 
         self.runner.cancel()
         process.emit_json({
-            'type': 'checkpoint',
+            'type': 'partial',
             'artifact_path': '',
-            'completed_shards': 2,
-            'total_shards': 1,
             'completed_panels': 0,
             'total_panels': 1,
         })
@@ -674,7 +656,7 @@ class RouteInspectorTC(unittest.TestCase):
         self.widget._threads.setValue(3)
         self.widget._sampling.quality.setCurrentText('Stable')
         self.widget._dispatches.boxes['blas_gemm'].setChecked(True)
-        self.widget._dispatches.boxes['generic'].setChecked(True)
+        self.widget._dispatches.boxes['naive'].setChecked(True)
 
         request = self.widget.make_request()
 
@@ -682,63 +664,63 @@ class RouteInspectorTC(unittest.TestCase):
         self.assertEqual(request['lhs']['strides'], [0, 77, 11, 1])
         self.assertEqual(request['rhs']['shape'], [2, 1, 11, 5])
         self.assertEqual(request['rhs']['strides'], [0, 55, 5, 1])
-        self.assertEqual(request['routes'], ['generic', 'blas_gemm'])
+        self.assertEqual(request['routes'], ['naive', 'blas_gemm'])
         self.assertEqual(request['mode']['name'], 'stable')
         self.assertEqual(request['mode']['panels'], 8)
 
     def test_dispatch_checkboxes_default_to_every_eligible_dispatch(self):
         self.assertEqual(tuple(self.widget._dispatches.boxes), (
-            'generic', 'blas_dot', 'blas_gevm', 'blas_gemv',
+            'naive', 'blas_dot', 'blas_gevm', 'blas_gemv',
             'blas_gemm', 'winograd',
         ))
         self.assertEqual(self.widget._dispatches.selected(), (
-            'generic', 'blas_gemm', 'winograd',
+            'naive', 'blas_gemm', 'winograd',
         ))
-        self.assertTrue(self.widget._dispatches.boxes['generic'].isEnabled())
+        self.assertTrue(self.widget._dispatches.boxes['naive'].isEnabled())
         self.assertFalse(
             self.widget._dispatches.boxes['blas_dot'].isEnabled())
         self.assertIn(
             '3 dispatches apply', self.widget._dispatch_helper.text())
         self.assertEqual(self.widget.make_request()['routes'], [
-            'generic', 'blas_gemm', 'winograd',
+            'naive', 'blas_gemm', 'winograd',
         ])
 
     def test_large_shape_keeps_structurally_eligible_dispatches(self):
         self.widget._lhs_shape.setText('2048, 2048')
         self.widget._rhs_shape.setText('2048, 2048')
 
-        generic = self.widget._dispatches.boxes['generic']
-        self.assertTrue(generic.isEnabled())
-        self.assertTrue(generic.isChecked())
+        naive = self.widget._dispatches.boxes['naive']
+        self.assertTrue(naive.isEnabled())
+        self.assertTrue(naive.isChecked())
         self.assertTrue(
             self.widget._dispatches.boxes['blas_gemm'].isEnabled())
         self.assertTrue(
             self.widget._dispatches.boxes['winograd'].isEnabled())
         self.assertEqual(self.widget.make_request()['routes'], [
-            'generic', 'blas_gemm', 'winograd',
+            'naive', 'blas_gemm', 'winograd',
         ])
 
     def test_sampling_does_not_change_dispatch_eligibility(self):
         self.widget._lhs_shape.setText('1024, 1024')
         self.widget._rhs_shape.setText('1024, 1024')
-        generic = self.widget._dispatches.boxes['generic']
-        generic.setChecked(False)
+        naive = self.widget._dispatches.boxes['naive']
+        naive.setChecked(False)
 
         self.widget._sampling.quality.setCurrentText('Stable')
 
-        self.assertTrue(generic.isEnabled())
-        self.assertFalse(generic.isChecked())
+        self.assertTrue(naive.isEnabled())
+        self.assertFalse(naive.isChecked())
 
         self.widget._sampling.quality.setCurrentText('Preview')
 
-        self.assertTrue(generic.isEnabled())
-        self.assertFalse(generic.isChecked())
+        self.assertTrue(naive.isEnabled())
+        self.assertFalse(naive.isChecked())
 
-    def test_custom_schedule_keeps_generic_for_2048(self):
+    def test_custom_schedule_keeps_naive_for_2048(self):
         self.widget._lhs_shape.setText('2048, 2048')
         self.widget._rhs_shape.setText('2048, 2048')
-        generic = self.widget._dispatches.boxes['generic']
-        self.assertTrue(generic.isEnabled())
+        naive = self.widget._dispatches.boxes['naive']
+        self.assertTrue(naive.isEnabled())
 
         quality = self.widget._sampling.quality
         quality.setCurrentIndex(quality.findData('custom'))
@@ -746,8 +728,8 @@ class RouteInspectorTC(unittest.TestCase):
         self.widget._sampling.repetitions.setValue(1)
         self.widget._sampling.rounds.setValue(1)
 
-        self.assertTrue(generic.isEnabled())
-        self.assertTrue(generic.isChecked())
+        self.assertTrue(naive.isEnabled())
+        self.assertTrue(naive.isChecked())
         self.assertIn('3 dispatches apply',
                       self.widget._dispatch_helper.text())
 
@@ -758,7 +740,7 @@ class RouteInspectorTC(unittest.TestCase):
 
         self.assertEqual(
             self.widget._dispatches.selected(),
-            ('generic', 'blas_gemm', 'winograd'))
+            ('naive', 'blas_gemm', 'winograd'))
         self.assertTrue(self.widget._run.isEnabled())
         self.assertNotIn(
             'Current selection cannot run',
@@ -780,7 +762,7 @@ class RouteInspectorTC(unittest.TestCase):
 
             self.assertTrue(self.widget._run.isEnabled())
             self.assertEqual(self.widget.make_request()['routes'], [
-                'generic', 'blas_gemm', 'winograd',
+                'naive', 'blas_gemm', 'winograd',
             ])
 
     def test_run_requires_a_selected_runnable_dispatch(self):
@@ -806,11 +788,11 @@ class RouteInspectorTC(unittest.TestCase):
     def test_request_accepts_a_slow_programmatic_selection(self):
         self.widget._lhs_shape.setText('2048, 2048')
         self.widget._rhs_shape.setText('2048, 2048')
-        generic = self.widget._dispatches.boxes['generic']
-        generic.setEnabled(True)
-        generic.setChecked(True)
+        naive = self.widget._dispatches.boxes['naive']
+        naive.setEnabled(True)
+        naive.setChecked(True)
 
-        self.assertIn('generic', self.widget.make_request()['routes'])
+        self.assertIn('naive', self.widget.make_request()['routes'])
 
     def test_stop_reports_current_activity_and_resets_controls(self):
         self.widget.start_benchmark()
@@ -879,16 +861,14 @@ class RouteInspectorTC(unittest.TestCase):
         self.widget.stop()
         process.exit(1)
 
-    def test_result_and_checkpoint_io_never_show_a_stale_dispatch(self):
+    def test_result_and_partial_io_never_show_a_stale_dispatch(self):
         self.widget.start_benchmark()
         process = self.widget._runner._process
         cases = (
             ('finalization', 'artifact', 'Result',
              'building and validating result'),
-            ('checkpoint_load', 'checkpoint', 'Checkpoint',
-             'loading saved progress'),
-            ('checkpoint_write', 'checkpoint', 'Checkpoint',
-             'saving progress'),
+            ('partial_write', 'partial', 'Partial result',
+             'saving completed measurement rounds'),
             ('artifact_write', 'artifact', 'Result',
              'saving final result'),
         )
@@ -910,12 +890,12 @@ class RouteInspectorTC(unittest.TestCase):
     def test_worker_error_keeps_activity_context_and_allows_restart(self):
         self.widget.start_benchmark()
         process = self.widget._runner._process
-        process.emit_json(_activity(route='generic', resolved_route=None))
+        process.emit_json(_activity(route='naive', resolved_route=None))
         process.emit_json(_activity(
-            state='failed', route='generic', resolved_route=None,
+            state='failed', route='naive', resolved_route=None,
             elapsed_ns=20_000_000))
 
-        self.assertIn('Failed: Generic', self.widget._status.text())
+        self.assertIn('Failed: Naive', self.widget._status.text())
         self.assertIn('call 1-5/5', self.widget._status.text())
 
         process.emit_json({
@@ -926,7 +906,7 @@ class RouteInspectorTC(unittest.TestCase):
         process.exit(1)
 
         self.assertTrue(process.terminated)
-        self.assertIn('Error while Generic', self.widget._status.text())
+        self.assertIn('Error while Naive', self.widget._status.text())
         self.assertIn('kernel failed', self.widget._status.text())
         self.assertTrue(self.widget._run.isEnabled())
 
@@ -939,13 +919,13 @@ class RouteInspectorTC(unittest.TestCase):
 
     def test_dispatch_checkboxes_use_stable_request_order(self):
         self.widget._dispatches.boxes['blas_gemm'].setChecked(False)
-        self.widget._dispatches.boxes['generic'].setChecked(False)
+        self.widget._dispatches.boxes['naive'].setChecked(False)
         self.widget._dispatches.boxes['winograd'].setChecked(False)
         self.widget._dispatches.boxes['winograd'].setChecked(True)
-        self.widget._dispatches.boxes['generic'].setChecked(True)
+        self.widget._dispatches.boxes['naive'].setChecked(True)
 
         self.assertEqual(
-            self.widget.make_request()['routes'], ['generic', 'winograd'])
+            self.widget.make_request()['routes'], ['naive', 'winograd'])
 
     def test_dispatch_checkboxes_cover_vector_roles(self):
         cases = (
@@ -961,10 +941,10 @@ class RouteInspectorTC(unittest.TestCase):
                     name for name, box in
                     self.widget._dispatches.boxes.items()
                     if box.isEnabled())
-                self.assertEqual(enabled, ('generic', expected))
+                self.assertEqual(enabled, ('naive', expected))
                 self.assertEqual(
                     self.widget.make_request()['routes'],
-                    ['generic', expected])
+                    ['naive', expected])
 
     def test_dispatch_checkboxes_follow_shape_roles_and_dimensions(self):
         self.widget._lhs_shape.setText('15, 16')
@@ -975,7 +955,7 @@ class RouteInspectorTC(unittest.TestCase):
         self.assertFalse(
             self.widget._dispatches.boxes['winograd'].isEnabled())
         self.assertEqual(self.widget.make_request()['routes'], [
-            'generic', 'blas_gemm',
+            'naive', 'blas_gemm',
         ])
 
         self.widget._lhs_shape.setText('2, 16, 16')
@@ -984,7 +964,7 @@ class RouteInspectorTC(unittest.TestCase):
         self.assertFalse(
             self.widget._dispatches.boxes['winograd'].isEnabled())
         self.assertEqual(self.widget.make_request()['routes'], [
-            'generic', 'blas_gemm',
+            'naive', 'blas_gemm',
         ])
 
     def test_dispatch_checkboxes_preserve_preferences_through_invalid_input(
@@ -1010,16 +990,16 @@ class RouteInspectorTC(unittest.TestCase):
     def test_dispatch_checkboxes_disable_routes_missing_from_build(self):
         dispatches = frozenset(_matmul_benchmark._DISPATCH_NAMES)
         self.dispatch_probe.side_effect = lambda dtype: (
-            frozenset({'generic'}) if dtype == 'float64' else dispatches)
+            frozenset({'naive'}) if dtype == 'float64' else dispatches)
         self.widget._dtype.setCurrentText('float64')
 
-        generic = self.widget._dispatches.boxes['generic']
+        naive = self.widget._dispatches.boxes['naive']
         gemm = self.widget._dispatches.boxes['blas_gemm']
-        self.assertTrue(generic.isEnabled())
-        self.assertTrue(generic.isChecked())
+        self.assertTrue(naive.isEnabled())
+        self.assertTrue(naive.isChecked())
         self.assertFalse(gemm.isEnabled())
         self.assertFalse(gemm.isChecked())
-        self.assertEqual(self.widget.make_request()['routes'], ['generic'])
+        self.assertEqual(self.widget.make_request()['routes'], ['naive'])
 
     def test_sampling_help_and_custom_fixed_schedule_match_atlas(self):
         self.assertIn('2 setup runs', self.widget._sampling.helper.text())
@@ -1123,7 +1103,7 @@ class RouteInspectorTC(unittest.TestCase):
         self.assertEqual(window._stop.text(), 'Stop')
         window.close()
 
-    def test_window_exposes_current_operation_without_genericizing_data(self):
+    def test_window_exposes_operation_without_generalizing_data(self):
         window = _matmul_benchmark.MatmulBenchmarkWindow(_FakeProcess)
 
         self.assertEqual(
@@ -1164,7 +1144,7 @@ class AtlasTC(unittest.TestCase):
         self.widget._z_axis.setCurrentText('N')
         self.widget._slice._feature.setCurrentText('layout')
         self.widget._slice._enabled.setChecked(True)
-        self.widget._slice._categorical.setCurrentText('contiguous')
+        self.widget._slice._categorical.setCurrentText('row-major')
         self.widget.render()
 
         self.assertEqual(self.loads, ['first.json', 'second.json'])
@@ -1226,7 +1206,7 @@ class AtlasTC(unittest.TestCase):
         first = artifact['observations'][0]
         second = dict(first)
         second['id'] = 'same-coordinate'
-        second['winner'] = 'generic'
+        second['winner'] = 'naive'
         artifact['observations'] = [first, second]
 
         self.widget.add_artifacts([artifact])
@@ -1239,9 +1219,9 @@ class AtlasTC(unittest.TestCase):
         point = self.widget._cloud_canvas._points[0]
         self.assertEqual(point['sample_count'], 2)
         self.assertEqual(point['hidden_sample_count'], 1)
-        self.assertEqual(point['routes'], ('blas_gemm', 'generic'))
+        self.assertEqual(point['routes'], ('blas_gemm', 'naive'))
         self.assertEqual(
-            point['winner_counts'], {'blas_gemm': 1, 'generic': 1})
+            point['winner_counts'], {'blas_gemm': 1, 'naive': 1})
         self.assertTrue(point['conflicting'])
         self.assertTrue(point['ambiguous'])
 
@@ -1253,23 +1233,19 @@ class AtlasTC(unittest.TestCase):
         self.assertEqual(len(canvas._projected), 1)
         tooltip = canvas.point_tooltip(point)
         self.assertIn('M: 16', tooltip)
-        self.assertIn('K: 32', tooltip)
+        self.assertIn('K: 16', tooltip)
         self.assertIn('blas_gemm: 1', tooltip)
-        self.assertIn('generic: 1', tooltip)
+        self.assertIn('naive: 1', tooltip)
         self.assertIn('Mixed or near-tie results: yes', tooltip)
         self.assertIn('same-coordinate', tooltip)
 
     def test_runner_up_noise_marks_a_boundary_ambiguous(self):
         observation = _artifact()['observations'][0]
-        observation.pop('noise')
-        observation['runner_up'] = 'generic'
+        observation['runner_up'] = 'naive'
         observation['winner_margin'] = 0.1
-        routes = {
-            candidate['name']: candidate
-            for candidate in observation['candidates']
-        }
+        routes = observation['routes']
         routes['blas_gemm']['timing']['mad_ns'] = 4.0
-        routes['generic']['timing']['mad_ns'] = 156.0
+        routes['naive']['timing']['mad_ns'] = 156.0
 
         point = self.widget._make_point(observation, 16.0, 32.0)
 
@@ -1332,7 +1308,8 @@ class AtlasTC(unittest.TestCase):
             [context['mode'] for context in contexts],
             [('preview', 2, 5, 2), ('stable', 4, 20, 8)])
         self.assertEqual(
-            [observation['M'] for observation in self.widget._observations],
+            [observation['contraction']['m']
+             for observation in self.widget._observations],
             [16, 32])
 
     def test_mode_context_distinguishes_custom_sampling_counts(self):
@@ -1366,25 +1343,5 @@ class AtlasTC(unittest.TestCase):
             self.widget._registry.evaluate('mode', observation),
             'Custom: 3 setup runs, 7 calls per result, '
             '4 measurement rounds')
-
-        duration_document = {
-            'duration_run': {
-                'template_plan': {'mode': {
-                    'name': 'stable', 'warmups': 4,
-                    'repetitions': 20, 'panels': 8,
-                }},
-                'schedule': {'repetitions': 40, 'panels': 120},
-            },
-        }
-        duration_signature = \
-            _matmul_benchmark._atlas._duration_mode_signature(
-                duration_document)
-        self.assertEqual(duration_signature, ('stable', 4, 40, 120))
-        self.assertEqual(
-            _matmul_benchmark._atlas._mode_description(
-                duration_signature, target_duration=True),
-            'Stable calibrated: 4 setup runs, 40 calls per result, '
-            '120 measurement rounds')
-
 
 # vim: set ff=unix fenc=utf8 et sw=4 ts=4 sts=4 tw=79:

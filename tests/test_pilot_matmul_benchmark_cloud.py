@@ -25,8 +25,8 @@ def _grouped_point():
         'y': 32.0,
         'z': 64.0,
         'route': '',
-        'routes': ('blas_gemm', 'generic'),
-        'winner_counts': {'blas_gemm': 1, 'generic': 1},
+        'routes': ('blas_gemm', 'naive'),
+        'winner_counts': {'blas_gemm': 1, 'naive': 1},
         'observation_ids': ('first', 'second'),
         'sample_count': 2,
         'hidden_sample_count': 1,
@@ -49,9 +49,9 @@ def _cloud_point(identifier, x_value, y_value, z_value):
         'x': float(x_value),
         'y': float(y_value),
         'z': float(z_value),
-        'route': 'generic',
-        'routes': ('generic',),
-        'winner_counts': {'generic': 1},
+        'route': 'naive',
+        'routes': ('naive',),
+        'winner_counts': {'naive': 1},
         'observation_ids': (identifier,),
         'sample_count': 1,
         'conflicting': False,
@@ -64,7 +64,7 @@ class _FeatureRegistry:
         return ['M', 'K', 'N']
 
     def evaluate(self, name, observation):
-        return observation[name]
+        return observation['contraction'][name.lower()]
 
     def register_expression(self, _name, _expression):
         raise AssertionError('This test does not register expressions')
@@ -73,27 +73,27 @@ class _FeatureRegistry:
 def _observation(identifier, winner, n_value=64, k_value=32):
     return {
         'id': identifier,
-        'M': 16,
-        'K': k_value,
-        'N': n_value,
         'winner': winner,
+        'runner_up': None,
         'winner_margin': 0.08,
-        'noise': 0.02,
         'lhs': {'shape': [16, k_value], 'strides': [k_value, 1]},
         'rhs': {
             'shape': [k_value, n_value],
             'strides': [n_value, 1],
         },
-        'candidates': [{
-            'name': winner,
-            'packing': {
-                'eager_lhs': winner == 'blas_gemm',
-                'eager_rhs': False,
-                'scratch_lhs': False,
-                'scratch_rhs': False,
+        'contraction': {'m': 16, 'k': k_value, 'n': n_value},
+        'routes': {
+            winner: {
+                'name': winner,
+                'packing': {
+                    'eager_lhs': winner == 'blas_gemm',
+                    'eager_rhs': False,
+                    'scratch_lhs': False,
+                    'scratch_rhs': False,
+                },
+                'timing': {'median_ns': 400.0, 'mad_ns': 8.0},
             },
-            'timing': {'median_ns': 400.0, 'mad_ns': 8.0},
-        }],
+        },
     }
 
 
@@ -310,7 +310,7 @@ class CloudCanvasTC(unittest.TestCase):
 
     def test_route_palette_is_stable_separated_and_matches_legend(self):
         routes = (
-            'generic', 'blas_dot', 'blas_gevm', 'blas_gemv',
+            'naive', 'blas_dot', 'blas_gevm', 'blas_gemv',
             'blas_gemm', 'winograd', 'numpy')
         first = [_cloud.route_color(route) for route in routes]
         second = [_cloud.route_color(route) for route in routes]
@@ -341,7 +341,7 @@ class CloudCanvasTC(unittest.TestCase):
 
         self.assertEqual(canvas.legend_routes(), tuple(sorted(routes)))
         self.assertGreaterEqual(
-            canvas._point_color('generic', 0.0).alphaF(), 0.75)
+            canvas._point_color('naive', 0.0).alphaF(), 0.75)
 
 
 @unittest.skipUnless(solvcon.HAS_PILOT, 'Qt pilot is not built')
@@ -360,8 +360,8 @@ class CloudAtlasTC(unittest.TestCase):
             'metadata': {},
             'observations': [
                 _observation('first', 'blas_gemm'),
-                _observation('second', 'generic'),
-                _observation('third', 'generic', n_value=128),
+                _observation('second', 'naive'),
+                _observation('third', 'naive', n_value=128),
             ],
         }])
 
@@ -380,7 +380,7 @@ class CloudAtlasTC(unittest.TestCase):
                          (16.0, 32.0, 64.0))
         self.assertEqual(first['sample_count'], 2)
         self.assertTrue(first['conflicting'])
-        self.assertEqual(first['routes'], ('blas_gemm', 'generic'))
+        self.assertEqual(first['routes'], ('blas_gemm', 'naive'))
         self.assertIn('eager: lhs', first['packing'])
 
     def test_z_axis_ignores_matching_slice_without_hiding_volume(self):
@@ -390,7 +390,7 @@ class CloudAtlasTC(unittest.TestCase):
             'request': {},
             'metadata': {},
             'observations': [
-                _observation('k32', 'generic', k_value=32),
+                _observation('k32', 'naive', k_value=32),
                 _observation('k64', 'blas_gemm', k_value=64),
             ],
         }])

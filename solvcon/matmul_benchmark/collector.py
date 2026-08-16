@@ -8,7 +8,6 @@ import dataclasses
 import datetime
 import hashlib
 import io
-import json
 import math
 import os
 import pathlib
@@ -27,7 +26,6 @@ import numpy as np
 from . import arrays
 from . import artifact as artifact_module
 from . import collection as collection_module
-from . import duration
 from . import engine as engine_module
 from . import schedule
 from . import schema
@@ -64,27 +62,16 @@ def _run_command(arguments, cwd=None):
         return None
 
 
-def _git_state(ignored_paths=(), ignored_checkpoint_outputs=()):
+def _git_state(ignored_paths=()):
     repository = pathlib.Path(__file__).resolve().parents[2]
     ignored_paths = {
         pathlib.Path(path).expanduser().resolve()
         for path in ignored_paths if path is not None
     }
-    ignored_checkpoint_outputs = tuple(
-        pathlib.Path(path).expanduser().resolve()
-        for path in ignored_checkpoint_outputs if path is not None)
 
     def ignored_untracked(path):
-        path = path.resolve()
-        if path in ignored_paths:
-            return True
-        return any(
-            path.parent == output.parent
-            and re.fullmatch(
-                re.escape(output.name)
-                + r'\.checkpoint\.[0-9a-f]{64}\.json',
-                path.name)
-            for output in ignored_checkpoint_outputs)
+        return path.resolve() in ignored_paths
+
     commit_process = _run_command(
         ['git', 'rev-parse', 'HEAD'], cwd=repository)
     commit = None
@@ -211,7 +198,7 @@ def _native_loader_identity(extension_path):
     }
 
 
-def _metadata(request, ignored_paths=(), ignored_checkpoint_outputs=()):
+def _metadata(request, ignored_paths=()):
     affinity = None
     if hasattr(os, 'sched_getaffinity'):
         affinity = sorted(os.sched_getaffinity(0))
@@ -232,7 +219,7 @@ def _metadata(request, ignored_paths=(), ignored_checkpoint_outputs=()):
         extension_mtime_ns = pathlib.Path(extension_path).stat().st_mtime_ns
         extension_sha256 = _file_sha256(extension_path)
     git_commit, git_dirty, dirty_diff_sha256, dirty_source_complete = \
-        _git_state(ignored_paths, ignored_checkpoint_outputs)
+        _git_state(ignored_paths)
     return {
         'process': {
             'pid': os.getpid(),
@@ -856,10 +843,7 @@ def _finish_artifact(prepared, metadata):
         'created_at': _now_iso(),
         'request': prepared.request.to_dict(),
         'metadata': metadata,
-        'candidates': prepared.candidates,
         'panels': prepared.panels,
-        'summaries': summaries,
-        'python_summaries': python_summaries,
         'observations': [observation],
     }
 
@@ -948,310 +932,6 @@ def _collection_progress(plan, panel_index, cell_position, cell_index):
     }
 
 
-def duration_checkpoint_path(output_path, plan_sha256):
-    if output_path is None:
-        return None
-    if not isinstance(plan_sha256, str) or not re.fullmatch(
-            r'[0-9a-f]{64}', plan_sha256):
-        raise schema.SchemaError(
-            'checkpoint plan hash must be a SHA-256 digest')
-    return pathlib.Path(
-        f'{os.fspath(output_path)}.checkpoint.{plan_sha256}.json')
-
-
-def _duration_stream_count(prepared_cases):
-    return sum(
-        len(prepared.native_names) + len(prepared.python_names)
-        for prepared in prepared_cases)
-
-
-def _calibration_progress(prepared, route, scope, completed, total,
-                          pass_name):
-    cell_id = prepared.cell_id or prepared.request.request_id
-    return {
-        'type': 'progress',
-        'phase': 'calibration',
-        'completed': completed,
-        'total': total,
-        'cell_id': cell_id,
-        'route': route,
-        'scope': scope,
-        'message': (
-            f'{pass_name} calibration {completed}/{total}: '
-            f'{cell_id} / '
-            f'{route} / {scope}'),
-    }
-
-
-def _calibration_pass(prepared_cases, repetitions, clock, wall_clock,
-                      progress, completed, total, pass_name,
-                      cancelled):
-    measurements = []
-    timed_ns = 0
-    started_ns = wall_clock()
-    for prepared in prepared_cases:
-        cell_id = prepared.cell_id or prepared.request.request_id
-        for route in collection_module.balanced_order_at(
-                prepared.native_names, 0):
-            _, elapsed_ns = _run_activity(
-                lambda route=route: _run_native_benchmark(
-                    prepared.case, route, repetitions),
-                'native_batch', route, repetitions, progress,
-                cancelled,
-                resolved_route=_resolved_route(prepared, route),
-                cell_id=cell_id)
-            measurement = duration.CalibrationMeasurement(
-                cell_id=cell_id, route=route,
-                scope=duration.NATIVE_SCOPE,
-                elapsed_ns=max(1, int(elapsed_ns)),
-                repetitions=repetitions)
-            measurements.append(measurement)
-            timed_ns += measurement.elapsed_ns
-            completed += 1
-            if progress is not None:
-                progress(_calibration_progress(
-                    prepared, route, duration.NATIVE_SCOPE,
-                    completed, total, pass_name))
-        for route in collection_module.balanced_order_at(
-                prepared.python_names, 0):
-            _, elapsed_ns = _run_activity(
-                lambda route=route: _benchmark_python(
-                    prepared.case, route, repetitions,
-                    prepared.lhs, prepared.rhs, clock),
-                'python_end_to_end', route, repetitions, progress,
-                cancelled,
-                resolved_route=_resolved_route(prepared, route),
-                cell_id=cell_id)
-            measurement = duration.CalibrationMeasurement(
-                cell_id=cell_id, route=route,
-                scope=duration.PYTHON_SCOPE,
-                elapsed_ns=max(1, int(elapsed_ns)),
-                repetitions=repetitions)
-            measurements.append(measurement)
-            timed_ns += measurement.elapsed_ns
-            completed += 1
-            if progress is not None:
-                progress(_calibration_progress(
-                    prepared, route, duration.PYTHON_SCOPE,
-                    completed, total, pass_name))
-    wall_elapsed_ns = max(0, wall_clock() - started_ns)
-    overhead = duration.ControllerOverhead(
-        elapsed_ns=max(0, wall_elapsed_ns - timed_ns))
-    return tuple(measurements), overhead, completed
-
-
-def _calibration_repetitions(spec, pilot_measurements, pilot_overhead,
-                             preflight_elapsed_ns, guard, stream_count):
-    estimate = duration.estimate_balanced_panel(
-        pilot_measurements, (pilot_overhead,),
-        uncertainty_fraction=spec.uncertainty_fraction)
-    repetitions = duration.choose_calibration_repetitions(spec, estimate)
-    used_repetitions = spec.warmups + 1
-    call_repetitions = (
-        (collection_module.MAX_COLLECTION_CALLS - guard.fixed_calls)
-        // stream_count - used_repetitions)
-    route_repetitions = (
-        schema.MAX_MODE_CALLS_PER_ROUTE - used_repetitions)
-    minimum_formal_seconds = (
-        estimate.per_repetition.upper_seconds
-        * (spec.warmups
-           + spec.minimum_calibration_repetitions
-           * spec.minimum_panels)
-        + estimate.controller_per_panel.upper_seconds
-        * spec.minimum_panels)
-    remaining_seconds = (
-        spec.seconds * spec.safety_fraction
-        - preflight_elapsed_ns / 1_000_000_000
-        - estimate.calibration_seconds
-        - minimum_formal_seconds)
-    duration_repetitions = (
-        math.floor(
-            remaining_seconds
-            / estimate.per_repetition.upper_seconds)
-        if remaining_seconds > 0 else 0)
-    limits = [
-        repetitions, call_repetitions, route_repetitions,
-        duration_repetitions,
-    ]
-    if guard.maximum_work is not None:
-        limits.append(
-            (guard.maximum_work - guard.fixed_work)
-            // guard.work_per_balanced_repetition - used_repetitions)
-    repetitions = min(limits)
-    maximum_latency = estimate.maximum_timed_block.upper_seconds
-    if maximum_latency:
-        repetitions = min(
-            repetitions,
-            math.floor(spec.checkpoint_seconds / maximum_latency))
-    return (
-        repetitions
-        if repetitions >= spec.minimum_calibration_repetitions
-        else None)
-
-
-def _duration_shard_plan(plan, run_id, shard_index, panel_count,
-                         repetitions):
-    return dataclasses.replace(
-        plan,
-        mode=schema.ModeSpec(
-            name=plan.target_duration.mode,
-            warmups=plan.target_duration.warmups,
-            repetitions=repetitions,
-            panels=panel_count),
-        target_duration=None,
-        output_path=None,
-        plan_id=f'{run_id}:shard-{shard_index:04d}',
-        schema_version=collection_module.PLAN_SCHEMA_VERSION,
-    )
-
-
-def _shard_prepared_case(prepared, request):
-    return dataclasses.replace(
-        prepared,
-        request=request,
-        panels=[],
-        samples_by_route={name: [] for name in prepared.native_names},
-        python_samples_by_route={
-            name: [] for name in prepared.python_names},
-    )
-
-
-def _checkpoint_artifact(source, observation, panels):
-    candidates = []
-    summaries = {}
-    python_summaries = {}
-    for route in observation['routes'].values():
-        candidates.append({
-            key: value for key, value in route.items()
-            if key not in ('timing', 'python_timing', 'numpy_ratio')
-        })
-        if route['timing'] is not None:
-            summaries[route['name']] = route['timing']
-        if route['python_timing'] is not None:
-            python_summaries[route['name']] = route['python_timing']
-    return {
-        'schema_version': schema.SCHEMA_VERSION,
-        'schema_kind': schema.ARTIFACT_KIND,
-        'artifact_id': source['artifact_id'],
-        'created_at': source['created_at'],
-        'request': source['request'],
-        'metadata': source['metadata'],
-        'candidates': candidates,
-        'panels': panels,
-        'summaries': summaries,
-        'python_summaries': python_summaries,
-        'observations': [observation],
-    }
-
-
-def _checkpoint_artifacts(document):
-    source_ids = [
-        source_id
-        for shard in document['duration_run']['shards']
-        for source_id in shard['source_ids']
-    ]
-    sources = {
-        source['source_id']: source for source in document['sources']
-    }
-    observations = {}
-    for wrapper in document['observations']:
-        observations.setdefault(wrapper['source_id'], []).append(
-            wrapper['observation'])
-    panels = {source_id: [] for source_id in sources}
-    for item in document['panels']:
-        panels[item['source_id']].append(item)
-    artifacts = []
-    for source_id in source_ids:
-        source_observations = observations.get(source_id, ())
-        if len(source_observations) != 1:
-            raise schema.SchemaError(
-                'duration checkpoint source must have one observation')
-        source_panels = sorted(
-            panels[source_id],
-            key=lambda item: item['source_panel_index'])
-        artifacts.append(_checkpoint_artifact(
-            sources[source_id], source_observations[0],
-            [item['panel'] for item in source_panels]))
-    return artifacts
-
-
-def _duration_artifact_projection(plan, target_schedule, metadata,
-                                  measurements, overheads):
-    cell_count = len(plan.cells)
-    shard_count = target_schedule.shard_count
-    raw_bytes = collection_module.estimate_artifact_bytes(
-        plan, panel_count=target_schedule.panels)
-    raw_bytes += (
-        shard_count * cell_count
-        * collection_module.ARTIFACT_FIXED_BYTES_PER_CELL)
-    metadata_bytes = len(json.dumps(
-        metadata, sort_keys=True, separators=(',', ':'),
-        allow_nan=False).encode('utf8'))
-    raw_bytes += metadata_bytes * cell_count * shard_count
-    raw_bytes += (
-        collection_module.ARTIFACT_FIXED_BYTES_PER_CELL * cell_count)
-    evidence_bytes = len(json.dumps({
-        'measurements': [dataclasses.asdict(item)
-                         for item in measurements],
-        'overheads': [dataclasses.asdict(item) for item in overheads],
-        'schedule': dataclasses.asdict(target_schedule),
-    }, sort_keys=True, separators=(',', ':'), allow_nan=False).encode(
-        'utf8'))
-    provenance_bytes = shard_count * (4096 + 64 * cell_count)
-    return (raw_bytes + evidence_bytes + provenance_bytes) * 5 // 4
-
-
-def _build_duration_collection(artifacts, run):
-    document = artifact_module.merge_artifacts(artifacts)
-    document['collection_id'] = run['run_id']
-    document['duration_run'] = run
-    document['aggregate_observations'] = \
-        collection_module.aggregate_duration_observations(document)
-    return schema.validate_document(document)
-
-
-def _load_duration_checkpoint(plan, checkpoint_path, identity):
-    if checkpoint_path is None or not checkpoint_path.exists():
-        return None
-    document = artifact_module.load_artifact(checkpoint_path)
-    run = document.get('duration_run')
-    if run is None:
-        raise schema.SchemaError(
-            'checkpoint is not a target-duration collection')
-    if run['template_plan_sha256'] != plan.sha256():
-        raise schema.SchemaError(
-            'checkpoint target does not match the requested plan')
-    if run['metadata_identity'] != identity:
-        raise schema.SchemaError(
-            'checkpoint machine, build, or threading identity changed')
-    return document
-
-
-def _duration_run_guard(plan, run):
-    if run is None:
-        return collection_module.duration_shard_guard(plan)
-    return duration.ShardGuard(**run['shard_guard'])
-
-
-def _target_measurement_progress(plan, target_schedule, shard_index,
-                                 panel_index, cell_position, cell_index):
-    event = _collection_progress(
-        plan, panel_index, cell_position, cell_index)
-    event.update({
-        'completed': panel_index * len(plan.cells) + cell_position + 1,
-        'total': target_schedule.panels * len(plan.cells),
-        'panel': panel_index + 1,
-        'panels': target_schedule.panels,
-        'shard': shard_index + 1,
-        'shards': target_schedule.shard_count,
-    })
-    event['message'] = (
-        f'shard {shard_index + 1}/{target_schedule.shard_count}, '
-        f'panel {panel_index + 1}/{target_schedule.panels}, '
-        f'cell {cell_position + 1}/{len(plan.cells)}')
-    return event
-
-
 def _finish_fixed_collection(plan, plan_sha256, started_at, estimate,
                              orders, prepared_cases, metadata):
     artifacts = [
@@ -1272,7 +952,38 @@ def _finish_fixed_collection(plan, plan_sha256, started_at, estimate,
     return schema.validate_document(result)
 
 
-def _collect_fixed_plan(plan, engine, clock, progress, cancelled):
+def collection_partial_path(output_path):
+    if output_path is None:
+        return None
+    return pathlib.Path(f'{os.fspath(output_path)}.partial.json')
+
+
+def _finish_partial_collection(plan, started_at, orders, prepared_cases,
+                               metadata, completed_panels):
+    mode = dataclasses.replace(plan.mode, panels=completed_panels)
+    partial_plan = dataclasses.replace(plan, mode=mode, output_path=None)
+    partial_cases = [
+        dataclasses.replace(
+            prepared, request=partial_plan.request_at(index))
+        for index, prepared in enumerate(prepared_cases)
+    ]
+    return _finish_fixed_collection(
+        partial_plan, partial_plan.sha256(), started_at,
+        collection_module.estimate_plan(partial_plan),
+        orders[:completed_panels], partial_cases, metadata)
+
+
+def _write_partial_collection(plan, started_at, orders, prepared_cases,
+                              metadata, completed_panels, partial_path):
+    document = _finish_partial_collection(
+        plan, started_at, orders, prepared_cases, metadata,
+        completed_panels)
+    artifact_module.write_artifact(document, partial_path)
+    return document
+
+
+def _collect_fixed_plan(plan, engine, clock, progress, cancelled,
+                        partial_path):
     estimate = collection_module.validate_execution_plan(plan)
     plan_sha256 = plan.sha256()
     started_at = _now_iso()
@@ -1309,6 +1020,23 @@ def _collect_fixed_plan(plan, engine, clock, progress, cancelled):
             if progress is not None:
                 progress(_collection_progress(
                     plan, panel_index, cell_position, cell_index))
+        if partial_path is not None:
+            completed_panels = panel_index + 1
+            _run_activity(
+                lambda: _write_partial_collection(
+                    plan, started_at, orders, prepared_cases, metadata,
+                    completed_panels, partial_path),
+                'partial_write', 'partial', 1, progress, cancelled)
+            if progress is not None:
+                progress({
+                    'type': 'partial',
+                    'artifact_path': str(partial_path.resolve()),
+                    'completed_panels': completed_panels,
+                    'total_panels': plan.mode.panels,
+                    'message': (
+                        f'saved measurement round {completed_panels}/'
+                        f'{plan.mode.panels}'),
+                })
 
     return _run_activity(
         lambda: _finish_fixed_collection(
@@ -1317,324 +1045,18 @@ def _collect_fixed_plan(plan, engine, clock, progress, cancelled):
         'finalization', 'artifact', 1, progress, cancelled)
 
 
-def _collect_target_plan(plan, engine, clock, wall_clock, progress,
-                         cancelled, checkpoint_path):
-    collection_module.validate_execution_plan(plan)
-    target = plan.target_duration
-    run_started_at = _now_iso()
-    output_path = plan.output_path
-    checkpoint_path = (
-        duration_checkpoint_path(output_path, plan.sha256())
-        if checkpoint_path is None else pathlib.Path(checkpoint_path))
-    ignored_paths = (output_path, checkpoint_path)
-    segment_started_ns = wall_clock()
-    _validate_thread_environment(plan.request_at(0))
-    metadata = _run_activity(
-        lambda: _metadata(
-            plan.request_at(0), ignored_paths=ignored_paths,
-            ignored_checkpoint_outputs=(output_path,)),
-        'provenance', 'input', 1, progress, cancelled)
-    identity = collection_module.metadata_identity(metadata)
-    checkpoint = _run_activity(
-        lambda: _load_duration_checkpoint(
-            plan, checkpoint_path, identity),
-        'checkpoint_load', 'checkpoint', 1, progress, cancelled)
-    if checkpoint is not None:
-        canonical = collection_module.CollectionPlan.from_dict(
-            checkpoint['duration_run']['template_plan'])
-        run = dict(checkpoint['duration_run'])
-        run['shards'] = list(run['shards'])
-        run['resume_count'] += 1
-        run['resumed_from_checkpoint'] = True
-        all_artifacts = _run_activity(
-            lambda: _checkpoint_artifacts(checkpoint),
-            'finalization', 'artifact', 1, progress, cancelled)
-    else:
-        canonical = dataclasses.replace(plan, output_path=None)
-        run = None
-        all_artifacts = []
-
-    prepared_cases = []
-    for index, request in enumerate(canonical.requests()):
-        _check_cancelled(cancelled)
-        prepared = _prepare_case(
-            request, engine, cell_id=canonical.cells[index].cell_id,
-            progress=progress, cancelled=cancelled)
-        _require_correct_plan_case(prepared)
-        prepared_cases.append(prepared)
-        if progress is not None:
-            progress({
-                'type': 'progress',
-                'phase': 'preparation',
-                'completed': index + 1,
-                'total': len(canonical.cells),
-                'message': (
-                    f'validated input {index + 1}/'
-                    f'{len(canonical.cells)}'),
-            })
-    guard = _duration_run_guard(canonical, run)
-    stream_count = _duration_stream_count(prepared_cases)
-
-    if run is None:
-        used_repetitions = target.warmups + 1
-        if (guard.fixed_calls + stream_count * used_repetitions
-                > collection_module.MAX_COLLECTION_CALLS):
-            raise duration.DurationModelError(
-                'one-repetition pilot exceeds the collection guards')
-        for prepared in prepared_cases:
-            _check_cancelled(cancelled)
-            _warm_up(
-                prepared, target.warmups, progress=progress,
-                cancelled=cancelled)
-        preflight_elapsed_ns = max(
-            0, wall_clock() - segment_started_ns)
-        total_calibrations = stream_count
-        pilot, pilot_overhead, completed = _calibration_pass(
-            prepared_cases, 1,
-            clock, wall_clock, progress, 0, total_calibrations,
-            'pilot', cancelled)
-        calibration_repetitions = _calibration_repetitions(
-            target, pilot, pilot_overhead, preflight_elapsed_ns,
-            guard, stream_count)
-        if calibration_repetitions is None:
-            measurements = pilot
-            overheads = (pilot_overhead,)
-        else:
-            total_calibrations = 2 * stream_count
-            calibrated, calibrated_overhead, _completed = \
-                _calibration_pass(
-                    prepared_cases, calibration_repetitions,
-                    clock, wall_clock, progress, completed,
-                    total_calibrations, 'timed', cancelled)
-            measurements = pilot + calibrated
-            overheads = (pilot_overhead, calibrated_overhead)
-        if progress is not None:
-            progress({
-                'type': 'progress',
-                'phase': 'planning',
-                'completed': 0,
-                'total': 0,
-                'message': 'planning target-duration shards',
-            })
-        target_schedule = duration.plan_target_duration(
-            target, measurements, overheads,
-            preflight_elapsed_ns=preflight_elapsed_ns,
-            shard_guard=guard)
-        if not target_schedule.feasible:
-            raise duration.DurationModelError(target_schedule.reason)
-        projected_bytes = _duration_artifact_projection(
-            canonical, target_schedule, metadata,
-            measurements, overheads)
-        if projected_bytes \
-                > collection_module.MAX_COLLECTION_ARTIFACT_BYTES:
-            raise MemoryError(
-                'target-duration artifact projection needs '
-                f'{projected_bytes} bytes, limit is '
-                f'{collection_module.MAX_COLLECTION_ARTIFACT_BYTES}')
-        run_id = uuid.uuid4().hex
-        run = {
-            'version': 1,
-            'run_id': run_id,
-            'status': 'checkpoint',
-            'started_at': run_started_at,
-            'requested': collection_module.target_duration_to_dict(target),
-            'template_plan': canonical.to_dict(),
-            'template_plan_sha256': canonical.sha256(),
-            'metadata_identity': identity,
-            'preflight_elapsed_ns': preflight_elapsed_ns,
-            'calibration_measurements': [
-                dataclasses.asdict(item) for item in measurements],
-            'controller_overheads': [
-                dataclasses.asdict(item) for item in overheads],
-            'shard_guard': dataclasses.asdict(guard),
-            'schedule': dataclasses.asdict(target_schedule),
-            'completed_panels': 0,
-            'measurement_elapsed_ns': 0,
-            'actual_elapsed_ns': 0,
-            'resumed_from_checkpoint': False,
-            'resume_count': 0,
-            'shards': [],
-        }
-        base_actual_elapsed_ns = 0
-    else:
-        measurements = tuple(
-            duration.CalibrationMeasurement(**item)
-            for item in run['calibration_measurements'])
-        overheads = tuple(
-            duration.ControllerOverhead(**item)
-            for item in run['controller_overheads'])
-        target_schedule = duration.plan_target_duration(
-            target, measurements, overheads,
-            preflight_elapsed_ns=run['preflight_elapsed_ns'],
-            shard_guard=guard)
-        if dataclasses.asdict(target_schedule) != run['schedule']:
-            raise schema.SchemaError(
-                'checkpoint schedule no longer matches its target')
-        base_actual_elapsed_ns = run['actual_elapsed_ns']
-        passes = len(measurements) // stream_count
-        total_calibrations = passes * stream_count
-        if progress is not None:
-            progress({
-                'type': 'progress',
-                'phase': 'calibration',
-                'completed': total_calibrations,
-                'total': total_calibrations,
-                'cell_id': None,
-                'route': None,
-                'scope': None,
-                'message': 'reused calibration from checkpoint',
-            })
-        if run['status'] == 'complete':
-            _check_cancelled(cancelled)
-            run['actual_elapsed_ns'] = (
-                base_actual_elapsed_ns
-                + max(0, wall_clock() - segment_started_ns))
-            document = _run_activity(
-                lambda: _build_duration_collection(all_artifacts, run),
-                'finalization', 'artifact', 1, progress, cancelled)
-            if progress is not None:
-                progress({
-                    'type': 'progress',
-                    'phase': 'finalization',
-                    'completed': 1,
-                    'total': 1,
-                    'message': 'validated completed checkpoint',
-                })
-            return document
-
-    sizes = collection_module.duration_shard_sizes(target_schedule)
-    first_shard = len(run['shards'])
-    panel_offset = run['completed_panels']
-    for shard_index in range(first_shard, len(sizes)):
-        _check_cancelled(cancelled)
-        panel_count = sizes[shard_index]
-        shard_plan = _duration_shard_plan(
-            canonical, run['run_id'], shard_index,
-            panel_count, target_schedule.repetitions)
-        shard_cases = [
-            _shard_prepared_case(prepared, request)
-            for prepared, request in zip(
-                prepared_cases, shard_plan.requests())
-        ]
-        shard_started_at = _now_iso()
-        shard_started_ns = wall_clock()
-        for cell_index in collection_module.panel_cell_order_at(
-                canonical, panel_offset):
-            _check_cancelled(cancelled)
-            _warm_up(
-                shard_cases[cell_index], progress=progress,
-                cancelled=cancelled)
-        for local_index in range(panel_count):
-            global_index = panel_offset + local_index
-            order = collection_module.panel_cell_order_at(
-                canonical, global_index)
-            for cell_position, cell_index in enumerate(order):
-                _check_cancelled(cancelled)
-                _measure_panel(
-                    shard_cases[cell_index], local_index, clock,
-                    order_index=global_index, progress=progress,
-                    cancelled=cancelled, panel=global_index + 1,
-                    panels=target_schedule.panels)
-                if progress is not None:
-                    progress(_target_measurement_progress(
-                        canonical, target_schedule, shard_index,
-                        global_index, cell_position, cell_index))
-        shard_elapsed_ns = max(0, wall_clock() - shard_started_ns)
-        shard_artifacts = _run_activity(
-            lambda: [
-                _finish_artifact(prepared, metadata)
-                for prepared in shard_cases
-            ],
-            'finalization', 'artifact', 1, progress, cancelled)
-        source_offset = len(all_artifacts)
-        all_artifacts.extend(shard_artifacts)
-        source_ids = [
-            f'source-{source_offset + index}'
-            for index in range(len(canonical.cells))
-        ]
-        run['shards'].append({
-            'id': f'{run["run_id"]}:shard-{shard_index:04d}',
-            'index': shard_index,
-            'panel_offset': panel_offset,
-            'panel_count': panel_count,
-            'started_at': shard_started_at,
-            'completed_at': _now_iso(),
-            'elapsed_ns': shard_elapsed_ns,
-            'mode': shard_plan.mode.to_dict(),
-            'plan_id': shard_plan.plan_id,
-            'plan_sha256': shard_plan.sha256(),
-            'estimate': collection_module.estimate_plan(
-                shard_plan).to_dict(),
-            'cell_orders_sha256': collection_module.cell_orders_sha256(
-                canonical, panel_offset, panel_count),
-            'source_ids': source_ids,
-        })
-        panel_offset += panel_count
-        run['completed_panels'] = panel_offset
-        run['measurement_elapsed_ns'] = sum(
-            item['elapsed_ns'] for item in run['shards'])
-        run['actual_elapsed_ns'] = (
-            base_actual_elapsed_ns
-            + max(0, wall_clock() - segment_started_ns))
-        run['status'] = (
-            'complete' if len(run['shards']) == len(sizes)
-            else 'checkpoint')
-        document = _run_activity(
-            lambda: _build_duration_collection(all_artifacts, run),
-            'finalization', 'artifact', 1, progress, cancelled)
-        if checkpoint_path is not None:
-            _run_activity(
-                lambda: artifact_module.write_artifact(
-                    document, checkpoint_path),
-                'checkpoint_write', 'checkpoint', 1,
-                progress, cancelled)
-            if progress is not None:
-                progress({
-                    'type': 'checkpoint',
-                    'phase': 'measurement',
-                    'artifact_path': str(checkpoint_path.resolve()),
-                    'completed_shards': len(run['shards']),
-                    'total_shards': target_schedule.shard_count,
-                    'completed_panels': panel_offset,
-                    'total_panels': target_schedule.panels,
-                    'message': (
-                        f'saved shard {shard_index + 1}/'
-                        f'{target_schedule.shard_count} checkpoint'),
-                })
-        run['actual_elapsed_ns'] = (
-            base_actual_elapsed_ns
-            + max(0, wall_clock() - segment_started_ns))
-        if run['status'] == 'complete':
-            document = _run_activity(
-                lambda: _build_duration_collection(all_artifacts, run),
-                'finalization', 'artifact', 1, progress, cancelled)
-    if progress is not None:
-        progress({
-            'type': 'progress',
-            'phase': 'finalization',
-            'completed': 1,
-            'total': 1,
-            'message': 'validated target-duration collection',
-        })
-    return document
-
-
 def collect_plan(plan, engine=None, clock=time.perf_counter_ns,
-                 progress=None, cancelled=None,
-                 wall_clock=time.perf_counter_ns,
-                 checkpoint_path=None):
+                 progress=None, cancelled=None, partial_path=None):
     """Collect one frozen plan in this process and publish on success."""
 
     if not isinstance(plan, collection_module.CollectionPlan):
         plan = collection_module.CollectionPlan.from_dict(plan)
     plan = collection_module.CollectionPlan.from_dict(plan.to_dict())
     engine = engine or engine_module.SolvconRouteEngine()
-    if plan.target_duration is not None:
-        return _collect_target_plan(
-            plan, engine, clock, wall_clock, progress, cancelled,
-            checkpoint_path)
+    if partial_path is not None:
+        partial_path = pathlib.Path(partial_path)
     return _collect_fixed_plan(
-        plan, engine, clock, progress, cancelled)
+        plan, engine, clock, progress, cancelled, partial_path)
 
 
 # vim: set ff=unix fenc=utf8 et sw=4 ts=4 sts=4:

@@ -593,8 +593,7 @@ def validate_artifact(artifact):
     artifact = _require_mapping(artifact, 'artifact')
     fields = (
         'schema_version', 'schema_kind', 'artifact_id', 'created_at',
-        'request', 'metadata', 'candidates', 'panels', 'summaries',
-        'python_summaries', 'observations',
+        'request', 'metadata', 'panels', 'observations',
     )
     _reject_unknown(artifact, 'artifact', fields)
     _require_fields(artifact, 'artifact', fields)
@@ -603,21 +602,10 @@ def validate_artifact(artifact):
     _require_str(artifact['created_at'], 'artifact.created_at')
     _validate_serialized_request(artifact['request'])
     _validate_metadata(artifact['metadata'], 'artifact.metadata')
-    if not isinstance(artifact['candidates'], list):
-        raise SchemaError('artifact.candidates must be an array')
-    for index, candidate in enumerate(artifact['candidates']):
-        _validate_candidate(candidate, f'artifact.candidates[{index}]')
     if not isinstance(artifact['panels'], list):
         raise SchemaError('artifact.panels must be an array')
     for index, panel in enumerate(artifact['panels']):
         _validate_panel(panel, f'artifact.panels[{index}]')
-    for field_name in ('summaries', 'python_summaries'):
-        summaries = _require_mapping(
-            artifact[field_name], f'artifact.{field_name}')
-        for route_name, summary in summaries.items():
-            _require_str(route_name, f'artifact.{field_name} route name')
-            _validate_summary(
-                summary, f'artifact.{field_name}[{route_name!r}]')
     if not isinstance(artifact['observations'], list):
         raise SchemaError('artifact.observations must be an array')
     for index, observation in enumerate(artifact['observations']):
@@ -634,7 +622,6 @@ def validate_collection(collection):
     )
     fields = required_fields + (
         'started_at', 'plan', 'plan_sha256', 'estimate', 'cell_orders',
-        'duration_run', 'aggregate_observations',
     )
     _reject_unknown(collection, 'collection', fields)
     _require_fields(collection, 'collection', required_fields)
@@ -764,39 +751,6 @@ def validate_collection(collection):
                 'collection.plan_sha256 must be a SHA-256 digest')
         from . import collection as collection_module
         collection_module.validate_collection_provenance(collection)
-    duration_fields = (
-        'duration_run' in collection,
-        'aggregate_observations' in collection,
-    )
-    if any(duration_fields) and not all(duration_fields):
-        raise SchemaError(
-            'duration collection provenance must be complete')
-    if all(duration_fields):
-        aggregates = collection['aggregate_observations']
-        if not isinstance(aggregates, list):
-            raise SchemaError(
-                'collection.aggregate_observations must be an array')
-        for index, item in enumerate(aggregates):
-            name = f'collection.aggregate_observations[{index}]'
-            item = _require_mapping(item, name)
-            aggregate_fields = ('cell_id', 'source_ids', 'observation')
-            _reject_unknown(item, name, aggregate_fields)
-            _require_fields(item, name, aggregate_fields)
-            _require_str(item['cell_id'], f'{name}.cell_id')
-            if not isinstance(item['source_ids'], list) \
-                    or not item['source_ids']:
-                raise SchemaError(f'{name}.source_ids must be an array')
-            if len(item['source_ids']) != len(set(item['source_ids'])):
-                raise SchemaError(
-                    f'{name}.source_ids must not contain duplicates')
-            for source_id in item['source_ids']:
-                if source_id not in source_ids:
-                    raise SchemaError(
-                        f'{name}.source_ids contains an unknown source')
-            _validate_observation(
-                item['observation'], f'{name}.observation')
-        from . import collection as collection_module
-        collection_module.validate_duration_collection(collection)
     return collection
 
 

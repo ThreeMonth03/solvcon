@@ -79,7 +79,7 @@ class MatmulBenchmarkWindowTC(unittest.TestCase):
         inspector._rhs_shape.setText('2048, 2048')
         inspector._threads.setValue(1)
         for name, box in inspector._dispatches.boxes.items():
-            box.setChecked(name == 'generic')
+            box.setChecked(name == 'naive')
         sampling = inspector._sampling
         sampling.quality.setCurrentText('Custom fixed schedule')
         sampling.warmups.setValue(0)
@@ -91,7 +91,7 @@ class MatmulBenchmarkWindowTC(unittest.TestCase):
         inspector.start_benchmark()
         self.assertTrue(self._wait_until(
             lambda: any(
-                event['route'] == 'generic' and event['state'] == 'started'
+                event['route'] == 'naive' and event['state'] == 'started'
                 for event in activities),
             30_000))
         window._tabs.setCurrentWidget(window.dispatch_atlas)
@@ -102,7 +102,7 @@ class MatmulBenchmarkWindowTC(unittest.TestCase):
 
         self.assertTrue(self._wait_until(
             lambda: not inspector.running, 5_000))
-        self.assertIn('Cancelled while Generic',
+        self.assertIn('Cancelled while Naive',
                       inspector._status.text())
         self.assertFalse(window._stop.isEnabled())
         self.assertTrue(inspector._run.isEnabled())

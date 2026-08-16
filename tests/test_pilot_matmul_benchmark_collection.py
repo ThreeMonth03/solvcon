@@ -109,9 +109,14 @@ def _collection_document(plan):
                 'M': cell['lhs']['shape'][-2],
                 'K': cell['lhs']['shape'][-1],
                 'N': cell['rhs']['shape'][-1],
-                'winner': 'generic',
+                'winner': 'naive',
+                'runner_up': None,
                 'winner_margin': 0.2,
-                'candidates': [],
+                'routes': {
+                    'naive': {
+                        'name': 'naive', 'packing': {}, 'timing': None,
+                    },
+                },
             },
         })
     return {
@@ -223,39 +228,6 @@ class StarterPlanDialogTC(unittest.TestCase):
         self.assertFalse(ok.isEnabled())
         self.assertIn('current worker-safe limit', dialog._estimate.text())
 
-    def test_target_duration_requires_durable_output_and_calibration(self):
-        options = _matmul_benchmark_collection.default_options()
-        options.update({
-            'budget': 'target_duration',
-            'target_duration_seconds': 3600.0,
-            'checkpoint_seconds': 90.0,
-        })
-        dialog = _matmul_benchmark_collection.StarterPlanDialog(options)
-
-        ok = dialog._buttons.button(
-            QtWidgets.QDialogButtonBox.StandardButton.Ok)
-        self.assertFalse(ok.isEnabled())
-        self.assertIn('require an Output JSON path', dialog._estimate.text())
-        self.assertIn('required for target duration',
-                      dialog._output_path.placeholderText())
-
-        dialog._output_path.setText('one-hour-atlas.json')
-        dialog._sampling.quality.setCurrentText('Stable')
-        plan = dialog.plan()
-
-        self.assertTrue(ok.isEnabled())
-        self.assertEqual(plan.target_duration.seconds, 3600.0)
-        self.assertEqual(plan.target_duration.mode, 'stable')
-        self.assertEqual(plan.target_duration.checkpoint_seconds, 90.0)
-        self.assertIn(
-            'Target wall-time budget: 1 hour', dialog._estimate.text())
-        self.assertIn('Calibration is required', dialog._estimate.text())
-        self.assertIn('not elapsed time', dialog._estimate.text())
-        self.assertIn('complete balanced measurement rounds',
-                      dialog._budget_helper.text())
-        self.assertIn('at least 8 measurement rounds',
-                      dialog._sampling.helper.text())
-
     def test_quality_help_and_custom_fixed_schedule_are_explicit(self):
         options = _matmul_benchmark_collection.default_options()
         dialog = _matmul_benchmark_collection.StarterPlanDialog(options)
@@ -288,40 +260,6 @@ class StarterPlanDialogTC(unittest.TestCase):
         self.assertIn('too many calls', dialog._sampling.helper.text())
         self.assertIn('Invalid plan', dialog._estimate.text())
 
-        dialog._budget.setCurrentIndex(
-            dialog._budget.findData('target_duration'))
-        custom_index = dialog._sampling.quality.findData('custom')
-        self.assertEqual(dialog._sampling.quality_name(), 'preview')
-        self.assertTrue(
-            dialog._sampling.quality.view().isRowHidden(custom_index))
-        self.assertTrue(dialog._sampling.custom_schedule.isHidden())
-
-    def test_target_duration_rejects_custom_sampling_options(self):
-        options = _matmul_benchmark_collection.default_options()
-        options.update({
-            'mode': 'custom',
-            'budget': 'target_duration',
-            'output_path': 'target.json',
-        })
-
-        with self.assertRaisesRegex(
-                ValueError, 'only with a fixed budget'):
-            _matmul_benchmark_collection.make_plan(options)
-
-    def test_target_duration_presets_include_custom_and_one_hour(self):
-        dialog = _matmul_benchmark_collection.StarterPlanDialog(
-            _matmul_benchmark_collection.default_options())
-        names = tuple(
-            dialog._duration_preset.itemText(index)
-            for index in range(dialog._duration_preset.count()))
-
-        self.assertIn('1 hour', names)
-        self.assertIn('Custom', names)
-        dialog._duration_preset.setCurrentText('Custom')
-        dialog._custom_duration.setValue(75)
-
-        self.assertEqual(dialog.options()['target_duration_seconds'], 75)
-
     def test_dispatch_checkboxes_require_at_least_one_route(self):
         options = _matmul_benchmark_collection.default_options()
         dialog = _matmul_benchmark_collection.StarterPlanDialog(options)
@@ -336,7 +274,7 @@ class StarterPlanDialogTC(unittest.TestCase):
         self.assertTrue(all(
             box.toolTip() for box in dialog._routes.boxes.values()))
 
-        options['routes'] = ('generic', 'imaginary_kernel')
+        options['routes'] = ('naive', 'imaginary_kernel')
         with self.assertRaisesRegex(ValueError, 'Unknown starter routes'):
             _matmul_benchmark_collection.make_plan(options)
 
@@ -348,20 +286,20 @@ class StarterPlanDialogTC(unittest.TestCase):
             self._set_linear(editor, 2048, 2048, 1)
 
         plan = dialog.plan()
-        generic = dialog._routes.boxes['generic']
+        naive = dialog._routes.boxes['naive']
 
         self.assertEqual(plan.cells[0].routes, (
-            'generic', 'blas_gemm', 'winograd',
+            'naive', 'blas_gemm', 'winograd',
         ))
-        self.assertTrue(generic.isChecked())
-        self.assertTrue(generic.isEnabled())
+        self.assertTrue(naive.isChecked())
+        self.assertTrue(naive.isEnabled())
         self.assertIn(
-            'Generic: 1/1 input points',
+            'Naive: 1/1 input points',
             dialog._route_helper.text())
         self.assertIn('BLAS GEMM: 1/1 input points',
                       dialog._route_helper.text())
         self.assertIn('3 dispatches', dialog._estimate.text())
-        self.assertIn('generic', dialog.options()['routes'])
+        self.assertIn('naive', dialog.options()['routes'])
 
     def test_mixed_grid_reports_partial_dispatch_coverage(self):
         dialog = _matmul_benchmark_collection.StarterPlanDialog(
@@ -370,55 +308,15 @@ class StarterPlanDialogTC(unittest.TestCase):
         self._set_linear(dialog._k_range, 2048, 2048, 1)
         self._set_linear(dialog._n_range, 2048, 2048, 1)
 
-        generic = dialog._routes.boxes['generic']
+        naive = dialog._routes.boxes['naive']
 
-        self.assertTrue(generic.isEnabled())
-        self.assertTrue(generic.isChecked())
-        self.assertIn('Generic: 2/2 input points',
+        self.assertTrue(naive.isEnabled())
+        self.assertTrue(naive.isChecked())
+        self.assertIn('Naive: 2/2 input points',
                       dialog._route_helper.text())
         self.assertIn('BLAS GEMM: 2/2 input points',
                       dialog._route_helper.text())
         self.assertIn('3 dispatches', dialog._estimate.text())
-
-    def test_target_duration_does_not_cap_generic_coverage(self):
-        options = _matmul_benchmark_collection.default_options()
-        options.update({
-            'budget': 'target_duration',
-            'output_path': 'target.json',
-        })
-        dialog = _matmul_benchmark_collection.StarterPlanDialog(options)
-        for editor in (
-                dialog._m_range, dialog._k_range, dialog._n_range):
-            self._set_linear(editor, 2048, 2048, 1)
-
-        generic = dialog._routes.boxes['generic']
-
-        self.assertTrue(generic.isEnabled())
-        self.assertTrue(generic.isChecked())
-        self.assertIn('Generic: 1/1 input points',
-                      dialog._route_helper.text())
-        self.assertEqual(dialog.plan().cells[0].routes, (
-            'generic', 'blas_gemm', 'winograd',
-        ))
-
-    def test_stable_2048_target_remains_a_valid_plan(self):
-        options = _matmul_benchmark_collection.default_options()
-        options.update({
-            'budget': 'target_duration',
-            'mode': 'stable',
-            'output_path': 'stable-2048.json',
-        })
-        dialog = _matmul_benchmark_collection.StarterPlanDialog(options)
-        for editor in (
-                dialog._m_range, dialog._k_range, dialog._n_range):
-            self._set_linear(editor, 2048, 2048, 1)
-
-        ok = dialog._buttons.button(
-            QtWidgets.QDialogButtonBox.StandardButton.Ok)
-
-        self.assertTrue(ok.isEnabled())
-        self.assertIsNotNone(dialog.plan().target_duration)
-        self.assertNotIn('confirmation required', dialog._estimate.text())
 
     def test_exact_input_profile_expands_into_one_resolved_cell(self):
         dialog = _matmul_benchmark_collection.StarterPlanDialog(
@@ -451,22 +349,6 @@ class StarterPlanDialogTC(unittest.TestCase):
         self.assertEqual('broadcast_lhs', cell.broadcast)
         self.assertEqual(
             'Mixed input', dialog._profiles._table.item(0, 0).text())
-
-    def test_plan_scale_is_visible_without_stale_confirmation(self):
-        with unittest.mock.patch.object(
-                solvcon.matmul_benchmark.collection,
-                'RECOMMENDED_COLLECTION_CELLS', 1):
-            dialog = _matmul_benchmark_collection.StarterPlanDialog(
-                _matmul_benchmark_collection.default_options())
-
-        self.assertIn('Plan scale', dialog._estimate.text())
-        with unittest.mock.patch.object(
-                QtWidgets.QMessageBox, 'warning') as warning:
-            dialog.accept()
-
-        warning.assert_not_called()
-        self.assertEqual(
-            dialog.result(), QtWidgets.QDialog.DialogCode.Accepted)
 
     def test_output_path_and_reserved_cpu_limit_are_explicit(self):
         options = _matmul_benchmark_collection.default_options(threads=4)
@@ -537,7 +419,6 @@ class StarterAtlasCollectionTC(unittest.TestCase):
         self.assertEqual(request['threads'], 3)
         self.assertEqual(len(request['cells']), 36)
         self.assertEqual(request['mode']['name'], 'preview')
-        self.assertIsNone(request['target_duration'])
         self.assertIsInstance(request['output_path'], str)
         self.assertTrue(request['output_path'].endswith('artifact.json'))
         self.assertTrue(widget.running)
@@ -585,121 +466,9 @@ class StarterAtlasCollectionTC(unittest.TestCase):
 
         request = json.loads(self.processes[0].written)
         warning.assert_not_called()
-        self.assertFalse(request['allow_large_work'])
+        self.assertEqual(request['schema_version'], 1)
         widget.stop()
         self.processes[0].exit(1)
-
-    def test_target_duration_progress_and_completion_are_explicit(self):
-        widget = _matmul_benchmark._atlas.AtlasWidget(
-            _FeatureRegistry(), process_factory=self.factory)
-        widget._starter_options.update({
-            'budget': 'target_duration',
-            'target_duration_seconds': 3600.0,
-            'checkpoint_seconds': 60.0,
-            'output_path': 'one-hour-atlas.json',
-        })
-
-        widget.start_starter_collection()
-        process = self.processes[0]
-        request = json.loads(process.written)
-
-        self.assertEqual(request['target_duration']['seconds'], 3600.0)
-        self.assertEqual(widget._collection_progress.minimum(), 0)
-        self.assertEqual(widget._collection_progress.maximum(), 0)
-        self.assertIn('calibration', widget._collection_status.text())
-
-        process.emit_json({
-            'type': 'progress',
-            'phase': 'calibration',
-            'completed': 3,
-            'total': 12,
-            'message': 'Calibration 3/12',
-        })
-        self.assertEqual(widget._collection_progress.maximum(), 12)
-        self.assertEqual(widget._collection_progress.value(), 3)
-
-        process.emit_json({
-            'type': 'progress',
-            'phase': 'measurement',
-            'completed': 7,
-            'total': 720,
-            'message': 'Shard 1/3, panel 1',
-        })
-        self.assertEqual(widget._collection_progress.maximum(), 720)
-        self.assertEqual(widget._collection_progress.value(), 7)
-        self.assertIn('Saved chunk 1/3, measurement round 1',
-                      widget._collection_status.text())
-
-        document = _collection_document(request)
-        raw = document['observations'][0]
-        document['aggregate_observations'] = [{
-            'cell_id': request['cells'][0]['id'],
-            'source_ids': [raw['source_id']],
-            'observation': raw['observation'],
-        }]
-        document['duration_run'] = {
-            'requested': {'seconds': 3600.0},
-            'actual_elapsed_ns': 3_590_000_000_000,
-            'schedule': {
-                'predicted': {'central_seconds': 3575.0},
-                'panels': 120,
-                'repetitions': 40,
-                'shard_count': 3,
-            },
-        }
-        with unittest.mock.patch.object(
-                solvcon.matmul_benchmark.artifact, 'load_artifact',
-                return_value=document):
-            process.emit_json({
-                'type': 'result',
-                'artifact_path': request['output_path'],
-            })
-        process.exit()
-
-        self.assertEqual(len(widget._observations), 1)
-        self.assertIn('Complete: 1 cells', widget._collection_status.text())
-        self.assertIn('target 1 hour', widget._collection_status.text())
-        self.assertIn('active', widget._collection_status.text())
-        self.assertIn('predicted', widget._collection_status.text())
-        self.assertIn(
-            '120 measurement rounds, 40 calls per result, 3 saved chunks',
-            widget._collection_status.text())
-
-    def test_cancelled_duration_run_reports_durable_checkpoint(self):
-        widget = _matmul_benchmark._atlas.AtlasWidget(
-            _FeatureRegistry(), process_factory=self.factory)
-        widget._starter_options.update({
-            'budget': 'target_duration',
-            'target_duration_seconds': 600.0,
-            'output_path': 'resumable-atlas.json',
-        })
-        widget.start_starter_collection()
-        process = self.processes[0]
-
-        process.emit_json({
-            'type': 'checkpoint',
-            'artifact_path': 'resumable-atlas.checkpoint.json',
-            'completed_shards': 1,
-            'total_shards': 4,
-            'completed_panels': 10,
-            'total_panels': 40,
-        })
-        self.assertIn('Checkpoint 1/4 saved',
-                      widget._collection_status.text())
-        widget._runner.cancel()
-        process.exit(1)
-
-        self.assertIn('rerun the same plan to resume',
-                      widget._collection_status.text())
-        self.assertIn('resumable-atlas.checkpoint.json',
-                      widget._collection_status.text())
-
-        widget.start_starter_collection()
-
-        self.assertIn('Resuming from checkpoint',
-                      widget._collection_status.text())
-        widget._runner.cancel()
-        process.exit(1)
 
     def test_unsaved_collection_can_be_saved_atomically(self):
         widget = _matmul_benchmark._atlas.AtlasWidget(
@@ -782,11 +551,14 @@ class StarterAtlasCollectionTC(unittest.TestCase):
         self.assertEqual(widget._artifacts, [])
         self.assertEqual(widget._collection_status.text(), 'Cancelled')
 
-    def test_stop_reports_current_cell_and_preserves_checkpoint(self):
+    def test_stop_reports_current_cell_and_loads_partial_result(self):
+        documents = {}
         widget = _matmul_benchmark._atlas.AtlasWidget(
-            _FeatureRegistry(), process_factory=self.factory)
+            _FeatureRegistry(), process_factory=self.factory,
+            artifact_loader=documents.__getitem__)
         widget.start_starter_collection()
         process = self.processes[0]
+        request = json.loads(process.written)
         process.emit_json(_activity())
         QtTest.QTest.qWait(120)
 
@@ -794,11 +566,11 @@ class StarterAtlasCollectionTC(unittest.TestCase):
                       widget._collection_status.text())
         self.assertIn('cell m2048-k2048-n2048',
                       widget._collection_status.text())
+        partial_path = 'safe.partial.json'
+        documents[partial_path] = _collection_document(request)
         process.emit_json({
-            'type': 'checkpoint',
-            'artifact_path': 'safe.checkpoint.json',
-            'completed_shards': 1,
-            'total_shards': 4,
+            'type': 'partial',
+            'artifact_path': partial_path,
             'completed_panels': 2,
             'total_panels': 8,
         })
@@ -816,8 +588,10 @@ class StarterAtlasCollectionTC(unittest.TestCase):
 
         self.assertIn('Cancelled while Auto -> BLAS GEMM',
                       widget._collection_status.text())
-        self.assertIn('safe.checkpoint.json',
+        self.assertIn('loaded partial result',
                       widget._collection_status.text())
+        self.assertIn(partial_path, widget._collection_status.text())
+        self.assertEqual(len(widget._artifacts), 1)
         self.assertTrue(widget._collect.isEnabled())
 
     def test_worker_error_keeps_context_and_clears_stale_timer(self):

@@ -23,7 +23,7 @@ __all__ = [
 ]
 
 _DISPATCH_CHOICES = (
-    ('generic', 'Generic',
+    ('naive', 'Naive',
      'Direct native loop. It is available for every valid input.'),
     ('blas_dot', 'BLAS DOT',
      'BLAS vector dot product for A vector @ B vector.'),
@@ -350,7 +350,7 @@ class RouteInspectorWidget(QtWidgets.QWidget):
 
     @staticmethod
     def _structurally_eligible_dispatches(lhs_shape, rhs_shape):
-        dispatches = ['generic']
+        dispatches = ['naive']
         contraction = rhs_shape[-1] if len(rhs_shape) == 1 else rhs_shape[-2]
         lhs_vector = len(lhs_shape) == 1
         rhs_vector = len(rhs_shape) == 1

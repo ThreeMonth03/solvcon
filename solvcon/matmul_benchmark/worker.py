@@ -5,7 +5,6 @@
 
 import argparse
 import ctypes
-import dataclasses
 import json
 import os
 import pathlib
@@ -80,16 +79,11 @@ def main(argv=None):
                           if isinstance(request, collection.CollectionPlan)
                           else request.request_id)
             output = f'matmul-benchmark-{request_id}.json'
-        checkpoint_path = None
+        partial_path = None
         if isinstance(request, collection.CollectionPlan):
-            if request.target_duration is not None:
-                request = dataclasses.replace(
-                    request, output_path=output)
-                checkpoint_path = collector.duration_checkpoint_path(
-                    output, request.sha256())
+            partial_path = collector.collection_partial_path(output)
             result = collector.collect_plan(
-                request, progress=_emit,
-                checkpoint_path=checkpoint_path)
+                request, progress=_emit, partial_path=partial_path)
             identifier = result['collection_id']
         else:
             result = collector.collect(request, progress=_emit)
@@ -97,9 +91,9 @@ def main(argv=None):
         artifact_path = collector._run_activity(
             lambda: artifact.write_artifact(result, output),
             'artifact_write', 'artifact', 1, _emit, None)
-        if checkpoint_path is not None and checkpoint_path.exists():
+        if partial_path is not None and partial_path.exists():
             try:
-                checkpoint_path.unlink()
+                partial_path.unlink()
             except OSError:
                 pass
         _emit({

@@ -57,7 +57,7 @@ class InputProfileEditorTC(unittest.TestCase):
             'A shape (1, 8, 16), element strides (0, 19, 1), '
             'backing storage 149 elements',
             editor._preview.text())
-        self.assertIn('Kernels available for this input: Generic, BLAS GEMM',
+        self.assertIn('Kernels available for this input: Naive, BLAS GEMM',
                       editor._preview.text())
         self.assertIn('Sweep: repeated for every collection M/K/N',
                       editor._preview.text())
@@ -238,7 +238,7 @@ class InputProfilesWidgetTC(unittest.TestCase):
         self.assertIn('M=8, K=16, N=32', resolved_item.text())
         self.assertIn('Output shape (3, 8, 32)',
                       resolved_item.toolTip())
-        self.assertIn('Generic, BLAS GEMM',
+        self.assertIn('Naive, BLAS GEMM',
                       self.widget._table.item(1, 6).text())
         self.assertEqual('Preset / sweep',
                          self.widget._table.item(1, 1).text())

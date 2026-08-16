@@ -345,7 +345,7 @@ class ProfileExpansionTC(unittest.TestCase):
         with self.assertRaisesRegex(schema.SchemaError, 'same input recipe'):
             collection.input_profile_plan(
                 (first, duplicate), m_values=(2,), k_values=(3,),
-                n_values=(4,), routes=('generic',),
+                n_values=(4,), routes=('naive',),
                 numpy_baseline=False)
 
         exact_duplicate = profiles.InputProfile.exact(
@@ -355,7 +355,7 @@ class ProfileExpansionTC(unittest.TestCase):
         with self.assertRaisesRegex(schema.SchemaError, 'same exact A/B'):
             collection.input_profile_plan(
                 (first, exact_duplicate), m_values=(2,), k_values=(3,),
-                n_values=(4,), routes=('generic',),
+                n_values=(4,), routes=('naive',),
                 numpy_baseline=False)
 
     def test_duplicate_or_invalid_dimensions_are_rejected(self):
@@ -382,7 +382,7 @@ class ProfileExpansionTC(unittest.TestCase):
 
         plan = collection.input_profile_plan(
             (profile,), m_values=(3,), k_values=(5,), n_values=(4,),
-            routes=('generic', 'blas_gemm', 'winograd'),
+            routes=('naive', 'blas_gemm', 'winograd'),
             numpy_baseline=False, plan_id='profile-plan')
 
         self.assertEqual(1, len(plan.cells))
@@ -391,7 +391,7 @@ class ProfileExpansionTC(unittest.TestCase):
         self.assertEqual((0, 7, 1), cell.lhs.strides)
         self.assertEqual((5, 5, 4), cell.rhs.shape)
         self.assertEqual((29, 1, 8), cell.rhs.strides)
-        self.assertEqual(('generic', 'blas_gemm'), cell.routes)
+        self.assertEqual(('naive', 'blas_gemm'), cell.routes)
         self.assertEqual('broadcast_lhs', cell.broadcast)
 
     def test_exact_case_contributes_one_cell_outside_mkn_product(self):
@@ -418,10 +418,10 @@ class ProfileExpansionTC(unittest.TestCase):
         plan = collection.input_profile_plan(
             (exact,), m_values=(2, 4), k_values=(3, 5),
             n_values=(6, 8),
-            routes=('generic', 'blas_gemm', 'winograd'),
+            routes=('naive', 'blas_gemm', 'winograd'),
             numpy_baseline=False)
         self.assertEqual(1, len(plan.cells))
-        self.assertEqual(('generic', 'blas_gemm'), plan.cells[0].routes)
+        self.assertEqual(('naive', 'blas_gemm'), plan.cells[0].routes)
         self.assertEqual('broadcast_lhs', plan.cells[0].broadcast)
 
     def test_exact_only_plan_does_not_charge_or_traverse_mkn_grid(self):
@@ -451,7 +451,7 @@ class ProfileExpansionTC(unittest.TestCase):
                     profiles.itertools, 'product', new=counted_product):
             plan = collection.input_profile_plan(
                 (exact,), m_values=m_values, k_values=k_values,
-                n_values=(1,), routes=('generic',),
+                n_values=(1,), routes=('naive',),
                 numpy_baseline=False)
 
         self.assertEqual(1, len(plan.cells))

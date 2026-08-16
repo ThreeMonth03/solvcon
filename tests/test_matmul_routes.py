@@ -34,12 +34,12 @@ class MatmulRouteTestBase(sc.testing.TestBase):
         expected = np.atleast_1d(np.matmul(lhs_data, rhs_data))
 
         kernels = {route.kernel for route in routes}
-        self.assertIn('generic', kernels)
+        self.assertIn('naive', kernels)
         if expected_kernel is not None:
             if self.has_blas_backend:
                 self.assertIn(expected_kernel, kernels)
             else:
-                self.assertEqual({'generic'}, kernels)
+                self.assertEqual({'naive'}, kernels)
         self.assertEqual(1, sum(route.selected_by_auto for route in routes))
         tol = 128 * np.finfo(lhs_data.real.dtype).eps * max(
             lhs_data.shape[-1], 1)
@@ -79,7 +79,7 @@ class MatmulRouteTestBase(sc.testing.TestBase):
                     lhs_data, rhs_data, kernel)
                 selected = next(
                     route for route in routes if route.selected_by_auto)
-                self.assertEqual('generic', selected.kernel)
+                self.assertEqual('naive', selected.kernel)
 
     def test_winograd_route_is_structural(self):
         lhs_data = np.asfortranarray(

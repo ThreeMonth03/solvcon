@@ -36,18 +36,17 @@ _ACTIVITY_PHASES = frozenset((
     'native_batch',
     'python_end_to_end',
     'finalization',
-    'checkpoint_load',
-    'checkpoint_write',
+    'partial_write',
     'artifact_write',
 ))
 _ACTIVITY_STATES = frozenset(('started', 'completed', 'failed'))
 _ROUTE_LABELS = {
     'input': 'Inputs',
     'artifact': 'Result',
-    'checkpoint': 'Checkpoint',
+    'partial': 'Partial result',
     'auto': 'Auto',
     'numpy': 'NumPy',
-    'generic': 'Generic',
+    'naive': 'Naive',
     'blas_dot': 'BLAS DOT',
     'blas_gevm': 'BLAS GEVM',
     'blas_gemv': 'BLAS GEMV',
@@ -63,8 +62,7 @@ _PHASE_LABELS = {
     'native_batch': 'native timing',
     'python_end_to_end': 'Python end-to-end timing',
     'finalization': 'building and validating result',
-    'checkpoint_load': 'loading saved progress',
-    'checkpoint_write': 'saving progress',
+    'partial_write': 'saving completed measurement rounds',
     'artifact_write': 'saving final result',
 }
 _WARMUP_SCOPE_LABELS = {
@@ -117,137 +115,72 @@ def _format_time(value):
     return f'{value / 1000000:.2f} ms'
 
 
-def _nested_value(data, *paths, default=None):
-    for path in paths:
-        value = data
-        for key in path.split('.'):
-            if not isinstance(value, dict) or key not in value:
-                break
-            value = value[key]
-        else:
-            return value
-    return default
-
-
 def _candidate_name(candidate):
-    return str(_nested_value(
-        candidate, 'name', 'kernel', 'route', 'candidate', default=''))
+    return str(candidate.get('name') or '')
 
 
 def _artifact_observations(artifact):
-    if hasattr(artifact, 'to_dict'):
-        artifact = artifact.to_dict()
     if not isinstance(artifact, dict):
         raise ValueError('Benchmark artifact must be a JSON object')
-    observations = artifact.get('aggregate_observations')
-    if observations is None:
-        observations = artifact.get('observations')
-    if observations is None:
-        observations = artifact.get('samples')
-    if observations is None:
-        observations = [artifact]
+    observations = artifact.get('observations')
     if not isinstance(observations, list):
         raise ValueError('Artifact observations must be a list')
     return observations
 
 
 def _observation_candidates(observation):
-    for key in ('candidates', 'routes', 'kernels', 'measurements'):
-        candidates = observation.get(key)
-        if isinstance(candidates, list):
-            return candidates
-        if isinstance(candidates, dict):
-            result = []
-            for name, value in candidates.items():
-                candidate = dict(value) if isinstance(value, dict) else {}
-                candidate.setdefault('name', name)
-                result.append(candidate)
-            return result
-    return []
+    routes = observation.get('routes')
+    if not isinstance(routes, dict):
+        return []
+    return list(routes.values())
 
 
 def _winner_name(observation):
-    winner = _nested_value(
-        observation, 'winner', 'winner_kernel', 'winner_route',
-        'summary.winner', default='')
-    if isinstance(winner, dict):
-        return _candidate_name(winner)
-    return str(winner or '')
+    return str(observation.get('winner') or '')
 
 
 def _selected_name(observation):
-    selected = _nested_value(
-        observation, 'selected', 'selected_kernel', 'auto_kernel',
-        'auto_route', 'dispatch.selected', default='')
-    if isinstance(selected, dict):
-        return _candidate_name(selected)
-    return str(selected or '')
+    return str(observation.get('auto_route') or '')
 
 
 def _packing_text(candidate, kind):
     packing = candidate.get('packing', {})
-    value = _nested_value(
-        candidate, f'{kind}_packing', f'packing.{kind}', default=None)
-    if value is None and isinstance(packing, dict):
-        lhs = packing.get(f'{kind}_lhs')
-        rhs = packing.get(f'{kind}_rhs')
-        if lhs is not None or rhs is not None:
-            names = []
-            if lhs:
-                names.append('lhs')
-            if rhs:
-                names.append('rhs')
-            return '+'.join(names) if names else 'none'
-    if isinstance(value, dict):
-        names = [name for name, enabled in value.items() if enabled]
-        return '+'.join(names) if names else 'none'
-    if isinstance(value, (list, tuple)):
-        return '+'.join(str(item) for item in value) or 'none'
-    if isinstance(value, bool):
-        return 'yes' if value else 'none'
-    return '' if value is None else str(value)
+    if not isinstance(packing, dict):
+        return ''
+    names = [
+        side for side in ('lhs', 'rhs')
+        if packing.get(f'{kind}_{side}')
+    ]
+    return '+'.join(names) if names else 'none'
 
 
 def _correctness_text(candidate):
     correctness = candidate.get('correctness')
-    if isinstance(correctness, dict):
-        passed = correctness.get('passed')
-        if passed is None:
-            passed = correctness.get('ok')
-        if passed is None:
-            passed = correctness.get('correct')
-        if passed is None:
-            return str(correctness.get('status', ''))
-        text = 'pass' if passed else 'FAIL'
-        error = correctness.get('max_error')
-        if error is None:
-            error = correctness.get('max_absolute_error')
-        return f'{text} ({error:.3g})' if error is not None else text
-    if correctness is None:
-        correctness = candidate.get('correct')
-    if correctness is None:
+    if not isinstance(correctness, dict):
         return ''
-    return 'pass' if correctness else 'FAIL'
+    text = 'pass' if correctness.get('correct') else 'FAIL'
+    error = correctness.get('max_absolute_error')
+    return f'{text} ({error:.3g})' if error is not None else text
 
 
 def _summary_value(candidate, name):
-    aliases = {
-        'median_ns': ('summary.median_ns', 'timing.median_ns', 'median_ns',
-                      'latency_ns'),
-        'p95_ns': ('summary.p95_ns', 'timing.p95_ns', 'p95_ns'),
-        'python_median_ns': ('python_timing.median_ns',),
-        'noise': ('summary.rmad', 'summary.noise', 'rmad', 'noise'),
-        'numpy_ratio': ('summary.numpy_ratio', 'numpy_ratio',
-                        'relative_to_numpy'),
-    }
-    value = _nested_value(candidate, *aliases[name], default=None)
-    if value is None and name == 'noise':
-        deviation = _nested_value(
-            candidate, 'summary.mad_ns', 'timing.mad_ns', default=None)
-        median = _summary_value(candidate, 'median_ns')
+    timing = candidate.get('timing')
+    python_timing = candidate.get('python_timing')
+    if name == 'median_ns':
+        return timing.get('median_ns') if isinstance(timing, dict) else None
+    if name == 'p95_ns':
+        return timing.get('p95_ns') if isinstance(timing, dict) else None
+    if name == 'python_median_ns':
+        return (python_timing.get('median_ns')
+                if isinstance(python_timing, dict) else None)
+    if name == 'numpy_ratio':
+        return candidate.get('numpy_ratio')
+    if name == 'noise' and isinstance(timing, dict):
+        median = timing.get('median_ns')
+        deviation = timing.get('mad_ns')
         if deviation is not None and median:
             return float(deviation) / float(median)
-    return value
+    return None
 
 
 def _is_integer(value, minimum=0):
@@ -444,7 +377,7 @@ class BenchmarkProcess(QtCore.QObject):
 
     progress = QtCore.Signal(int, int, str)
     activity = QtCore.Signal(object)
-    checkpoint = QtCore.Signal(str, int, int, int, int)
+    partial = QtCore.Signal(str, int, int)
     completed = QtCore.Signal(object)
     failed = QtCore.Signal(str)
     cancelled = QtCore.Signal()
@@ -578,7 +511,7 @@ class BenchmarkProcess(QtCore.QObject):
                 'Invalid worker output: event must be an object')
             return
         event_type = event.get('type')
-        if self._cancel_requested and event_type != 'checkpoint':
+        if self._cancel_requested and event_type != 'partial':
             return
         if event_type == 'progress':
             if 'state' in event:
@@ -602,30 +535,24 @@ class BenchmarkProcess(QtCore.QObject):
                 return
             self.progress.emit(
                 completed, total, message)
-        elif event_type == 'checkpoint':
+        elif event_type == 'partial':
             path = event.get('artifact_path')
             values = tuple(event.get(name) for name in (
-                'completed_shards', 'total_shards',
                 'completed_panels', 'total_panels'))
             valid_values = all(
                 not isinstance(value, bool) and isinstance(value, int)
                 for value in values)
-            completed_shards, total_shards, \
-                completed_panels, total_panels = values
+            completed_panels, total_panels = values
             if (not isinstance(path, str) or not path
                     or not valid_values
-                    or completed_shards < 1
-                    or total_shards < completed_shards
                     or completed_panels < 1
                     or total_panels < completed_panels):
                 if self._cancel_requested:
                     return
                 self._protocol_failure(
-                    'Invalid worker output: malformed checkpoint event')
+                    'Invalid worker output: malformed partial event')
                 return
-            self.checkpoint.emit(
-                path, completed_shards, total_shards,
-                completed_panels, total_panels)
+            self.partial.emit(path, completed_panels, total_panels)
         elif event_type == 'result':
             artifact_path = event.get('artifact_path')
             if not isinstance(artifact_path, str) or not artifact_path:

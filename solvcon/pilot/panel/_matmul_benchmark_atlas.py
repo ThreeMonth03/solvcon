@@ -87,8 +87,7 @@ class FeatureRegistryAdapter:
                 observation.get('rhs', {}))
             return f'{lhs} / {rhs}'
         if name == 'mode':
-            return _mode_description(
-                context.get('mode'), context.get('target_duration', False))
+            return _mode_description(context.get('mode'))
         return context.get(name)
 
     @staticmethod
@@ -144,41 +143,6 @@ class FeatureRegistryAdapter:
         return 'strided'
 
 
-def _duration_run_summary(document):
-    run = document.get('duration_run')
-    if not isinstance(run, dict):
-        return ''
-    requested = run.get('requested', {})
-    schedule = run.get('schedule', {})
-    parts = []
-    requested_seconds = requested.get('seconds') \
-        if isinstance(requested, dict) else None
-    if isinstance(requested_seconds, (int, float)):
-        parts.append(
-            f'target {_collection._format_duration(requested_seconds)}')
-    actual_ns = run.get('actual_elapsed_ns')
-    if isinstance(actual_ns, (int, float)):
-        parts.append(
-            f'active {_collection._format_duration(actual_ns / 1e9)}')
-    if isinstance(schedule, dict):
-        predicted = schedule.get('predicted')
-        central = predicted.get('central_seconds') \
-            if isinstance(predicted, dict) else None
-        if isinstance(central, (int, float)):
-            parts.append(
-                f'predicted {_collection._format_duration(central)}')
-        panels = schedule.get('panels')
-        repetitions = schedule.get('repetitions')
-        shards = schedule.get('shard_count')
-        if all(isinstance(value, int)
-               for value in (panels, repetitions, shards)):
-            shard_suffix = '' if shards == 1 else 's'
-            parts.append(
-                f'{panels} measurement rounds, {repetitions} calls per '
-                f'result, {shards} saved chunk{shard_suffix}')
-    return '; '.join(parts)
-
-
 def _mode_signature(mode):
     """Return the exact sampling identity used by one request."""
     if not mode:
@@ -190,7 +154,7 @@ def _mode_signature(mode):
     return spec.name, spec.warmups, spec.repetitions, spec.panels
 
 
-def _mode_description(signature, target_duration=False):
+def _mode_description(signature):
     if signature is None:
         return None
     name, warmups, repetitions, rounds = signature
@@ -201,31 +165,11 @@ def _mode_description(signature, target_duration=False):
     else:
         preset_signature = (
             preset.name, preset.warmups, preset.repetitions, preset.panels)
-        if target_duration:
-            label = f'{name.title()} calibrated'
-        else:
-            label = name.title() \
-                if signature == preset_signature else 'Custom'
+        label = name.title() \
+            if signature == preset_signature else 'Custom'
     return (
         f'{label}: {warmups} setup runs, {repetitions} calls per result, '
         f'{rounds} measurement rounds')
-
-
-def _duration_mode_signature(document):
-    run = document.get('duration_run')
-    if not isinstance(run, dict):
-        return None
-    template = run.get('template_plan', {})
-    schedule = run.get('schedule', {})
-    mode = template.get('mode', {}) if isinstance(template, dict) else {}
-    signature = _mode_signature(mode)
-    repetitions = schedule.get('repetitions') \
-        if isinstance(schedule, dict) else None
-    rounds = schedule.get('panels') if isinstance(schedule, dict) else None
-    if signature is None or not all(
-            isinstance(value, int) for value in (repetitions, rounds)):
-        return None
-    return signature[0], signature[1], repetitions, rounds
 
 
 class _FeatureConstraint(QtWidgets.QWidget):
@@ -348,9 +292,8 @@ class AtlasWidget(QtWidgets.QWidget):
         self._last_collection_path = None
         self._last_collection_saved = True
         self._active_output_path = None
-        self._active_plan_sha256 = None
-        self._latest_checkpoint_path = None
-        self._latest_checkpoint_plan_sha256 = None
+        self._latest_partial_path = None
+        self._latest_partial_panels = None
         profile = starter_profile or {}
         self._starter_options = _collection.default_options(
             profile.get('dtype', 'float32'), profile.get('threads', 1))
@@ -435,7 +378,7 @@ class AtlasWidget(QtWidgets.QWidget):
         self._live_status.changed.connect(self._collection_status.setText)
         self._runner.activity.connect(self._live_status.show_activity)
         self._runner.progress.connect(self._show_collection_progress)
-        self._runner.checkpoint.connect(self._show_collection_checkpoint)
+        self._runner.partial.connect(self._show_collection_partial)
         self._runner.completed.connect(self._collection_completed)
         self._runner.failed.connect(self._collection_failed)
         self._runner.cancelled.connect(self._collection_cancelled)
@@ -483,31 +426,13 @@ class AtlasWidget(QtWidgets.QWidget):
         except (MemoryError, RuntimeError, TypeError, ValueError) as exc:
             self._collection_failed(str(exc))
             return
-        plan_sha256 = plan.sha256()
-        resume_path = self._latest_checkpoint_path
-        can_resume = (
-            plan.target_duration is not None
-            and plan.output_path == self._active_output_path
-            and plan_sha256 == self._latest_checkpoint_plan_sha256)
-        if not can_resume:
-            resume_path = None
-        if not resume_path:
-            self._latest_checkpoint_path = None
-            self._latest_checkpoint_plan_sha256 = None
+        self._latest_partial_path = None
+        self._latest_partial_panels = None
         self._active_output_path = plan.output_path
-        self._active_plan_sha256 = plan_sha256
-        if plan.target_duration is None:
-            self._collection_progress.setRange(
-                0, estimate.panel_count * estimate.cell_count)
-            status = 'Starting fixed schedule...'
-        else:
-            self._collection_progress.setRange(0, 0)
-            if resume_path:
-                status = f'Resuming from checkpoint: {resume_path}'
-            else:
-                status = 'Starting target-duration calibration...'
+        self._collection_progress.setRange(
+            0, estimate.panel_count * estimate.cell_count)
         self._collection_progress.setValue(0)
-        self._live_status.show_summary(status)
+        self._live_status.show_summary('Starting fixed schedule...')
 
     @QtCore.Slot()
     def stop(self):
@@ -576,16 +501,14 @@ class AtlasWidget(QtWidgets.QWidget):
         text = _collection.humanize_sampling_text(message)
         self._live_status.show_summary(text or fallback)
 
-    @QtCore.Slot(str, int, int, int, int)
-    def _show_collection_checkpoint(
-            self, path, completed_shards, total_shards,
-            completed_panels, total_panels):
-        self._latest_checkpoint_path = path
-        self._latest_checkpoint_plan_sha256 = self._active_plan_sha256
+    @QtCore.Slot(str, int, int)
+    def _show_collection_partial(
+            self, path, completed_panels, total_panels):
+        self._latest_partial_path = path
+        self._latest_partial_panels = completed_panels, total_panels
         if not self._runner.cancelling:
             self._live_status.show_summary(
-                f'Checkpoint {completed_shards}/{total_shards} saved '
-                f'after measurement round '
+                f'Partial result saved after measurement round '
                 f'{completed_panels}/{total_panels}: {path}')
 
     @QtCore.Slot(object)
@@ -600,43 +523,50 @@ class AtlasWidget(QtWidgets.QWidget):
         self._last_collection_path = self._active_output_path
         self._last_collection_saved = bool(self._active_output_path)
         self._save_collection.setEnabled(True)
-        aggregate = document.get('aggregate_observations')
-        observations = (
-            aggregate if isinstance(aggregate, list)
-            else _process._artifact_observations(document))
-        count = len(observations)
+        count = len(_process._artifact_observations(document))
         self._collection_progress.setRange(0, 1)
         self._collection_progress.setValue(1)
         status = f'Complete: {count} cells'
-        duration_summary = _duration_run_summary(document)
-        if duration_summary:
-            status += f'; {duration_summary}'
         if self._last_collection_saved:
             status += f'; saved to {self._last_collection_path}'
         else:
             status += '; unsaved, use Save collection'
         self._live_status.complete(status)
-        self._latest_checkpoint_path = None
-        self._latest_checkpoint_plan_sha256 = None
+        self._latest_partial_path = None
+        self._latest_partial_panels = None
 
     @QtCore.Slot(str)
     def _collection_failed(self, message):
         self._collection_progress.setRange(0, 1)
         self._collection_progress.setValue(0)
-        self._live_status.fail(message + self._checkpoint_suffix())
+        self._live_status.fail(message + self._load_partial_result())
 
     @QtCore.Slot()
     def _collection_cancelled(self):
         self._collection_progress.setRange(0, 1)
         self._collection_progress.setValue(0)
-        self._live_status.cancel(self._checkpoint_suffix())
+        self._live_status.cancel(self._load_partial_result())
 
-    def _checkpoint_suffix(self):
-        if not self._latest_checkpoint_path:
+    def _load_partial_result(self):
+        path = self._latest_partial_path
+        if not path:
             return ''
+        try:
+            document = self._artifact_loader(path)
+            self.add_artifacts([document])
+            self._show_starter_projection()
+        except (MemoryError, OSError, TypeError, ValueError) as exc:
+            return f'; could not load partial result: {exc}'
+        self._last_collection = document
+        self._last_collection_path = path
+        self._last_collection_saved = True
+        self._save_collection.setEnabled(True)
+        completed, total = self._latest_partial_panels
+        self._latest_partial_path = None
+        self._latest_partial_panels = None
         return (
-            f'; rerun the same plan to resume from '
-            f'{self._latest_checkpoint_path}')
+            f'; loaded partial result through measurement round '
+            f'{completed}/{total}: {path}')
 
     @QtCore.Slot(bool)
     def _set_collection_running(self, running):
@@ -760,10 +690,7 @@ class AtlasWidget(QtWidgets.QWidget):
 
     @classmethod
     def _contextual_observations(cls, artifact):
-        aggregate = artifact.get('aggregate_observations')
-        using_aggregate = isinstance(aggregate, list)
-        observations = (aggregate if using_aggregate
-                        else _process._artifact_observations(artifact))
+        observations = _process._artifact_observations(artifact)
         if artifact.get('schema_kind') \
                 != matmul_benchmark.schema.COLLECTION_KIND:
             context = cls._artifact_context(artifact)
@@ -774,17 +701,8 @@ class AtlasWidget(QtWidgets.QWidget):
         sources = {
             source['source_id']: source for source in artifact['sources']
         }
-        aggregate_mode = _duration_mode_signature(artifact) \
-            if using_aggregate else None
         for wrapper in observations:
-            if using_aggregate:
-                source_ids = wrapper.get('source_ids')
-                if not isinstance(source_ids, list) or not source_ids:
-                    raise ValueError(
-                        'Aggregate observation has no source IDs')
-                source_id = source_ids[0]
-            else:
-                source_id = wrapper.get('source_id')
+            source_id = wrapper.get('source_id')
             if source_id not in sources:
                 raise ValueError(
                     'Collection observation has unknown source: '
@@ -794,9 +712,6 @@ class AtlasWidget(QtWidgets.QWidget):
                 raise ValueError(
                     'Collection observation payload must be an object')
             context = cls._artifact_context(sources[source_id])
-            if aggregate_mode is not None:
-                context['mode'] = aggregate_mode
-                context['target_duration'] = True
             yield observation, context
 
     @staticmethod
@@ -947,19 +862,13 @@ class AtlasWidget(QtWidgets.QWidget):
     @staticmethod
     def _make_point(observation, x_value, y_value, z_value=None):
         winner = _process._winner_name(observation)
-        runner_up = _process._nested_value(
-            observation, 'runner_up', 'summary.runner_up', default='')
-        margin = _process._nested_value(
-            observation, 'winner_margin', 'summary.winner_margin',
-            default=0.0)
-        reported_noise = _process._nested_value(
-            observation, 'noise', 'summary.noise', 'summary.rmad',
-            default=None)
+        runner_up = observation.get('runner_up')
+        margin = observation.get('winner_margin')
         candidates = {
             _process._candidate_name(candidate): candidate
             for candidate in _process._observation_candidates(observation)
         }
-        noise_values = [reported_noise]
+        noise_values = []
         for route_name in (winner, runner_up):
             if route_name:
                 noise_values.append(_process._summary_value(
@@ -967,12 +876,8 @@ class AtlasWidget(QtWidgets.QWidget):
         noise = max(
             (float(value) for value in noise_values if value is not None),
             default=0.0)
-        invalid = bool(_process._nested_value(
-            observation, 'invalid', 'quality.invalid', default=False))
-        ambiguous = bool(_process._nested_value(
-            observation, 'ambiguous', 'quality.ambiguous', default=False))
-        if not winner:
-            invalid = True
+        invalid = not winner
+        ambiguous = False
         if margin is not None and float(margin) <= max(0.03, 2 * noise):
             ambiguous = True
         layout = AtlasWidget._layout_summary(observation)

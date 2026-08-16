@@ -7,7 +7,6 @@ from . import arrays
 from . import artifact
 from . import collection
 from . import collector
-from . import duration
 from . import engine
 from . import features
 from . import profiles
@@ -21,7 +20,6 @@ __all__ = [
     'artifact',
     'collection',
     'collector',
-    'duration',
     'engine',
     'features',
     'profiles',
