@@ -25,11 +25,15 @@ binding's argument matching. The statistics and the searching group below do
 take an axis, so the gap is specific to these three; whether they should grow
 the same axis form is an open decision.
 
-`sum()` follows the logical indices, so it is verified on strided,
-non-contiguous arrays and on both C- and F-contiguous layouts, and it returns
-zero on an empty array. `min()` and `max()` address their elements through the
-linear storage; the verified scope is contiguous arrays, and the tests
-exercise the integer and floating-point classes.
+All three reductions follow logical indices, including non-contiguous arrays.
+`sum()` returns zero on an empty array; `min()` and `max()` instead raise
+`ValueError`, as numpy does without an `initial` value.
+
+Complex `min()` and `max()` compare non-NaN values lexicographically and stop
+at the first value with a NaN component in logical traversal. Numpy's
+[`minimum`](https://numpy.org/doc/2.5/reference/generated/numpy.minimum.html) and
+[`maximum`](https://numpy.org/doc/2.5/reference/generated/numpy.maximum.html)
+likewise propagate complex NaNs; sorting uses the separate total order below.
 
 On `SimpleArrayBool` the sum accumulates with logical or, so `sum()` answers
 whether any element is true. The boolean branch is explicit in the kernel, so
@@ -111,6 +115,9 @@ assert complex(med.real, med.imag) == np.median(narr)  # 1.5+5.5j
 
 The 8-bit and boolean classes compute the median by frequency counting instead
 of sorting; the result is verified against numpy within the element type.
+Floating-point and complex medians propagate NaN, matching numpy's
+[partition-based implementation](https://github.com/numpy/numpy/blob/v2.5.1/numpy/lib/_function_base_impl.py#L4003-L4055).
+With several complex NaNs, callers should not rely on a particular carrier.
 
 ### The `var` and `std` Methods
 
@@ -164,14 +171,14 @@ sarr.sort()
 assert sarr.ndarray.tolist() == [1.0, 2.0, 3.0]
 ```
 
-NaN sorts last, as numpy sorts it: after every number, and equal to another
-NaN. `sort()`, `argsort()`, and `searchsorted()` share this order, so an array
-`sort()` has ordered is one `searchsorted()` can search; the reductions and
-`argmin`/`argmax` do not, and still skip a NaN where numpy propagates it.
+NaNs sort after every non-NaN value. `sort()`, `argsort()`, and
+`searchsorted()` share this total order. Reductions differ: `min()`, `max()`,
+and `median()` return NaN, while `argmin()` and `argmax()` return the first
+NaN's index.
 
-A complex value compares by its real part, and by its imaginary part only when
-the real parts are equal. `2-1j` therefore sorts before `2+1j`, and both sort
-after every value with a smaller real part:
+A non-NaN complex value sorts by its real part, and by its imaginary part only
+when the real parts are equal. `2-1j` therefore sorts before `2+1j`, and both
+sort after every value with a smaller real part:
 
 ```python
 narr = np.array([2 + 1j, 1 + 5j, 2 - 1j, 0 + 0j], dtype='complex128')
@@ -180,9 +187,10 @@ sarr.sort()
 assert sarr.ndarray.tolist() == [0j, 1 + 5j, 2 - 1j, 2 + 1j]
 ```
 
-A complex value carrying a NaN in either component sorts after all of them as
-one group, whatever its other component holds, so `nan+0j` and `0+nanj` both
-land at the end rather than where their finite component would put them.
+Numpy extends the complex order as `[R+Rj, R+nanj, nan+Rj, nan+nanj]`, where
+`R` is non-NaN. Values sharing a NaN placement are ordered by their non-NaN
+component when one exists. See
+[`numpy.sort`](https://numpy.org/doc/2.5/reference/generated/numpy.sort.html).
 
 ### The `argsort` Method
 
@@ -337,7 +345,10 @@ A zero-extent axis that is retained rather than reduced is not an error: the
 result is simply empty, as in numpy.
 
 A NaN in the reduced run wins immediately, whichever method is called, and the
-first NaN wins when several are present. Both rules match numpy:
+first NaN wins when several are present. Either component of a complex value
+counts as NaN. Without NaN, complex values use lexicographic order and keep the
+first tie. This differs intentionally from `sort()`, `argsort()`, and
+`searchsorted()`:
 
 ```python
 narr = np.array([[1.0, np.nan, 0.0]], dtype='float64')

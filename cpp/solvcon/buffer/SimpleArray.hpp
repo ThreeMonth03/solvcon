@@ -219,6 +219,42 @@ private:
     }
 }; /* end class IndexRange */
 
+template <typename V>
+bool value_has_nan(V const & value)
+{
+    if constexpr (is_complex_v<V>)
+    {
+        return std::isnan(value.real()) || std::isnan(value.imag());
+    }
+    else if constexpr (std::is_floating_point_v<V>)
+    {
+        return std::isnan(value);
+    }
+    return false;
+}
+
+template <typename V>
+bool nan_aware_less(V const & lhs, V const & rhs);
+
+template <typename Cmp>
+struct ElementwiseOrder
+{
+    template <typename V>
+    bool operator()(V const & lhs, V const & rhs) const
+    {
+        if constexpr (is_complex_v<V>)
+        {
+            return !value_has_nan(lhs) && !value_has_nan(rhs) && Cmp{}(lhs, rhs);
+        }
+        return Cmp{}(lhs, rhs);
+    }
+}; /* end struct ElementwiseOrder */
+
+using elementwise_less_t = ElementwiseOrder<std::less<>>;
+using elementwise_less_equal_t = ElementwiseOrder<std::less_equal<>>;
+using elementwise_greater_t = ElementwiseOrder<std::greater<>>;
+using elementwise_greater_equal_t = ElementwiseOrder<std::greater_equal<>>;
+
 std::string format_shape(shape_type const & shape);
 std::string format_flat_index(shape_type const & shape, ssize_t offset);
 
@@ -434,6 +470,10 @@ public:
             }
         }
         ret_type result(out_shape);
+        if (result.size() == 0)
+        {
+            return result;
+        }
 
         shape_type red_axes(red_count);
         for (ssize_t i = 0, l = 0; i < ndim; ++i)
@@ -486,6 +526,14 @@ public:
 
     A median(const shape_type & axis) const
     {
+        auto const * athis = static_cast<A const *>(this);
+        for (ssize_t const ax : axis)
+        {
+            if (ax >= 0 && ax < athis->ndim() && athis->shape(ax) == 0)
+            {
+                throw std::invalid_argument("SimpleArray::median(): empty reduction axis");
+            }
+        }
         return reduce(axis, &SimpleArrayMixinCalculators::median_op);
     }
 
@@ -494,6 +542,14 @@ public:
         SOLVCON_PROFILE_SCOPE("SimpleArray::median()");
         auto athis = static_cast<A const *>(this);
         const size_t n = athis->size();
+        if (n == 0)
+        {
+            throw std::invalid_argument("SimpleArray::median(): empty array");
+        }
+        if (athis->ndim() == 0)
+        {
+            return scalar_value(*athis, "median");
+        }
         small_vector<T> acopy(n);
         auto const range = IndexRange(*athis);
         shape_type sidx = range.first();
@@ -690,33 +746,9 @@ public:
         return static_cast<real_type>(std::sqrt(athis->var(ddof)));
     }
 
-    value_type min() const
-    {
-        value_type initial = std::numeric_limits<value_type>::max();
-        auto athis = static_cast<A const *>(this);
-        for (size_t i = 0; i < athis->size(); ++i)
-        {
-            if (athis->data(i) < initial)
-            {
-                initial = athis->data(i);
-            }
-        }
-        return initial;
-    }
+    value_type min() const { return extreme(std::less<>{}, "min"); }
 
-    value_type max() const
-    {
-        value_type initial = std::numeric_limits<value_type>::lowest();
-        auto athis = static_cast<A const *>(this);
-        for (size_t i = 0; i < athis->size(); ++i)
-        {
-            if (athis->data(i) > initial)
-            {
-                initial = athis->data(i);
-            }
-        }
-        return initial;
-    }
+    value_type max() const { return extreme(std::greater<>{}, "max"); }
 
     A abs() const
     {
@@ -825,14 +857,19 @@ private:
         return static_cast<value_type>(static_cast<real_type>(count));
     }
 
+    template <typename Cmp>
+    value_type extreme(Cmp cmp, char const * op) const;
+
+    static value_type const & scalar_value(A const & array, char const * op);
     void validate_same_shape(A const & other, char const * op) const;
+    static SimpleArray<bool> scalar_comparison_result(bool value);
 
     // Element-wise comparison kernel shared by eq/ne/lt/le/gt/ge. The array
     // overload requires matching shapes; both produce a bool per element.
     template <typename Cmp>
     SimpleArray<bool> compare_with(A const & other, Cmp cmp, char const * op) const;
     template <typename Cmp>
-    SimpleArray<bool> compare_with(value_type scalar, Cmp cmp) const;
+    SimpleArray<bool> compare_with(value_type scalar, Cmp cmp, char const * op) const;
 
 public:
 
@@ -1170,6 +1207,21 @@ detail::SimpleArrayMixinCalculators<A, T>::median_op(small_vector<value_type> & 
 {
     SOLVCON_PROFILE_SCOPE("SimpleArray::median_op()");
     const size_t n = sv.size();
+    if (n == 0)
+    {
+        throw std::invalid_argument("SimpleArray::median(): empty array");
+    }
+
+    if constexpr (is_complex_v<value_type> || std::is_floating_point_v<value_type>)
+    {
+        auto const max_it = std::max_element(
+            sv.begin(), sv.end(), [](value_type const & lhs, value_type const & rhs)
+            { return nan_aware_less(lhs, rhs); });
+        if (value_has_nan(*max_it))
+        {
+            return *max_it;
+        }
+    }
 
     if constexpr (std::is_same_v<value_type, int8_t> ||
                   std::is_same_v<value_type, uint8_t> ||
@@ -1321,10 +1373,9 @@ void SimpleArrayMixinCalculators<A, T>::find_two_bins(const uint32_t * freq, siz
 /**
  * Order one value the way numpy sorts and searches it: a NaN goes after every
  * number and counts equal to another NaN, which the built-in comparison cannot
- * express because it answers false in both directions for a NaN. A complex
- * value carrying a NaN in either component goes past all the others as one
- * group, whatever its other component holds, and orders within that group
- * lexicographically like any other pair.
+ * express because it answers false in both directions for a NaN. For complex
+ * values, component-wise recursion gives numpy's total order
+ * [R+Rj, R+nanj, nan+Rj, nan+nanj], where R is non-NaN.
  */
 template <typename V>
 bool nan_aware_less(V const & lhs, V const & rhs)
@@ -2660,6 +2711,54 @@ void SimpleArray<T>::validate_layout(shape_type const & shape,
 }
 
 template <typename A, typename T>
+template <typename Cmp>
+typename detail::SimpleArrayMixinCalculators<A, T>::value_type
+detail::SimpleArrayMixinCalculators<A, T>::extreme(Cmp cmp, char const * op) const
+{
+    auto const * athis = static_cast<A const *>(this);
+    if (athis->size() == 0)
+    {
+        throw std::invalid_argument(std::format(
+            "SimpleArray::{}(): zero-size array has no identity", op));
+    }
+
+    if (athis->ndim() == 0)
+    {
+        return scalar_value(*athis, op);
+    }
+
+    auto const range = IndexRange(*athis);
+    shape_type idx = range.first();
+    value_type result = athis->at(idx);
+    do
+    {
+        value_type const value = athis->at(idx);
+        if (value_has_nan(value))
+        {
+            return value;
+        }
+        if (cmp(value, result))
+        {
+            result = value;
+        }
+    } while (range.next(idx));
+    return result;
+}
+
+template <typename A, typename T>
+typename detail::SimpleArrayMixinCalculators<A, T>::value_type const &
+detail::SimpleArrayMixinCalculators<A, T>::scalar_value(
+    A const & array, char const * op)
+{
+    if (!array.logical_data())
+    {
+        throw std::runtime_error(std::format(
+            "SimpleArray::{}(): scalar has no storage", op));
+    }
+    return *array.logical_data();
+}
+
+template <typename A, typename T>
 void detail::SimpleArrayMixinCalculators<A, T>::validate_same_shape(
     A const & other, char const * op) const
 {
@@ -2675,43 +2774,68 @@ void detail::SimpleArrayMixinCalculators<A, T>::validate_same_shape(
 }
 
 template <typename A, typename T>
+SimpleArray<bool> detail::SimpleArrayMixinCalculators<A, T>::scalar_comparison_result(bool value)
+{
+    auto buffer = ConcreteBuffer::construct(sizeof(bool));
+    SimpleArray<bool> result(shape_type{}, shape_type{}, buffer);
+    *result.logical_data() = value;
+    return result;
+}
+
+template <typename A, typename T>
 template <typename Cmp>
 SimpleArray<bool> detail::SimpleArrayMixinCalculators<A, T>::compare_with(
     A const & other, Cmp cmp, char const * op) const
 {
     auto const * athis = static_cast<A const *>(this);
     validate_same_shape(other, op);
-    SimpleArray<bool> ret(athis->shape());
-    const value_type * ptr = athis->begin();
-    const value_type * const end = athis->end();
-    const value_type * other_ptr = other.begin();
-    bool * ret_ptr = ret.begin();
-    while (ptr < end)
+    if (athis->ndim() == 0)
     {
-        *ret_ptr = cmp(*ptr, *other_ptr);
-        ++ptr;
-        ++other_ptr;
-        ++ret_ptr;
+        return scalar_comparison_result(
+            cmp(scalar_value(*athis, op), scalar_value(other, op)));
     }
+    SimpleArray<bool> ret(athis->shape());
+    if (athis->size() == 0)
+    {
+        return ret;
+    }
+
+    auto const this_range = IndexRange(*athis);
+    auto const other_range = IndexRange(other);
+    shape_type this_idx = this_range.first();
+    shape_type other_idx = other_range.first();
+    size_t output_index = 0;
+    do
+    {
+        ret[output_index++] = cmp(athis->at(this_idx), other.at(other_idx));
+        other_range.next(other_idx);
+    } while (this_range.next(this_idx));
     return ret;
 }
 
 template <typename A, typename T>
 template <typename Cmp>
 SimpleArray<bool> detail::SimpleArrayMixinCalculators<A, T>::compare_with(
-    value_type scalar, Cmp cmp) const
+    value_type scalar, Cmp cmp, char const * op) const
 {
     auto const * athis = static_cast<A const *>(this);
-    SimpleArray<bool> ret(athis->shape());
-    const value_type * ptr = athis->begin();
-    const value_type * const end = athis->end();
-    bool * ret_ptr = ret.begin();
-    while (ptr < end)
+    if (athis->ndim() == 0)
     {
-        *ret_ptr = cmp(*ptr, scalar);
-        ++ptr;
-        ++ret_ptr;
+        return scalar_comparison_result(cmp(scalar_value(*athis, op), scalar));
     }
+    SimpleArray<bool> ret(athis->shape());
+    if (athis->size() == 0)
+    {
+        return ret;
+    }
+
+    auto const range = IndexRange(*athis);
+    shape_type idx = range.first();
+    size_t output_index = 0;
+    do
+    {
+        ret[output_index++] = cmp(athis->at(idx), scalar);
+    } while (range.next(idx));
     return ret;
 }
 
@@ -2724,7 +2848,7 @@ SimpleArray<bool> detail::SimpleArrayMixinCalculators<A, T>::eq(A const & other)
 template <typename A, typename T>
 SimpleArray<bool> detail::SimpleArrayMixinCalculators<A, T>::eq(value_type scalar) const
 {
-    return compare_with(scalar, std::equal_to<>{});
+    return compare_with(scalar, std::equal_to<>{}, "eq");
 }
 
 template <typename A, typename T>
@@ -2736,55 +2860,55 @@ SimpleArray<bool> detail::SimpleArrayMixinCalculators<A, T>::ne(A const & other)
 template <typename A, typename T>
 SimpleArray<bool> detail::SimpleArrayMixinCalculators<A, T>::ne(value_type scalar) const
 {
-    return compare_with(scalar, std::not_equal_to<>{});
+    return compare_with(scalar, std::not_equal_to<>{}, "ne");
 }
 
 template <typename A, typename T>
 SimpleArray<bool> detail::SimpleArrayMixinCalculators<A, T>::lt(A const & other) const
 {
-    return compare_with(other, std::less<>{}, "lt");
+    return compare_with(other, elementwise_less_t{}, "lt");
 }
 
 template <typename A, typename T>
 SimpleArray<bool> detail::SimpleArrayMixinCalculators<A, T>::lt(value_type scalar) const
 {
-    return compare_with(scalar, std::less<>{});
+    return compare_with(scalar, elementwise_less_t{}, "lt");
 }
 
 template <typename A, typename T>
 SimpleArray<bool> detail::SimpleArrayMixinCalculators<A, T>::le(A const & other) const
 {
-    return compare_with(other, std::less_equal<>{}, "le");
+    return compare_with(other, elementwise_less_equal_t{}, "le");
 }
 
 template <typename A, typename T>
 SimpleArray<bool> detail::SimpleArrayMixinCalculators<A, T>::le(value_type scalar) const
 {
-    return compare_with(scalar, std::less_equal<>{});
+    return compare_with(scalar, elementwise_less_equal_t{}, "le");
 }
 
 template <typename A, typename T>
 SimpleArray<bool> detail::SimpleArrayMixinCalculators<A, T>::gt(A const & other) const
 {
-    return compare_with(other, std::greater<>{}, "gt");
+    return compare_with(other, elementwise_greater_t{}, "gt");
 }
 
 template <typename A, typename T>
 SimpleArray<bool> detail::SimpleArrayMixinCalculators<A, T>::gt(value_type scalar) const
 {
-    return compare_with(scalar, std::greater<>{});
+    return compare_with(scalar, elementwise_greater_t{}, "gt");
 }
 
 template <typename A, typename T>
 SimpleArray<bool> detail::SimpleArrayMixinCalculators<A, T>::ge(A const & other) const
 {
-    return compare_with(other, std::greater_equal<>{}, "ge");
+    return compare_with(other, elementwise_greater_equal_t{}, "ge");
 }
 
 template <typename A, typename T>
 SimpleArray<bool> detail::SimpleArrayMixinCalculators<A, T>::ge(value_type scalar) const
 {
-    return compare_with(scalar, std::greater_equal<>{});
+    return compare_with(scalar, elementwise_greater_equal_t{}, "ge");
 }
 
 /**
@@ -3260,16 +3384,13 @@ size_t detail::SimpleArrayMixinSearch<A, T>::argmin() const
         size_t min_index = 0;
         size_t const size = athis->size();
 
-        for (size_t i = 1; i < size; ++i)
+        for (size_t i = 0; i < size; ++i)
         {
             value_type const current_value = ptr[i];
 
-            if constexpr (std::is_floating_point_v<value_type>)
+            if (value_has_nan(current_value))
             {
-                if (std::isnan(current_value))
-                {
-                    return i;
-                }
+                return i;
             }
             if (current_value < min_value)
             {
@@ -3292,12 +3413,9 @@ size_t detail::SimpleArrayMixinSearch<A, T>::argmin() const
     {
         value_type const current_value = *(ptr + unchecked_logical_offset(*athis, idx));
 
-        if constexpr (std::is_floating_point_v<value_type>)
+        if (value_has_nan(current_value))
         {
-            if (std::isnan(current_value))
-            {
-                return flat_index;
-            }
+            return flat_index;
         }
         if (current_value < min_value)
         {
@@ -3328,16 +3446,13 @@ size_t detail::SimpleArrayMixinSearch<A, T>::argmax() const
         size_t max_index = 0;
         size_t const size = athis->size();
 
-        for (size_t i = 1; i < size; ++i)
+        for (size_t i = 0; i < size; ++i)
         {
             value_type const current_value = ptr[i];
 
-            if constexpr (std::is_floating_point_v<value_type>)
+            if (value_has_nan(current_value))
             {
-                if (std::isnan(current_value))
-                {
-                    return i;
-                }
+                return i;
             }
             if (current_value > max_value)
             {
@@ -3360,12 +3475,9 @@ size_t detail::SimpleArrayMixinSearch<A, T>::argmax() const
     {
         value_type const current_value = *(ptr + unchecked_logical_offset(*athis, idx));
 
-        if constexpr (std::is_floating_point_v<value_type>)
+        if (value_has_nan(current_value))
         {
-            if (std::isnan(current_value))
-            {
-                return flat_index;
-            }
+            return flat_index;
         }
         if (current_value > max_value)
         {
@@ -3420,17 +3532,14 @@ SimpleArray<uint64_t> detail::SimpleArrayMixinSearch<A, T>::argmin(ssize_t axis)
         value_type min_value = (*athis)[static_cast<size_t>(input_index)];
         uint64_t min_index = 0;
 
-        for (ssize_t i = 1; i < athis->shape(axis); ++i)
+        for (ssize_t i = 0; i < athis->shape(axis); ++i)
         {
             ssize_t const current_index = input_index + i * axis_stride;
             value_type const current_value = (*athis)[static_cast<size_t>(current_index)];
-            if constexpr (std::is_floating_point_v<value_type>)
+            if (value_has_nan(current_value))
             {
-                if (std::isnan(current_value))
-                {
-                    min_index = static_cast<uint64_t>(i);
-                    break;
-                }
+                min_index = static_cast<uint64_t>(i);
+                break;
             }
             if (current_value < min_value)
             {
@@ -3488,17 +3597,14 @@ SimpleArray<uint64_t> detail::SimpleArrayMixinSearch<A, T>::argmax(ssize_t axis)
         value_type max_value = (*athis)[static_cast<size_t>(input_index)];
         uint64_t max_index = 0;
 
-        for (ssize_t i = 1; i < athis->shape(axis); ++i)
+        for (ssize_t i = 0; i < athis->shape(axis); ++i)
         {
             ssize_t const current_index = input_index + i * axis_stride;
             value_type const current_value = (*athis)[static_cast<size_t>(current_index)];
-            if constexpr (std::is_floating_point_v<value_type>)
+            if (value_has_nan(current_value))
             {
-                if (std::isnan(current_value))
-                {
-                    max_index = static_cast<uint64_t>(i);
-                    break;
-                }
+                max_index = static_cast<uint64_t>(i);
+                break;
             }
             if (current_value > max_value)
             {

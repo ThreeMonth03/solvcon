@@ -129,33 +129,32 @@ struct ComplexImpl
 }; /* end struct ComplexImpl */
 
 /**
- * These comparison operators use lexicographic ordering and would be used in
- * SimpleArray::min() and SimpleArray::max(). The use of lexicographic ordering
- * is to match the numpy behaviors documented in
- * https://numpy.org/devdocs/reference/generated/numpy.sort.html . The
- * following discussions include more details:
- * more details:
- * 1. https://github.com/numpy/numpy/issues/12943
- * 2. https://stackoverflow.com/questions/52481376
+ * Compare lexicographically with numpy's complex scalar relation, which is
+ * distinct from its array and total-sort NaN policies. Reference:
+ * https://github.com/numpy/numpy/blob/v2.5.1/numpy/_core/src/umath/scalarmath.c.src#L1843-L1858
  */
 template <typename T>
 bool operator<(const ComplexImpl<T> & lhs, const ComplexImpl<T> & rhs)
 {
-    if (lhs.real_v == rhs.real_v)
-    {
-        return lhs.imag_v < rhs.imag_v;
-    }
-    return lhs.real_v < rhs.real_v;
+    return lhs.real_v == rhs.real_v ? lhs.imag_v < rhs.imag_v : lhs.real_v < rhs.real_v;
+}
+
+template <typename T>
+bool operator<=(const ComplexImpl<T> & lhs, const ComplexImpl<T> & rhs)
+{
+    return lhs.real_v == rhs.real_v ? lhs.imag_v <= rhs.imag_v : lhs.real_v <= rhs.real_v;
 }
 
 template <typename T>
 bool operator>(const ComplexImpl<T> & lhs, const ComplexImpl<T> & rhs)
 {
-    if (lhs.real_v == rhs.real_v)
-    {
-        return lhs.imag_v > rhs.imag_v;
-    }
-    return lhs.real_v > rhs.real_v;
+    return rhs < lhs;
+}
+
+template <typename T>
+bool operator>=(const ComplexImpl<T> & lhs, const ComplexImpl<T> & rhs)
+{
+    return rhs <= lhs;
 }
 
 template <typename T>
