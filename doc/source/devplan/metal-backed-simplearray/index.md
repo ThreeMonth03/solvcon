@@ -41,6 +41,9 @@ gpu = sc.SimpleArrayFloat32(array=numpy_array, device="metal")
 result = gpu.matmul_metal(weight)
 result.wait()
 host_copy = result.cpu()
+
+read_view = result.host_view()
+write_view = result.host_view(write=True)
 ```
 
 The initial NumPy-to-Metal construction is one explicit copy into a shared
@@ -74,10 +77,9 @@ storage. Benchmark data describes the tradeoff for users and future explicit
 policies; it is not input to an automatic threshold.
 
 Most existing CPU implementations are still conservative host boundaries in
-this prototype. `sum()` is the first exception: it uses a scoped internal read
-lease, waits only for prior work on the allocation, and releases the allocation
-for a later Metal operation without exporting a raw pointer. Other CPU
-operation families still need the same conversion.
+this prototype. `sum()` and `fill()` use scoped internal leases: they wait only
+for prior work on the allocation, declare CPU access for the duration of the
+operation, and leave the allocation eligible for later Metal work.
 
 ## Asynchronous access contract
 
@@ -92,6 +94,10 @@ GPU eligible -> pending GPU work -> wait() -> GPU eligible
                                   -> wait -> host exported
                                              |
                                              +-> reject later GPU submission
+
+GPU eligible -> host_view() -> active host lease -> release last view
+                                      |                    |
+                                      +-> reject GPU       +-> GPU eligible
 ```
 
 `wait()` does not export a host pointer, so the array remains GPU-eligible.
@@ -100,11 +106,19 @@ buffer protocol wait for pending work and mark the shared `ConcreteBuffer` as
 host-exported. All reshape and transpose views share this state. Calling
 `to("metal")` creates a new GPU-eligible snapshot.
 
-Internal copies and `sum()` use a scoped host-access guard. The guard holds the
-same allocation lock from dependency wait through the final CPU access. A
-concurrent GPU submission therefore cannot start in the middle of `clone()`,
-`to("cpu")`, or the reduction, and the allocation remains GPU-eligible after
-the guard ends.
+Internal copies, `sum()`, and `fill()` use scoped host-access guards. Public C++
+`host_read()` and `host_write()` return the same RAII lease. Python
+`host_view(write=False)` returns a read-only NumPy view, while
+`host_view(write=True)` returns a writable view. The NumPy base object owns the
+lease, so derived NumPy views extend it automatically. A GPU submission while a
+lease is active fails instead of blocking; releasing the last view makes the
+allocation GPU-eligible again.
+
+Lease acquisition and GPU submission update the access state under the same
+short allocation lock. CPU code does not hold that mutex while processing the
+payload. Instead, an active-access count prevents a command from being
+submitted until the recoverable CPU access ends. This avoids both an unnoticed
+race and a same-thread deadlock.
 
 The Metal runtime uses one serial command queue. `matmul_metal()` commits a
 command buffer and returns immediately. A subsequent operation can consume the
@@ -127,7 +141,8 @@ intentionally narrower:
 - Explicit `device`, `to("metal")`, `cpu()`, `ready`, and `wait()` APIs.
 - Native FP32, two-dimensional, positive row-major matrix multiplication.
 - Asynchronous GPU submission and resident matmul chaining on one queue.
-- Scoped internal host read access for `sum()` between Metal operations.
+- Scoped C++ host read/write access and lifetime-bound Python NumPy views.
+- Scoped internal host access for `sum()`, `fill()`, and buffer copies.
 - Allocation-wide dependency tracking shared by all views.
 - CPU and non-Metal builds retain their existing default behavior.
 
@@ -143,15 +158,13 @@ The prototype does not yet include:
 - GPU elementwise operations or reductions.
 - Native complex computation or approximate FP64 routes.
 - Buffer pooling, suballocation, byte-range locking, or multiple queues.
-- Recoverable host-view leases. A raw host export is sticky in this version.
 - Managed-memory discrete GPUs and their CPU/GPU dirty-state transitions.
 
-Most existing CPU implementations are conservative host boundaries. For
-example, calling `fill()` on a Metal-backed array uses an existing iterator and
-therefore marks the buffer host-exported. `sum()` proves the recoverable model:
-it uses an internal lease and leaves the input eligible for another Metal
-operation. Metadata-only views and `clone()` preserve Metal storage. Legacy
-operations that materialize a new layout may still return CPU storage.
+Most existing CPU implementations are conservative host boundaries. `sum()`
+and `fill()` prove the recoverable model and leave the input eligible for
+another Metal operation. Metadata-only views and `clone()` preserve Metal
+storage. Legacy operations that materialize a new layout may still return CPU
+storage.
 
 The Metal executor already consumes `MatmulPlan` for output shape, dimensions,
 and matrix strides. A future executor can extend that use to vector roles,
@@ -237,10 +250,11 @@ treated as hardware- and workload-scoped feasibility evidence.
 
 ## Verification
 
-- The Metal-enabled Python suite passed 1685 tests, with 531 platform or
-  optional-feature skips, 3 expected failures, and 1730 subtests.
-- The Metal-disabled Python suite passed 1669 tests, with 547 skips, 3 expected
-  failures, and 1715 subtests.
+- The Metal-enabled Python suite passed 1731 tests, with 557 platform or
+  optional-feature skips and 3 expected failures. The focused Metal suite
+  passed 23 tests and 15 subtests, with 1 skip.
+- The Metal-disabled Python suite passed 1710 tests, with 578 skips and 3
+  expected failures.
 - All 244 C++ tests passed with `BUILD_METAL=ON`.
 - All six `make lint` checks passed. Local clang-format 19 reported only the
   expected version warning against the CI pin of 20.
@@ -257,8 +271,9 @@ The next useful work is breadth, then dependency scheduling:
    otherwise encode plan contractions on one command buffer.
 2. Add a small buffer pool after measuring allocation cost. Pooling removes
    repeated Metal resource creation but does not change dependency semantics.
-3. Extend scoped host read/write leases from `sum()` to the remaining short CPU
-   operations without changing the external raw-pointer contract.
+3. Extend scoped host read/write leases from `sum()` and `fill()` to the
+   remaining short CPU operations without changing the external raw-pointer
+   contract.
 4. Port a small elementwise family and reduction family to demonstrate a
    realistic resident pipeline.
 5. Apply one explicit CPU/Metal execution selector consistently across
@@ -284,10 +299,12 @@ The resulting decisions are:
    with `device="cpu"` or `device="metal"`.
 2. Preserve all existing CPU pointer APIs. On Metal storage they wait and create
    a sticky host export, because an escaped pointer has no observable lifetime.
-3. Submit FP32 MPS GEMM asynchronously and keep results in Metal storage.
-4. Use one serial queue and allocation-wide locks before attempting a general
+3. Provide recoverable C++ leases and NumPy views whose base object records the
+   lifetime that a raw pointer alone cannot express.
+4. Submit FP32 MPS GEMM asynchronously and keep results in Metal storage.
+5. Use one serial queue and allocation-wide locks before attempting a general
    dependency scheduler, byte-range tracking, or multiple streams.
-5. Restrict the first resident implementation to unified-memory devices rather
+6. Restrict the first resident implementation to unified-memory devices rather
    than pretending per-operation managed-memory synchronization is resident.
 
 The implementation lives in `ConcreteBuffer.hpp`, `SimpleArray.hpp`, and

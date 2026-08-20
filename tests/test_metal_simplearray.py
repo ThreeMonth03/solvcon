@@ -18,6 +18,22 @@ class MetalBuildContractTC(unittest.TestCase):
         self.assertEqual("cpu", array.device)
         self.assertTrue(array.ready)
 
+    def test_cpu_host_view_constness_and_lifetime(self):
+        source = np.arange(6, dtype="float32").reshape(2, 3)
+        array = sc.SimpleArrayFloat32(array=source)
+
+        read_view = array.host_view()
+        self.assertFalse(read_view.flags.writeable)
+        np.testing.assert_array_equal(source, read_view)
+        with self.assertRaisesRegex(ValueError, "read-only"):
+            read_view[0, 0] = -1
+        del read_view
+
+        write_view = array.host_view(write=True)
+        del array
+        write_view[1, 2] = 42
+        self.assertEqual(42, source[1, 2])
+
     @unittest.skipIf(sc.METAL_BUILT, "Metal is built")
     def test_unbuilt_metal_allocation_fails_clearly(self):
         with self.assertRaisesRegex(RuntimeError,
@@ -99,6 +115,53 @@ class MetalStorageTC(unittest.TestCase):
             array=np.eye(3, dtype="float32"), device="metal")
         with self.assertRaisesRegex(RuntimeError, "host pointer or view"):
             array.matmul_metal(other)
+
+    def test_read_host_view_blocks_gpu_until_all_aliases_die(self):
+        values = np.arange(16, dtype="float32").reshape(4, 4)
+        array = sc.SimpleArrayFloat32(array=values, device="metal")
+        identity = sc.SimpleArrayFloat32(
+            array=np.eye(4, dtype="float32"), device="metal")
+        pending = array.matmul_metal(identity)
+        sc.reset_metal_statistics()
+
+        view = pending.host_view()
+        self.assertFalse(view.flags.writeable)
+        self.assertFalse(pending.host_exported)
+        self.assertEqual(1, sc.metal_statistics()["host_waits"])
+        np.testing.assert_array_equal(values, view)
+        with self.assertRaisesRegex(ValueError, "read-only"):
+            view[0, 0] = -1
+
+        alias = view[:, 1:]
+        del view
+        with self.assertRaisesRegex(RuntimeError,
+                                    "scoped host access is active"):
+            pending.matmul_metal(identity)
+        del alias
+
+        chained = pending.matmul_metal(identity)
+        self.assertFalse(pending.host_exported)
+        np.testing.assert_array_equal(values, chained.cpu().ndarray)
+
+    def test_write_host_view_updates_without_sticky_export(self):
+        values = np.eye(4, dtype="float32")
+        array = sc.SimpleArrayFloat32(array=values, device="metal")
+        identity = sc.SimpleArrayFloat32(
+            array=np.eye(4, dtype="float32"), device="metal")
+
+        view = array.host_view(write=True)
+        self.assertTrue(view.flags.writeable)
+        view[0, 0] = 3
+        self.assertFalse(array.host_exported)
+        with self.assertRaisesRegex(RuntimeError,
+                                    "scoped host access is active"):
+            array.matmul_metal(identity)
+        del view
+
+        values[0, 0] = 3
+        result = array.matmul_metal(identity)
+        np.testing.assert_array_equal(values, result.cpu().ndarray)
+        self.assertFalse(array.host_exported)
 
     def test_buffer_protocol_is_a_sticky_host_export(self):
         array = sc.SimpleArrayInt32([4], value=3, device="metal")
@@ -236,6 +299,23 @@ class MetalMatmulTC(unittest.TestCase):
         self.assertEqual(2,
                          sc.metal_statistics()["submitted_commands"])
         np.testing.assert_array_equal(values, chained.cpu().ndarray)
+        self.assertFalse(result.host_exported)
+
+    def test_scoped_cpu_fill_preserves_gpu_eligibility(self):
+        values = np.eye(8, dtype="float32")
+        lhs = self._array(values)
+        identity = self._array(np.eye(8, dtype="float32"))
+        sc.reset_metal_statistics()
+
+        result = lhs.matmul_metal(identity)
+        result.fill(2)
+        self.assertFalse(result.host_exported)
+        self.assertEqual(1, sc.metal_statistics()["host_waits"])
+
+        chained = result.matmul_metal(identity)
+        np.testing.assert_array_equal(
+            np.full((8, 8), 2, dtype="float32"),
+            chained.cpu().ndarray)
         self.assertFalse(result.host_exported)
 
     def test_completed_task_history_is_compacted(self):

@@ -122,8 +122,8 @@ public:
 
     BufferDevice device() const noexcept override { return BufferDevice::Metal; }
 
-    void begin_internal_host_access() const override;
-    void end_internal_host_access() const noexcept override { m_access_mutex.unlock(); }
+    void begin_internal_host_access(BufferHostAccessMode) const override;
+    void end_internal_host_access(BufferHostAccessMode) const noexcept override;
     void prepare_host_access() const override;
     void wait() const override;
     bool ready() const override;
@@ -133,6 +133,7 @@ public:
     id<MTLBuffer> buffer() const noexcept { return m_buffer; }
     size_t resource_offset() const noexcept { return m_resource_offset; }
     std::mutex & access_mutex() const noexcept { return m_access_mutex; }
+    bool host_access_active_unlocked() const noexcept { return m_active_host_accesses != 0; }
     std::shared_ptr<MetalTask> const & last_use_unlocked() const noexcept { return m_last_use; }
     void set_last_use_unlocked(std::shared_ptr<MetalTask> const & task) const { m_last_use = task; }
 
@@ -144,6 +145,7 @@ private:
     size_t m_resource_offset;
     mutable std::mutex m_access_mutex;
     mutable std::shared_ptr<MetalTask> m_last_use;
+    mutable size_t m_active_host_accesses = 0;
     mutable std::atomic<bool> m_host_exported{false};
 }; /* end class MetalBufferRemover */
 
@@ -272,19 +274,18 @@ MetalBufferRemover::MetalBufferRemover(id<MTLBuffer> buffer, size_t resource_off
 {
 }
 
-void MetalBufferRemover::begin_internal_host_access() const
+void MetalBufferRemover::begin_internal_host_access(BufferHostAccessMode) const
 {
-    m_access_mutex.lock();
-    try
-    {
-        wait_for_task(m_last_use);
-        m_last_use.reset();
-    }
-    catch (...)
-    {
-        m_access_mutex.unlock();
-        throw;
-    }
+    std::unique_lock lock(m_access_mutex);
+    wait_for_task(m_last_use);
+    m_last_use.reset();
+    ++m_active_host_accesses;
+}
+
+void MetalBufferRemover::end_internal_host_access(BufferHostAccessMode) const noexcept
+{
+    std::scoped_lock lock(m_access_mutex);
+    --m_active_host_accesses;
 }
 
 void MetalBufferRemover::prepare_host_access() const
@@ -538,6 +539,11 @@ void MetalManager::Impl::gemm_async(MetalGemmOperation const & operation)
         {
             throw std::runtime_error(
                 "Metal GEMM: a host pointer or view has escaped; copy the array to a new Metal buffer first");
+        }
+        if (buffer->host_access_active_unlocked())
+        {
+            throw std::runtime_error(
+                "Metal GEMM: scoped host access is active; release the host view first");
         }
     }
 

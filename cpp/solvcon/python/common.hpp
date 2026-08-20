@@ -226,6 +226,57 @@ std::enable_if_t<is_simple_array_v<S>, pybind11::array> to_ndarray(S && sarr)
     );
 }
 
+template <typename Lease, typename T>
+pybind11::array host_lease_to_ndarray(std::unique_ptr<Lease> lease, bool writable)
+{
+    namespace py = pybind11;
+    Lease * owner = lease.get();
+    py::capsule base(owner, [](void * ptr)
+                     { delete static_cast<Lease *>(ptr); });
+    lease.release();
+
+    std::vector<py::ssize_t> const shape(owner->shape().begin(), owner->shape().end());
+    std::vector<py::ssize_t> stride;
+    stride.reserve(owner->stride().size());
+    for (ssize_t const value : owner->stride())
+    {
+        stride.push_back(static_cast<py::ssize_t>(value * sizeof(T)));
+    }
+
+    py::array result(
+        py::detail::npy_format_descriptor<T>::dtype(),
+        shape,
+        stride,
+        owner->data(),
+        base);
+    if (!writable)
+    {
+        result.attr("setflags")(false);
+    }
+    return result;
+}
+
+template <typename T>
+pybind11::array to_host_view(SimpleArray<T> & array, bool writable)
+{
+    if (writable)
+    {
+        std::unique_ptr<typename SimpleArray<T>::host_write_lease_type> lease;
+        {
+            pybind11::gil_scoped_release const release;
+            lease = std::make_unique<typename SimpleArray<T>::host_write_lease_type>(array.host_write());
+        }
+        return host_lease_to_ndarray<typename SimpleArray<T>::host_write_lease_type, T>(std::move(lease), true);
+    }
+
+    std::unique_ptr<typename SimpleArray<T>::host_read_lease_type> lease;
+    {
+        pybind11::gil_scoped_release const release;
+        lease = std::make_unique<typename SimpleArray<T>::host_read_lease_type>(array.host_read());
+    }
+    return host_lease_to_ndarray<typename SimpleArray<T>::host_read_lease_type, T>(std::move(lease), false);
+}
+
 template <typename T>
 static SimpleArray<T> makeSimpleArray(pybind11::array_t<T> & ndarr)
 {

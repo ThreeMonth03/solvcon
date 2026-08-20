@@ -132,6 +132,13 @@ class SOLVCON_PYTHON_WRAPPER_VISIBILITY WrapSimpleArray
                 "ndarray",
                 [](wrapped_type & self)
                 { return to_ndarray(self); })
+            .def(
+                "host_view",
+                [](wrapped_type & self, bool write)
+                { return to_host_view(self, write); },
+                py::kw_only(),
+                py::arg("write") = false,
+                "Return a NumPy view that holds scoped host access for its lifetime.")
             .def_property_readonly(
                 "is_from_python",
                 [](wrapped_type const & self)
@@ -278,7 +285,8 @@ class SOLVCON_PYTHON_WRAPPER_VISIBILITY WrapSimpleArray
                 "fill",
                 [](wrapped_type & arr, value_type const value)
                 { arr.fill(value); },
-                py::arg("value"))
+                py::arg("value"),
+                py::call_guard<py::gil_scoped_release>())
             //
             ;
 

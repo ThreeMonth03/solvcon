@@ -25,6 +25,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
+#include <utility>
 
 namespace solvcon
 {
@@ -38,6 +39,13 @@ enum class BufferDevice : std::uint8_t
     Cpu,
     Metal,
 }; /* end enum class BufferDevice */
+
+/// Access mode held by a scoped host lease.
+enum class BufferHostAccessMode : std::uint8_t
+{
+    Read,
+    Write,
+}; /* end enum class BufferHostAccessMode */
 
 constexpr std::string_view buffer_device_name(BufferDevice device) noexcept
 {
@@ -95,8 +103,8 @@ struct ConcreteBufferRemover
     }
 
     virtual BufferDevice device() const noexcept { return BufferDevice::Cpu; }
-    virtual void begin_internal_host_access() const {}
-    virtual void end_internal_host_access() const noexcept {}
+    virtual void begin_internal_host_access(BufferHostAccessMode) const {}
+    virtual void end_internal_host_access(BufferHostAccessMode) const noexcept {}
     virtual void prepare_host_access() const {}
     virtual void wait() const {}
     virtual bool ready() const { return true; }
@@ -172,6 +180,23 @@ public:
 
     using remover_type = detail::ConcreteBufferRemover;
     using size_type = std::size_t;
+
+    class HostAccessGuard
+    {
+    public:
+        HostAccessGuard(remover_type const * remover, BufferHostAccessMode mode);
+
+        HostAccessGuard(HostAccessGuard const &) = delete;
+        HostAccessGuard & operator=(HostAccessGuard const &) = delete;
+        HostAccessGuard(HostAccessGuard && other) noexcept;
+        HostAccessGuard & operator=(HostAccessGuard &&) = delete;
+
+        ~HostAccessGuard();
+
+    private:
+        remover_type const * m_remover;
+        BufferHostAccessMode m_mode;
+    }; /* end class HostAccessGuard */
 
     static std::shared_ptr<ConcreteBuffer> construct(size_t nbytes, size_t alignment = 0)
     {
@@ -339,6 +364,12 @@ public:
         }
     }
 
+    /// Hold recoverable host access until the returned guard is destroyed.
+    HostAccessGuard host_access(BufferHostAccessMode mode) const
+    {
+        return HostAccessGuard(remover(), mode);
+    }
+
     // NOLINTNEXTLINE(modernize-avoid-c-arrays,cppcoreguidelines-avoid-c-arrays)
     using unique_ptr_type = std::unique_ptr<int8_t, data_deleter_type>;
 
@@ -365,22 +396,6 @@ private:
 
     template <typename T>
     friend class SimpleArray;
-
-    class InternalHostAccessGuard
-    {
-    public:
-        explicit InternalHostAccessGuard(remover_type const * remover);
-
-        InternalHostAccessGuard(InternalHostAccessGuard const &) = delete;
-        InternalHostAccessGuard & operator=(InternalHostAccessGuard const &) = delete;
-        InternalHostAccessGuard(InternalHostAccessGuard &&) = delete;
-        InternalHostAccessGuard & operator=(InternalHostAccessGuard &&) = delete;
-
-        ~InternalHostAccessGuard();
-
-    private:
-        remover_type const * m_remover;
-    }; /* end class InternalHostAccessGuard */
 
     remover_type const * remover() const noexcept { return has_remover() ? m_data.get_deleter().remover.get() : nullptr; }
 
@@ -419,37 +434,50 @@ private:
     unique_ptr_type m_data;
 }; /* end class ConcreteBuffer */
 
-inline ConcreteBuffer::InternalHostAccessGuard::InternalHostAccessGuard(remover_type const * remover)
+inline ConcreteBuffer::HostAccessGuard::HostAccessGuard(remover_type const * remover, BufferHostAccessMode mode)
     : m_remover(remover)
+    , m_mode(mode)
 {
     if (m_remover != nullptr)
     {
-        m_remover->begin_internal_host_access();
+        m_remover->begin_internal_host_access(m_mode);
     }
 }
 
-inline ConcreteBuffer::InternalHostAccessGuard::~InternalHostAccessGuard()
+inline ConcreteBuffer::HostAccessGuard::HostAccessGuard(HostAccessGuard && other) noexcept
+    : m_remover(std::exchange(other.m_remover, nullptr))
+    , m_mode(other.m_mode)
+{
+}
+
+inline ConcreteBuffer::HostAccessGuard::~HostAccessGuard()
 {
     if (m_remover != nullptr)
     {
-        m_remover->end_internal_host_access();
+        m_remover->end_internal_host_access(m_mode);
     }
 }
 
 inline void ConcreteBuffer::copy_from(ConcreteBuffer const & other)
 {
-    std::array<remover_type const *, 2> removers{remover(), other.remover()};
-    std::ranges::sort(removers, std::less<>());
+    using access_type = std::pair<remover_type const *, BufferHostAccessMode>;
+    std::array<access_type, 2> accesses{
+        access_type{remover(), BufferHostAccessMode::Write},
+        access_type{other.remover(), BufferHostAccessMode::Read}};
+    std::ranges::sort(accesses, std::less<>(), &access_type::first);
 
-    std::optional<InternalHostAccessGuard> first;
-    std::optional<InternalHostAccessGuard> second;
-    if (removers[0] != nullptr)
+    std::optional<HostAccessGuard> first;
+    std::optional<HostAccessGuard> second;
+    if (accesses[0].first != nullptr)
     {
-        first.emplace(removers[0]);
+        BufferHostAccessMode const mode = accesses[0].first == accesses[1].first
+                                              ? BufferHostAccessMode::Write
+                                              : accesses[0].second;
+        first.emplace(accesses[0].first, mode);
     }
-    if (removers[1] != nullptr && removers[1] != removers[0])
+    if (accesses[1].first != nullptr && accesses[1].first != accesses[0].first)
     {
-        second.emplace(removers[1]);
+        second.emplace(accesses[1].first, accesses[1].second);
     }
     std::copy_n(other.data_unchecked<int8_t>(), size(), data_unchecked<int8_t>());
 }

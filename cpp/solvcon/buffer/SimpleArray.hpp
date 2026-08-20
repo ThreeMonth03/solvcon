@@ -265,7 +265,9 @@ public:
     A & fill(value_type const & value)
     {
         auto athis = static_cast<A *>(this);
-        std::fill(athis->begin(), athis->end(), value);
+        athis->internal_host_write(
+            [&](value_type * data, value_type *)
+            { std::fill_n(data, athis->size(), value); });
         return *athis;
     }
 
@@ -1931,6 +1933,8 @@ private:
 
     template <typename A, typename U>
     friend class detail::SimpleArrayMixinSum;
+    template <typename A, typename U>
+    friend class detail::SimpleArrayMixinModifiers;
 
 public:
     template <typename U>
@@ -1938,6 +1942,37 @@ public:
     using value_type = typename internal_types::value_type;
     using shape_type = typename internal_types::shape_type;
     using buffer_type = typename internal_types::buffer_type;
+
+    template <bool Writable>
+    class HostAccessLease
+    {
+    public:
+        using array_type = std::conditional_t<Writable, SimpleArray, SimpleArray const>;
+        using pointer_type = std::conditional_t<Writable, value_type *, value_type const *>;
+
+        explicit HostAccessLease(array_type & array);
+
+        HostAccessLease(HostAccessLease const &) = delete;
+        HostAccessLease & operator=(HostAccessLease const &) = delete;
+        HostAccessLease(HostAccessLease &&) noexcept = default;
+        HostAccessLease & operator=(HostAccessLease &&) = delete;
+
+        pointer_type data() const noexcept { return m_data; }
+        shape_type const & shape() const noexcept { return m_shape; }
+        shape_type const & stride() const noexcept { return m_stride; }
+
+    private:
+        static constexpr BufferHostAccessMode ACCESS_MODE = Writable ? BufferHostAccessMode::Write : BufferHostAccessMode::Read;
+
+        std::shared_ptr<buffer_type> m_buffer;
+        typename buffer_type::HostAccessGuard m_access;
+        pointer_type m_data;
+        shape_type m_shape;
+        shape_type m_stride;
+    }; /* end class HostAccessLease */
+
+    using host_read_lease_type = HostAccessLease<false>;
+    using host_write_lease_type = HostAccessLease<true>;
 
     enum class ArrayOrder : std::uint8_t
     {
@@ -2300,6 +2335,17 @@ public:
     /// Deep-copy this logical storage to the requested device.
     SimpleArray to(BufferDevice target_device) const;
 
+    /**
+     * Hold read-only host access without permanently exporting the buffer.
+     * A pointer obtained from the lease must not outlive the lease.
+     */
+    host_read_lease_type host_read() const { return host_read_lease_type(*this); }
+    /**
+     * Hold writable host access without permanently exporting the buffer.
+     * A pointer obtained from the lease must not outlive the lease.
+     */
+    host_write_lease_type host_write() { return host_write_lease_type(*this); }
+
     using iterator = T *;
     using const_iterator = T const *;
 
@@ -2547,6 +2593,8 @@ public:
 private:
     template <typename Operation>
     auto internal_host_read(Operation && operation) const;
+    template <typename Operation>
+    auto internal_host_write(Operation && operation);
 
     size_t logical_data_offset() const noexcept;
     void update_data_pointers(size_t data_offset = 0);
@@ -2812,14 +2860,41 @@ private:
 }; /* end class SimpleArray */
 
 template <typename T>
+template <bool Writable>
+SimpleArray<T>::HostAccessLease<Writable>::HostAccessLease(array_type & array)
+    : m_buffer(array.m_buffer)
+    , m_access(m_buffer ? m_buffer->host_access(ACCESS_MODE) : typename buffer_type::HostAccessGuard(nullptr, ACCESS_MODE))
+    , m_data(array.m_logical_data)
+    , m_shape(array.m_shape)
+    , m_stride(array.m_stride)
+{
+}
+
+template <typename T>
 template <typename Operation>
 auto SimpleArray<T>::internal_host_read(Operation && operation) const
 {
     using result_type = std::invoke_result_t<Operation, value_type const *, value_type const *>;
     static_assert(!std::is_pointer_v<result_type> && !std::is_reference_v<result_type>);
 
-    typename buffer_type::InternalHostAccessGuard access(m_buffer ? m_buffer->remover() : nullptr);
+    typename buffer_type::HostAccessGuard access(
+        m_buffer ? m_buffer->remover() : nullptr,
+        BufferHostAccessMode::Read);
     value_type const * data = m_buffer ? m_buffer->template data_unchecked<value_type>() : nullptr;
+    return std::invoke(std::forward<Operation>(operation), data, m_logical_data);
+}
+
+template <typename T>
+template <typename Operation>
+auto SimpleArray<T>::internal_host_write(Operation && operation)
+{
+    using result_type = std::invoke_result_t<Operation, value_type *, value_type *>;
+    static_assert(!std::is_pointer_v<result_type> && !std::is_reference_v<result_type>);
+
+    typename buffer_type::HostAccessGuard access(
+        m_buffer ? m_buffer->remover() : nullptr,
+        BufferHostAccessMode::Write);
+    value_type * data = m_buffer ? m_buffer->template data_unchecked<value_type>() : nullptr;
     return std::invoke(std::forward<Operation>(operation), data, m_logical_data);
 }
 
