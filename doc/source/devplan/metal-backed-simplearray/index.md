@@ -73,12 +73,11 @@ different backend. Its scheduler only orders declared CPU/GPU access to shared
 storage. Benchmark data describes the tradeoff for users and future explicit
 policies; it is not input to an automatic threshold.
 
-The existing CPU implementation is still a conservative host boundary in this
-prototype. A CPU operation on Metal-backed input waits and exports its host
-pointer, and its output uses the existing CPU allocation rule. Scoped internal
-host leases are follow-up work that will let an explicitly selected CPU kernel
-use shared Metal storage temporarily without creating an external raw-pointer
-export.
+Most existing CPU implementations are still conservative host boundaries in
+this prototype. `sum()` is the first exception: it uses a scoped internal read
+lease, waits only for prior work on the allocation, and releases the allocation
+for a later Metal operation without exporting a raw pointer. Other CPU
+operation families still need the same conversion.
 
 ## Asynchronous access contract
 
@@ -101,10 +100,11 @@ buffer protocol wait for pending work and mark the shared `ConcreteBuffer` as
 host-exported. All reshape and transpose views share this state. Calling
 `to("metal")` creates a new GPU-eligible snapshot.
 
-Internal copies use a scoped host-access guard. The guard holds the same
-allocation lock from dependency wait through the final byte copy. A concurrent
-GPU submission therefore cannot start in the middle of `clone()` or
-`to("cpu")`.
+Internal copies and `sum()` use a scoped host-access guard. The guard holds the
+same allocation lock from dependency wait through the final CPU access. A
+concurrent GPU submission therefore cannot start in the middle of `clone()`,
+`to("cpu")`, or the reduction, and the allocation remains GPU-eligible after
+the guard ends.
 
 The Metal runtime uses one serial command queue. `matmul_metal()` commits a
 command buffer and returns immediately. A subsequent operation can consume the
@@ -127,6 +127,7 @@ intentionally narrower:
 - Explicit `device`, `to("metal")`, `cpu()`, `ready`, and `wait()` APIs.
 - Native FP32, two-dimensional, positive row-major matrix multiplication.
 - Asynchronous GPU submission and resident matmul chaining on one queue.
+- Scoped internal host read access for `sum()` between Metal operations.
 - Allocation-wide dependency tracking shared by all views.
 - CPU and non-Metal builds retain their existing default behavior.
 
@@ -145,12 +146,12 @@ The prototype does not yet include:
 - Recoverable host-view leases. A raw host export is sticky in this version.
 - Managed-memory discrete GPUs and their CPU/GPU dirty-state transitions.
 
-Existing CPU implementations are conservative host boundaries. For example,
-calling `fill()` on a Metal-backed array uses an existing iterator and therefore
-marks the buffer host-exported. Metadata-only views and `clone()` preserve Metal
-storage. Legacy operations that materialize a new layout may still return CPU
-storage. These restrictions avoid hidden races while the operation dispatcher
-and scoped host leases are still future work.
+Most existing CPU implementations are conservative host boundaries. For
+example, calling `fill()` on a Metal-backed array uses an existing iterator and
+therefore marks the buffer host-exported. `sum()` proves the recoverable model:
+it uses an internal lease and leaves the input eligible for another Metal
+operation. Metadata-only views and `clone()` preserve Metal storage. Legacy
+operations that materialize a new layout may still return CPU storage.
 
 The Metal executor already consumes `MatmulPlan` for output shape, dimensions,
 and matrix strides. A future executor can extend that use to vector roles,
@@ -256,8 +257,8 @@ The next useful work is breadth, then dependency scheduling:
    otherwise encode plan contractions on one command buffer.
 2. Add a small buffer pool after measuring allocation cost. Pooling removes
    repeated Metal resource creation but does not change dependency semantics.
-3. Add scoped host read/write leases so short CPU operations can use a Metal
-   allocation without permanently disabling GPU execution.
+3. Extend scoped host read/write leases from `sum()` to the remaining short CPU
+   operations without changing the external raw-pointer contract.
 4. Port a small elementwise family and reduction family to demonstrate a
    realistic resident pipeline.
 5. Apply one explicit CPU/Metal execution selector consistently across

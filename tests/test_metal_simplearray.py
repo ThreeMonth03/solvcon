@@ -221,6 +221,23 @@ class MetalMatmulTC(unittest.TestCase):
         np.testing.assert_array_equal(clone.cpu().ndarray,
                                       chained.cpu().ndarray)
 
+    def test_scoped_cpu_sum_preserves_gpu_eligibility(self):
+        values = np.arange(64, dtype="float32").reshape(8, 8)
+        lhs = self._array(values)
+        identity = self._array(np.eye(8, dtype="float32"))
+        sc.reset_metal_statistics()
+
+        result = lhs.matmul_metal(identity)
+        self.assertEqual(values.sum(), result.sum())
+        self.assertFalse(result.host_exported)
+        self.assertEqual(1, sc.metal_statistics()["host_waits"])
+
+        chained = result.matmul_metal(identity)
+        self.assertEqual(2,
+                         sc.metal_statistics()["submitted_commands"])
+        np.testing.assert_array_equal(values, chained.cpu().ndarray)
+        self.assertFalse(result.host_exported)
+
     def test_completed_task_history_is_compacted(self):
         value = self._array(np.ones((1, 1), dtype="float32"))
         weight = self._array(np.ones((1, 1), dtype="float32"))

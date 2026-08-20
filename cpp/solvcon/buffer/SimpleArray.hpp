@@ -309,14 +309,17 @@ public:
         {
             return zero();
         }
-        // Either C- or F-contiguous arrays occupy a single dense block in
-        // memory, so a linear buffer sweep visits every element exactly
-        // once, in C order or F order respectively.
-        if (athis->is_c_contiguous() || athis->is_f_contiguous())
-        {
-            return sum_contiguous(athis->data(), n);
-        }
-        return sum_strided(athis->logical_data(), athis->shape(), athis->stride());
+        return athis->internal_host_read(
+            [&](value_type const * data, value_type const * logical_data)
+            {
+                // Either C- or F-contiguous arrays occupy a single dense
+                // block, so a linear sweep visits every element exactly once.
+                if (athis->is_c_contiguous() || athis->is_f_contiguous())
+                {
+                    return sum_contiguous(data, n);
+                }
+                return sum_strided(logical_data, athis->shape(), athis->stride());
+            });
     }
 
 private:
@@ -1926,6 +1929,9 @@ private:
 
     using internal_types = detail::SimpleArrayInternalTypes<T>;
 
+    template <typename A, typename U>
+    friend class detail::SimpleArrayMixinSum;
+
 public:
     template <typename U>
     using rebind = SimpleArray<U>;
@@ -2539,6 +2545,9 @@ public:
     bool is_f_contiguous() const { return is_f_contiguous(m_shape, m_stride); }
 
 private:
+    template <typename Operation>
+    auto internal_host_read(Operation && operation) const;
+
     size_t logical_data_offset() const noexcept;
     void update_data_pointers(size_t data_offset = 0);
     void copy_logical_into(SimpleArray & out) const;
@@ -2801,6 +2810,18 @@ private:
     ssize_t m_nghost = 0;
     value_type * m_body = nullptr;
 }; /* end class SimpleArray */
+
+template <typename T>
+template <typename Operation>
+auto SimpleArray<T>::internal_host_read(Operation && operation) const
+{
+    using result_type = std::invoke_result_t<Operation, value_type const *, value_type const *>;
+    static_assert(!std::is_pointer_v<result_type> && !std::is_reference_v<result_type>);
+
+    typename buffer_type::InternalHostAccessGuard access(m_buffer ? m_buffer->remover() : nullptr);
+    value_type const * data = m_buffer ? m_buffer->template data_unchecked<value_type>() : nullptr;
+    return std::invoke(std::forward<Operation>(operation), data, m_logical_data);
+}
 
 template <typename T>
 template <size_t N>

@@ -350,7 +350,7 @@ class SOLVCON_PYTHON_WRAPPER_VISIBILITY WrapSimpleArray
                 py::arg("ddof") = 0)
             .def("min", &wrapped_type::min)
             .def("max", &wrapped_type::max)
-            .def("sum", &wrapped_type::sum)
+            .def("sum", &wrapped_type::sum, py::call_guard<py::gil_scoped_release>())
             .def("abs", &wrapped_type::abs)
             .def("diff", &wrapped_type::diff)
             .def("cumsum", &wrapped_type::cumsum)
