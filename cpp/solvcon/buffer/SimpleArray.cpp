@@ -358,6 +358,7 @@ static std::unordered_map<std::string, DataType, DataTypeHasher> string_data_typ
     {"uint16", DataType::Uint16},
     {"uint32", DataType::Uint32},
     {"uint64", DataType::Uint64},
+    {"float16", DataType::Float16},
     {"float32", DataType::Float32},
     {"float64", DataType::Float64},
     {"complex64", DataType::Complex64},
@@ -430,6 +431,12 @@ DataType DataType::from<uint64_t>()
 }
 
 template <>
+DataType DataType::from<Float16>()
+{
+    return DataType::Float16;
+}
+
+template <>
 DataType DataType::from<float>()
 {
     return DataType::Float32;
@@ -477,6 +484,7 @@ SimpleArrayPlex::SimpleArrayPlex(const shape_type & shape, const DataType data_t
         SC_DECL_CREATE_SIMPLE_ARRAY(DataType::Uint16, SimpleArrayUint16, shape)
         SC_DECL_CREATE_SIMPLE_ARRAY(DataType::Uint32, SimpleArrayUint32, shape)
         SC_DECL_CREATE_SIMPLE_ARRAY(DataType::Uint64, SimpleArrayUint64, shape)
+        SC_DECL_CREATE_SIMPLE_ARRAY(DataType::Float16, SimpleArrayFloat16, shape)
         SC_DECL_CREATE_SIMPLE_ARRAY(DataType::Float32, SimpleArrayFloat32, shape)
         SC_DECL_CREATE_SIMPLE_ARRAY(DataType::Float64, SimpleArrayFloat64, shape)
         SC_DECL_CREATE_SIMPLE_ARRAY(DataType::Complex64, SimpleArrayComplex64, shape)
@@ -501,6 +509,7 @@ SimpleArrayPlex::SimpleArrayPlex(const shape_type & shape, const std::shared_ptr
         SC_DECL_CREATE_SIMPLE_ARRAY(DataType::Uint16, SimpleArrayUint16, shape, buffer)
         SC_DECL_CREATE_SIMPLE_ARRAY(DataType::Uint32, SimpleArrayUint32, shape, buffer)
         SC_DECL_CREATE_SIMPLE_ARRAY(DataType::Uint64, SimpleArrayUint64, shape, buffer)
+        SC_DECL_CREATE_SIMPLE_ARRAY(DataType::Float16, SimpleArrayFloat16, shape, buffer)
         SC_DECL_CREATE_SIMPLE_ARRAY(DataType::Float32, SimpleArrayFloat32, shape, buffer)
         SC_DECL_CREATE_SIMPLE_ARRAY(DataType::Float64, SimpleArrayFloat64, shape, buffer)
         SC_DECL_CREATE_SIMPLE_ARRAY(DataType::Complex64, SimpleArrayComplex64, shape, buffer)
@@ -532,6 +541,7 @@ SimpleArrayPlex::SimpleArrayPlex(const shape_type & shape, const DataType data_t
         SC_DECL_CREATE_SIMPLE_ARRAY_WITH_ALIGNMENT(DataType::Uint16, SimpleArrayUint16)
         SC_DECL_CREATE_SIMPLE_ARRAY_WITH_ALIGNMENT(DataType::Uint32, SimpleArrayUint32)
         SC_DECL_CREATE_SIMPLE_ARRAY_WITH_ALIGNMENT(DataType::Uint64, SimpleArrayUint64)
+        SC_DECL_CREATE_SIMPLE_ARRAY_WITH_ALIGNMENT(DataType::Float16, SimpleArrayFloat16)
         SC_DECL_CREATE_SIMPLE_ARRAY_WITH_ALIGNMENT(DataType::Float32, SimpleArrayFloat32)
         SC_DECL_CREATE_SIMPLE_ARRAY_WITH_ALIGNMENT(DataType::Float64, SimpleArrayFloat64)
         SC_DECL_CREATE_SIMPLE_ARRAY_WITH_ALIGNMENT(DataType::Complex64, SimpleArrayComplex64)
@@ -616,6 +626,13 @@ SimpleArrayPlex::SimpleArrayPlex(SimpleArrayPlex const & other)
         const auto * array = static_cast<SimpleArrayUint64 *>(other.m_instance_ptr);
         // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
         m_instance_ptr = reinterpret_cast<void *>(new SimpleArrayUint64(*array));
+        break;
+    }
+    case DataType::Float16:
+    {
+        const auto * array = static_cast<SimpleArrayFloat16 *>(other.m_instance_ptr);
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+        m_instance_ptr = reinterpret_cast<void *>(new SimpleArrayFloat16(*array));
         break;
     }
     case DataType::Float32:
@@ -749,6 +766,13 @@ SimpleArrayPlex & SimpleArrayPlex::operator=(SimpleArrayPlex const & other)
         m_instance_ptr = reinterpret_cast<void *>(new SimpleArrayUint64(*array));
         break;
     }
+    case DataType::Float16:
+    {
+        const auto * array = static_cast<SimpleArrayFloat16 *>(other.m_instance_ptr);
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+        m_instance_ptr = reinterpret_cast<void *>(new SimpleArrayFloat16(*array));
+        break;
+    }
     case DataType::Float32:
     {
         const auto * array = static_cast<SimpleArrayFloat32 *>(other.m_instance_ptr);
@@ -829,6 +853,8 @@ size_t SimpleArrayPlex::alignment() const
         return static_cast<const SimpleArrayUint32 *>(m_instance_ptr)->alignment();
     case DataType::Uint64:
         return static_cast<const SimpleArrayUint64 *>(m_instance_ptr)->alignment();
+    case DataType::Float16:
+        return static_cast<const SimpleArrayFloat16 *>(m_instance_ptr)->alignment();
     case DataType::Float32:
         return static_cast<const SimpleArrayFloat32 *>(m_instance_ptr)->alignment();
     case DataType::Float64:
@@ -903,6 +929,12 @@ SimpleArrayPlex::~SimpleArrayPlex()
     {
         // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
         delete reinterpret_cast<SimpleArrayUint64 *>(m_instance_ptr);
+        break;
+    }
+    case DataType::Float16:
+    {
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+        delete reinterpret_cast<SimpleArrayFloat16 *>(m_instance_ptr);
         break;
     }
     case DataType::Float32:

@@ -104,6 +104,7 @@ target_link_libraries(
     test_nopython
     GTest::gtest_main
     GTest::gmock_main
+    solvcon_half
     ${APPLE_FWK_ACCELERATE}
 )
 

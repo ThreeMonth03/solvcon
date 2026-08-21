@@ -392,6 +392,7 @@ void validate_matrix(
     size_t columns,
     ssize_t leading_dimension,
     size_t byte_offset,
+    size_t itemsize,
     ConcreteBuffer const & owner,
     std::string_view name)
 {
@@ -406,7 +407,7 @@ void validate_matrix(
 
     size_t const last_row = checked_product(rows - 1, static_cast<size_t>(leading_dimension), name);
     size_t const elements = checked_sum(last_row, columns, name);
-    size_t const matrix_nbytes = checked_product(elements, sizeof(float), name);
+    size_t const matrix_nbytes = checked_product(elements, itemsize, name);
     if (byte_offset > owner.nbytes() || matrix_nbytes > owner.nbytes() - byte_offset)
     {
         throw std::out_of_range(std::format("Metal GEMM: {} view exceeds its buffer", name));
@@ -519,11 +520,28 @@ void MetalManager::Impl::gemm_async(MetalGemmOperation const & operation)
         throw std::invalid_argument("Metal GEMM: empty contractions must be handled by the caller");
     }
 
+    MPSDataType data_type;
+    size_t itemsize;
+    switch (operation.m_data_type)
+    {
+    case MetalGemmDataType::Float16:
+        data_type = MPSDataTypeFloat16;
+        itemsize = 2;
+        break;
+    case MetalGemmDataType::Float32:
+        data_type = MPSDataTypeFloat32;
+        itemsize = 4;
+        break;
+    default:
+        throw std::invalid_argument("Metal GEMM: unsupported data type");
+    }
+
     validate_matrix(
         rows,
         inner_size,
         operation.m_lhs.m_leading_dimension,
         operation.m_lhs.m_byte_offset,
+        itemsize,
         *operation.m_lhs.m_buffer,
         "lhs");
     validate_matrix(
@@ -531,6 +549,7 @@ void MetalManager::Impl::gemm_async(MetalGemmOperation const & operation)
         columns,
         operation.m_rhs.m_leading_dimension,
         operation.m_rhs.m_byte_offset,
+        itemsize,
         *operation.m_rhs.m_buffer,
         "rhs");
     validate_matrix(
@@ -538,6 +557,7 @@ void MetalManager::Impl::gemm_async(MetalGemmOperation const & operation)
         columns,
         operation.m_output.m_leading_dimension,
         operation.m_output.m_byte_offset,
+        itemsize,
         *operation.m_output.m_buffer,
         "output");
 
@@ -580,24 +600,24 @@ void MetalManager::Impl::gemm_async(MetalGemmOperation const & operation)
     }
 
     size_t const lhs_row_bytes = checked_product(
-        static_cast<size_t>(operation.m_lhs.m_leading_dimension), sizeof(float), "lhs row");
+        static_cast<size_t>(operation.m_lhs.m_leading_dimension), itemsize, "lhs row");
     size_t const rhs_row_bytes = checked_product(
-        static_cast<size_t>(operation.m_rhs.m_leading_dimension), sizeof(float), "rhs row");
+        static_cast<size_t>(operation.m_rhs.m_leading_dimension), itemsize, "rhs row");
     size_t const output_row_bytes = checked_product(
-        static_cast<size_t>(operation.m_output.m_leading_dimension), sizeof(float), "output row");
+        static_cast<size_t>(operation.m_output.m_leading_dimension), itemsize, "output row");
 
     MPSMatrixDescriptor * lhs_descriptor = [MPSMatrixDescriptor matrixDescriptorWithRows:rows
                                                                                  columns:inner_size
                                                                                 rowBytes:lhs_row_bytes
-                                                                                dataType:MPSDataTypeFloat32];
+                                                                                dataType:data_type];
     MPSMatrixDescriptor * rhs_descriptor = [MPSMatrixDescriptor matrixDescriptorWithRows:inner_size
                                                                                  columns:columns
                                                                                 rowBytes:rhs_row_bytes
-                                                                                dataType:MPSDataTypeFloat32];
+                                                                                dataType:data_type];
     MPSMatrixDescriptor * output_descriptor = [MPSMatrixDescriptor matrixDescriptorWithRows:rows
                                                                                     columns:columns
                                                                                    rowBytes:output_row_bytes
-                                                                                   dataType:MPSDataTypeFloat32];
+                                                                                   dataType:data_type];
     MPSMatrix * lhs_matrix = [[MPSMatrix alloc] initWithBuffer:lhs_buffer
                                                         offset:lhs.resource_offset() + operation.m_lhs.m_byte_offset
                                                     descriptor:lhs_descriptor];

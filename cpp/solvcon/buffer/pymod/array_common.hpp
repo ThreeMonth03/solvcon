@@ -22,8 +22,59 @@
 namespace pybind11
 {
 
+template <>
+struct format_descriptor<solvcon::Float16>
+{
+    static constexpr char c = 'e';
+    static constexpr char value[2] = {c, '\0'};
+    static std::string format() { return std::string(1, c); }
+}; /* end struct format_descriptor */
+
 namespace detail
 {
+
+template <>
+struct type_caster<solvcon::Float16>
+{
+public:
+    PYBIND11_TYPE_CASTER(solvcon::Float16, const_name("float16"));
+
+    bool load(pybind11::handle src, bool)
+    {
+        double const number = PyFloat_AsDouble(src.ptr());
+        if (number == -1.0 && PyErr_Occurred())
+        {
+            PyErr_Clear();
+            return false;
+        }
+        value = solvcon::Float16(number);
+        return true;
+    }
+
+    static pybind11::handle cast(
+        solvcon::Float16 src,
+        pybind11::return_value_policy,
+        pybind11::handle)
+    {
+        return pybind11::float_(static_cast<float>(src)).release();
+    }
+}; /* end struct type_caster */
+
+template <>
+struct npy_format_descriptor<solvcon::Float16>
+{
+    static constexpr auto name = const_name("float16");
+
+    static pybind11::dtype dtype()
+    {
+        return pybind11::dtype("float16");
+    }
+
+    static std::string format()
+    {
+        return pybind11::format_descriptor<solvcon::Float16>::format();
+    }
+}; /* end struct npy_format_descriptor */
 
 template <>
 struct npy_format_descriptor<solvcon::Complex<double>>

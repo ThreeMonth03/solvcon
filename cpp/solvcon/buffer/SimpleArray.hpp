@@ -58,7 +58,7 @@ template <typename T>
 concept IntegralType = std::is_integral_v<T>;
 
 template <typename T>
-concept ArithmeticType = std::is_arithmetic_v<T>;
+concept ArithmeticType = is_arithmetic_number_v<T>;
 
 template <typename T>
 concept SimpleArrayType = requires(T t) {
@@ -538,8 +538,8 @@ public:
         {
             throw std::runtime_error("SimpleArray::average_op(): weight size does not match array size");
         }
-        value_type sum = 0;
-        value_type total_weight = 0;
+        value_type sum{};
+        value_type total_weight{};
         for (size_t i = 0; i < n; ++i)
         {
             sum += sv[i] * weight[i];
@@ -578,8 +578,8 @@ public:
                 throw std::runtime_error("SimpleArray::average(): weight shape does not match array shape");
             }
         }
-        value_type sum = 0;
-        value_type total_weight = 0;
+        value_type sum{};
+        value_type total_weight{};
         auto const range = IndexRange(*athis);
         shape_type sidx = range.first();
         do
@@ -597,7 +597,7 @@ public:
     value_type mean_op(small_vector<value_type> & sv) const
     {
         const size_t n = sv.size();
-        value_type sum = 0;
+        value_type sum{};
         for (const auto & v : sv)
         {
             sum += v;
@@ -629,7 +629,7 @@ public:
             throw std::runtime_error("SimpleArray::var_op(): ddof must be less than the number of elements");
         }
         value_type const mu = mean_op(sv);
-        real_type acc = 0;
+        real_type acc{};
         // The complex and real branches differ; clang-tidy cannot tell the
         // type-dependent expressions apart in the uninstantiated template.
         // NOLINTBEGIN(bugprone-branch-clone)
@@ -668,7 +668,7 @@ public:
         auto const range = IndexRange(*athis);
         shape_type sidx = range.first();
         value_type const mu = athis->mean();
-        real_type acc = 0;
+        real_type acc{};
         if constexpr (is_complex_v<value_type>)
         {
             do
@@ -747,11 +747,11 @@ public:
     {
         auto athis = static_cast<A const *>(this);
         A ret(*athis);
-        if constexpr (!std::is_same_v<bool, std::remove_const_t<value_type>> && std::is_signed_v<value_type>)
+        if constexpr (!std::is_same_v<bool, std::remove_const_t<value_type>> && is_signed_number_v<value_type>)
         {
             for (size_t i = 0; i < athis->size(); ++i)
             {
-                ret.data(i) = static_cast<value_type>(std::abs(athis->data(i)));
+                ret.data(i) = static_cast<value_type>(solvcon::abs(athis->data(i)));
             }
         }
         return ret;
@@ -1412,9 +1412,9 @@ template <typename A, typename T>
 A SimpleArrayMixinCalculators<A, T>::matmul_metal(A const & other) const
 {
     using value_type = typename A::value_type;
-    if constexpr (!std::is_same_v<value_type, float>)
+    if constexpr (!std::is_same_v<value_type, float> && !is_float16_v<value_type>)
     {
-        throw std::invalid_argument("matmul_metal supports only float32");
+        throw std::invalid_argument("matmul_metal supports only float16 and float32");
     }
     else
     {
@@ -1448,6 +1448,9 @@ A SimpleArrayMixinCalculators<A, T>::matmul_metal(A const & other) const
 
         A output(plan.output_shape(), BufferDevice::Metal);
         device::MetalGemmOperation const operation{
+            .m_data_type = is_float16_v<value_type>
+                               ? device::MetalGemmDataType::Float16
+                               : device::MetalGemmDataType::Float32,
             .m_rows = plan.rows(),
             .m_columns = plan.columns(),
             .m_inner_size = plan.inner_size(),
@@ -1541,7 +1544,7 @@ bool nan_aware_less(V const & lhs, V const & rhs)
         }
         return nan_aware_less(lhs.imag(), rhs.imag());
     }
-    else if constexpr (std::is_floating_point_v<V>)
+    else if constexpr (is_floating_number_v<V>)
     {
         if (std::isnan(rhs))
         {
@@ -1663,7 +1666,7 @@ void SimpleArrayMixinSort<A, T>::sort()
         // Complex numbers are sorted lexicographically by real and then imaginary parts.
         std::sort(athis->begin(), athis->end(), NanAwareLess{});
     }
-    else if constexpr (std::is_floating_point_v<value_type>)
+    else if constexpr (is_floating_number_v<value_type>)
     {
         // Partition the array into two parts: non-NaN values and NaN values.
         auto * const mid = std::partition(athis->begin(), athis->end(), [](value_type const & v)
@@ -3632,7 +3635,7 @@ size_t detail::SimpleArrayMixinSearch<A, T>::argmin() const
         {
             value_type const current_value = ptr[i];
 
-            if constexpr (std::is_floating_point_v<value_type>)
+            if constexpr (is_floating_number_v<value_type>)
             {
                 if (std::isnan(current_value))
                 {
@@ -3660,7 +3663,7 @@ size_t detail::SimpleArrayMixinSearch<A, T>::argmin() const
     {
         value_type const current_value = *(ptr + unchecked_logical_offset(*athis, idx));
 
-        if constexpr (std::is_floating_point_v<value_type>)
+        if constexpr (is_floating_number_v<value_type>)
         {
             if (std::isnan(current_value))
             {
@@ -3700,7 +3703,7 @@ size_t detail::SimpleArrayMixinSearch<A, T>::argmax() const
         {
             value_type const current_value = ptr[i];
 
-            if constexpr (std::is_floating_point_v<value_type>)
+            if constexpr (is_floating_number_v<value_type>)
             {
                 if (std::isnan(current_value))
                 {
@@ -3728,7 +3731,7 @@ size_t detail::SimpleArrayMixinSearch<A, T>::argmax() const
     {
         value_type const current_value = *(ptr + unchecked_logical_offset(*athis, idx));
 
-        if constexpr (std::is_floating_point_v<value_type>)
+        if constexpr (is_floating_number_v<value_type>)
         {
             if (std::isnan(current_value))
             {
@@ -3792,7 +3795,7 @@ SimpleArray<uint64_t> detail::SimpleArrayMixinSearch<A, T>::argmin(ssize_t axis)
         {
             ssize_t const current_index = input_index + i * axis_stride;
             value_type const current_value = (*athis)[static_cast<size_t>(current_index)];
-            if constexpr (std::is_floating_point_v<value_type>)
+            if constexpr (is_floating_number_v<value_type>)
             {
                 if (std::isnan(current_value))
                 {
@@ -3860,7 +3863,7 @@ SimpleArray<uint64_t> detail::SimpleArrayMixinSearch<A, T>::argmax(ssize_t axis)
         {
             ssize_t const current_index = input_index + i * axis_stride;
             value_type const current_value = (*athis)[static_cast<size_t>(current_index)];
-            if constexpr (std::is_floating_point_v<value_type>)
+            if constexpr (is_floating_number_v<value_type>)
             {
                 if (std::isnan(current_value))
                 {
@@ -4054,6 +4057,7 @@ using SimpleArrayUint8 = SimpleArray<uint8_t>;
 using SimpleArrayUint16 = SimpleArray<uint16_t>;
 using SimpleArrayUint32 = SimpleArray<uint32_t>;
 using SimpleArrayUint64 = SimpleArray<uint64_t>;
+using SimpleArrayFloat16 = SimpleArray<Float16>;
 using SimpleArrayFloat32 = SimpleArray<float>;
 using SimpleArrayFloat64 = SimpleArray<double>;
 using SimpleArrayComplex64 = SimpleArray<Complex<float>>;
@@ -4062,10 +4066,10 @@ using SimpleArrayComplex128 = SimpleArray<Complex<double>>;
 /**
  * Runtime element-type tag mirroring the scalar types a SimpleArray supports.
  *
- * Covers bool, the signed and unsigned 8- to 64-bit integers, the 32- and
- * 64-bit floats, and the 64- and 128-bit complex types. Converts to and from
- * its enum and a type string, and DataType::from<T>() maps a C++ type to its
- * tag.
+ * Covers bool, the signed and unsigned 8- to 64-bit integers, the 16-, 32-,
+ * and 64-bit floats, and the 64- and 128-bit complex types. Converts to and
+ * from its enum and a type string, and DataType::from<T>() maps a C++ type to
+ * its tag.
  *
  * @ingroup group_core
  */
@@ -4084,6 +4088,7 @@ public:
         Uint16,
         Uint32,
         Uint64,
+        Float16,
         Float32,
         Float64,
         Complex64,

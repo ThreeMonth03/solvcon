@@ -43,9 +43,17 @@ struct MetalOutputView
     ssize_t m_leading_dimension;
 }; /* end struct MetalOutputView */
 
-/// Native FP32 GEMM dimensions and buffer views.
+/// Element type used by a native Metal GEMM.
+enum class MetalGemmDataType : std::uint8_t
+{
+    Float16,
+    Float32,
+}; /* end enum class MetalGemmDataType */
+
+/// Native floating-point GEMM dimensions and buffer views.
 struct MetalGemmOperation
 {
+    MetalGemmDataType m_data_type;
     ssize_t m_rows;
     ssize_t m_columns;
     ssize_t m_inner_size;
@@ -84,7 +92,7 @@ public:
     bool available() const noexcept override { return started(); }
     /// Allocate CPU-visible shared Metal storage.
     std::shared_ptr<ConcreteBuffer> allocate(size_t nbytes, size_t alignment) const override;
-    /// Submit one FP32 GEMM without waiting for completion.
+    /// Submit one floating-point GEMM without waiting for completion.
     void gemm_async(MetalGemmOperation const & operation);
 
     /// Return process-wide diagnostic counters.

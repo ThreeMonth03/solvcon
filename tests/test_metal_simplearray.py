@@ -54,6 +54,7 @@ class MetalStorageTC(unittest.TestCase):
         (sc.SimpleArrayUint16, np.uint16),
         (sc.SimpleArrayUint32, np.uint32),
         (sc.SimpleArrayUint64, np.uint64),
+        (sc.SimpleArrayFloat16, np.float16),
         (sc.SimpleArrayFloat32, np.float32),
         (sc.SimpleArrayFloat64, np.float64),
         (sc.SimpleArrayComplex64, np.complex64),
@@ -230,6 +231,50 @@ class MetalMatmulTC(unittest.TestCase):
         want = (lhs_np @ rhs_np) @ tail_np
         np.testing.assert_allclose(got, want, rtol=2e-4, atol=2e-4)
         self.assertTrue(after_wait.host_exported)
+
+    def test_float16_matmul_is_resident_and_async(self):
+        rng = np.random.default_rng(20260821)
+        lhs_np = rng.standard_normal((15, 17)).astype("float16")
+        rhs_np = rng.standard_normal((17, 13)).astype("float16")
+        tail_np = rng.standard_normal((13, 11)).astype("float16")
+
+        def make_array(values):
+            return sc.SimpleArrayFloat16(
+                array=np.ascontiguousarray(values), device="metal")
+
+        lhs = make_array(lhs_np)
+        rhs = make_array(rhs_np)
+        tail = make_array(tail_np)
+        sc.reset_metal_statistics()
+
+        middle = lhs.matmul_metal(rhs)
+        result = middle.matmul_metal(tail)
+
+        self.assertEqual(2,
+                         sc.metal_statistics()["submitted_commands"])
+        self.assertEqual(0, sc.metal_statistics()["host_waits"])
+        self.assertEqual("metal", result.device)
+        host = result.cpu().ndarray
+        self.assertEqual(np.dtype("float16"), host.dtype)
+        np.testing.assert_allclose(
+            (lhs_np.astype("float32") @ rhs_np.astype("float32"))
+            @ tail_np.astype("float32"),
+            host,
+            rtol=2e-2, atol=2e-2)
+
+    def test_float16_padded_row_major_inputs(self):
+        lhs_base = np.arange(24, dtype="float16").reshape(4, 6)
+        rhs_base = np.arange(28, dtype="float16").reshape(4, 7)
+        lhs_view = lhs_base[:, :4]
+        rhs_view = rhs_base[:, :5]
+        lhs = sc.SimpleArrayFloat16(array=lhs_view, device="metal")
+        rhs = sc.SimpleArrayFloat16(array=rhs_view, device="metal")
+
+        result = lhs.matmul_metal(rhs)
+
+        np.testing.assert_allclose(
+            lhs_view @ rhs_view, result.cpu().ndarray,
+            rtol=2e-3, atol=2e-3)
 
     def test_padded_row_major_inputs(self):
         lhs_base = np.arange(24, dtype="float32").reshape(4, 6)

@@ -64,6 +64,23 @@ Shared `MTLBuffer` satisfies that contract. A device-only CUDA or HIP backend
 needs a separate host-mapping or staging design before registration; it must
 not pretend that a device pointer is CPU-addressable.
 
+## Portable float16 contract
+
+`solvcon::Float16` aliases the header-only `half_float::half` 2.2.1 type. The
+dependency is pinned by version and SHA-256 during CMake configuration. This
+keeps IEEE 754 binary16 storage available to C++23 builds on Clang, GCC, and
+MSVC instead of selecting a compiler extension or an Apple-only scalar type.
+
+`DataType::Float16`, `SimpleArray<Float16>`, `SimpleArrayPlex`, and
+`SimpleCollector<Float16>` use the same two-byte storage with or without
+Metal. The Python binding exposes `SimpleArrayFloat16` and maps it directly to
+NumPy `float16`, including zero-copy NumPy views and the buffer protocol.
+
+Metal GEMM carries its element type as operation metadata. The MPS executor
+selects `MPSDataTypeFloat16` or `MPSDataTypeFloat32` and validates byte ranges
+with the matching item size. The array and synchronization model does not
+branch on dtype.
+
 The separation leaves four reviewable follow-up tasks:
 
 1. Add a device identity and provider to the backend dispatcher.
@@ -77,10 +94,10 @@ The separation leaves four reviewable follow-up tasks:
 CPU storage remains the default:
 
 ```python
-cpu = sc.SimpleArrayFloat32([1024, 1024])
-gpu = sc.SimpleArrayFloat32([1024, 1024], device="metal")
+cpu = sc.SimpleArrayFloat16([1024, 1024])
+gpu = sc.SimpleArrayFloat16([1024, 1024], device="metal")
 
-gpu = sc.SimpleArrayFloat32(array=numpy_array, device="metal")
+gpu = sc.SimpleArrayFloat16(array=numpy_array, device="metal")
 result = gpu.matmul_metal(weight)
 result.wait()
 host_copy = result.cpu()
@@ -197,7 +214,8 @@ intentionally narrower:
 - Metal-backed owned `ConcreteBuffer` storage on unified-memory macOS devices.
 - Existing CPU pointer, iterator, span, NumPy, and Python buffer APIs.
 - Explicit `device`, `to("metal")`, `cpu()`, `ready`, and `wait()` APIs.
-- Native FP32, two-dimensional, positive row-major matrix multiplication.
+- Native FP16 and FP32 two-dimensional, positive row-major matrix
+  multiplication.
 - Asynchronous GPU submission and resident matmul chaining on one queue.
 - Scoped C++ host read/write access and lifetime-bound Python NumPy views.
 - Scoped internal host access for `sum()`, `fill()`, and buffer copies.
@@ -209,8 +227,9 @@ intentionally narrower:
   of `ConcreteBuffer`.
 
 The Python experiment is exposed through the typed classes such as
-`SimpleArrayFloat32`. The type-erased `solvcon.SimpleArray` (`SimpleArrayPlex`)
-is not device-aware in this prototype.
+`SimpleArrayFloat16` and `SimpleArrayFloat32`. The type-erased
+`solvcon.SimpleArray` (`SimpleArrayPlex`) is not device-aware in this
+prototype.
 
 The prototype does not yet include:
 
@@ -261,7 +280,7 @@ make buildext BUILD_PATH="$bench_build" CMAKE_BUILD_TYPE=Release \
 env -u VECLIB_MAXIMUM_THREADS -u OPENBLAS_NUM_THREADS \
   -u OMP_NUM_THREADS -u MKL_NUM_THREADS CMAKE_BUILD_TYPE=Release \
   python3 profiling/profile_metal_simplearray.py \
-  --run --sides 512 1024 2048 4096 --depths 1 4 \
+  --run --dtype float16 --sides 512 1024 2048 4096 --depths 1 4 \
   --warmups 1 --samples 3 --rounds 4 \
   --output /tmp/solvcon-metal-simplearray.jsonl
 ```
@@ -274,7 +293,7 @@ exactly reversed size/depth order. Treat repeat drift as instability instead of
 pooling it into one headline number. The build's `CMakeCache.txt` should be kept
 beside the raw JSONL evidence.
 
-## Clean benchmark result
+## Clean FP32 benchmark result
 
 The final diagnostic used commit `1f3abff126b7`, a fresh Release build, and
 module SHA-256 `fa4a4c3b346c`. It ran on an 8 GB M1 MacBook Air on AC power,
@@ -312,12 +331,12 @@ treated as hardware- and workload-scoped feasibility evidence.
 
 ## Verification
 
-- The Metal-enabled Python suite passed 1730 tests, with 558 platform or
-  optional-feature skips and 3 expected failures. The focused Metal suite
-  passed 23 tests and 15 subtests, with 1 skip.
-- The Metal-disabled buffer and Metal contract subset passed 240 tests and 147
-  subtests, with 21 expected skips.
-- All 246 C++ tests passed independently with `BUILD_METAL=ON` and
+- The Metal-enabled Python suite passed 1736 tests and 1731 subtests, with 558
+  platform or optional-feature skips and 3 expected failures. The combined
+  float16 and Metal subset passed 29 tests and 16 subtests, with 1 skip.
+- The same float16 and Metal subset passed 7 tests with 23 expected skips in a
+  Metal-disabled build.
+- All 247 C++ tests passed independently with `BUILD_METAL=ON` and
   `BUILD_METAL=OFF`. The two backend contract tests cover the CPU provider and
   the build-dependent Metal provider.
 - All six `make lint` checks passed. Local clang-format 19 reported only the
@@ -368,12 +387,15 @@ The resulting decisions are:
    a sticky host export, because an escaped pointer has no observable lifetime.
 3. Provide recoverable C++ leases and NumPy views whose base object records the
    lifetime that a raw pointer alone cannot express.
-4. Submit FP32 MPS GEMM asynchronously and keep results in Metal storage.
-5. Use one serial queue and allocation-wide locks before attempting a general
+4. Define portable binary16 storage and expose the same representation through
+   C++, `SimpleArrayPlex`, NumPy, and Python.
+5. Submit FP16 or FP32 MPS GEMM asynchronously and keep results in Metal
+   storage.
+6. Use one serial queue and allocation-wide locks before attempting a general
    dependency scheduler, byte-range tracking, or multiple streams.
-6. Restrict the first resident implementation to unified-memory devices rather
+7. Restrict the first resident implementation to unified-memory devices rather
    than pretending per-operation managed-memory synchronization is resident.
-7. Dispatch owned buffer allocation through `BufferBackend`, keeping platform
+8. Dispatch owned buffer allocation through `BufferBackend`, keeping platform
    types and conditional compilation outside `ConcreteBuffer`.
 
 The buffer contract lives in `ConcreteBuffer.hpp`; allocation dispatch lives in

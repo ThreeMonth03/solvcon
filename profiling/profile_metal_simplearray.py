@@ -24,6 +24,8 @@ def parse_args():
     parser.add_argument("--sides", nargs="+", type=int,
                         default=(512, 1024, 2048))
     parser.add_argument("--depths", nargs="+", type=int, default=(1, 4))
+    parser.add_argument("--dtype", choices=("float16", "float32"),
+                        default="float32")
     parser.add_argument("--warmups", type=int, default=1)
     parser.add_argument("--samples", type=int, default=3)
     parser.add_argument("--rounds", type=int, default=4)
@@ -126,6 +128,7 @@ def metadata(args):
         },
         "sides": args.sides,
         "depths": args.depths,
+        "dtype": args.dtype,
         "warmups": args.warmups,
         "samples": args.samples,
         "rounds": args.rounds,
@@ -143,8 +146,12 @@ def completion_metadata():
     }
 
 
-def make_array(values, device):
-    return sc.SimpleArrayFloat32(array=values, device=device)
+def make_array(values, device, dtype):
+    array_type = {
+        "float16": sc.SimpleArrayFloat16,
+        "float32": sc.SimpleArrayFloat32,
+    }[dtype]
+    return array_type(array=values, device=device)
 
 
 def run_cpu(lhs, weight, depth):
@@ -169,14 +176,15 @@ def elapsed_ms(function):
     return (time.perf_counter_ns() - begin) * 1e-6
 
 
-def check_result(cpu_lhs, cpu_weight, metal_lhs, metal_weight, depth):
+def check_result(cpu_lhs, cpu_weight, metal_lhs, metal_weight, depth, dtype):
     reference = run_cpu(cpu_lhs, cpu_weight, depth).ndarray.copy()
     metal_result = run_metal(
         metal_lhs, metal_weight, depth).cpu().ndarray.copy()
     error = np.asarray(metal_result, dtype="float64") - reference
     denominator = np.linalg.norm(reference.ravel().astype("float64"))
     relative_l2 = np.linalg.norm(error.ravel()) / denominator
-    if not np.isfinite(relative_l2) or relative_l2 > 2e-3:
+    tolerance = 2e-2 if dtype == "float16" else 2e-3
+    if not np.isfinite(relative_l2) or relative_l2 > tolerance:
         raise RuntimeError(
             f"Metal result failed validation: relative_l2={relative_l2}")
     return float(np.max(np.abs(error))), float(relative_l2)
@@ -184,17 +192,19 @@ def check_result(cpu_lhs, cpu_weight, metal_lhs, metal_weight, depth):
 
 def profile_case(side, depth, args):
     rng = np.random.default_rng(20260816 + side + depth)
-    scale = np.float32(0.25 / np.sqrt(side))
-    lhs_values = rng.standard_normal((side, side), dtype="float32")
+    scale = np.asarray(0.25 / np.sqrt(side), dtype=args.dtype)
+    lhs_values = rng.standard_normal(
+        (side, side), dtype="float32").astype(args.dtype)
     weight_values = (
-        rng.standard_normal((side, side), dtype="float32") * scale)
-    cpu_lhs = make_array(lhs_values, "cpu")
-    cpu_weight = make_array(weight_values, "cpu")
-    metal_lhs = make_array(lhs_values, "metal")
-    metal_weight = make_array(weight_values, "metal")
+        rng.standard_normal((side, side), dtype="float32")
+        .astype(args.dtype) * scale)
+    cpu_lhs = make_array(lhs_values, "cpu", args.dtype)
+    cpu_weight = make_array(weight_values, "cpu", args.dtype)
+    metal_lhs = make_array(lhs_values, "metal", args.dtype)
+    metal_weight = make_array(weight_values, "metal", args.dtype)
 
     max_abs, relative_l2 = check_result(
-        cpu_lhs, cpu_weight, metal_lhs, metal_weight, depth)
+        cpu_lhs, cpu_weight, metal_lhs, metal_weight, depth, args.dtype)
     methods = {
         "cpu": lambda: run_cpu(cpu_lhs, cpu_weight, depth),
         "metal": lambda: run_metal(metal_lhs, metal_weight, depth),
@@ -216,6 +226,7 @@ def profile_case(side, depth, args):
         "kind": "case",
         "side": side,
         "depth": depth,
+        "dtype": args.dtype,
         "cpu_ms": timings["cpu"],
         "metal_ms": timings["metal"],
         "cpu_median_ms": cpu_median,
@@ -251,6 +262,7 @@ def main():
                 write_record(output, record)
                 print(
                     f"S={side} depth={depth}: "
+                    f"dtype={args.dtype}, "
                     f"CPU={record['cpu_median_ms']:.3f} ms, "
                     f"Metal={record['metal_median_ms']:.3f} ms, "
                     f"ratio={record['metal_over_cpu']:.3f}")
