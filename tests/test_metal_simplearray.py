@@ -105,11 +105,14 @@ class MetalStorageTC(unittest.TestCase):
     def test_numpy_export_is_zero_copy_and_sticky(self):
         source = np.arange(6, dtype="float32").reshape(2, 3)
         array = sc.SimpleArrayFloat32(array=source, device="metal")
+        sc.reset_metal_statistics()
+
         view = array.ndarray
         self.assertTrue(array.host_exported)
 
         view[1, 2] = 123.0
         self.assertEqual(123.0, array.ndarray[1, 2])
+        self.assertEqual(1, sc.metal_statistics()["host_exports"])
 
         other = sc.SimpleArrayFloat32(
             array=np.eye(3, dtype="float32"), device="metal")

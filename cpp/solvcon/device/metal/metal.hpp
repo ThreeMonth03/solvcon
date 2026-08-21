@@ -59,6 +59,7 @@ struct MetalStatistics
     std::uint64_t m_allocated_buffers;
     std::uint64_t m_submitted_commands;
     std::uint64_t m_host_waits;
+    std::uint64_t m_host_exports;
 }; /* end struct MetalStatistics */
 
 /// Own the process-wide Metal device and serial command queue.

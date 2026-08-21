@@ -37,6 +37,7 @@ struct MetalCounters
     std::atomic<std::uint64_t> m_allocated_buffers{0};
     std::atomic<std::uint64_t> m_submitted_commands{0};
     std::atomic<std::uint64_t> m_host_waits{0};
+    std::atomic<std::uint64_t> m_host_exports{0};
 }; /* end struct MetalCounters */
 
 MetalCounters & metal_counters()
@@ -113,18 +114,16 @@ private:
     mutable std::vector<std::shared_ptr<MetalTask>> m_predecessors;
 }; /* end class MetalTask */
 
-class MetalBufferRemover final : public ConcreteBuffer::remover_type
+class MetalBufferAccess final : public ConcreteBuffer::access_type
 {
 public:
-    MetalBufferRemover(id<MTLBuffer> buffer, size_t resource_offset);
-
-    void operator()(int8_t *, size_t) const override {}
+    MetalBufferAccess(id<MTLBuffer> buffer, size_t resource_offset);
 
     BufferDevice device() const noexcept override { return BufferDevice::Metal; }
 
-    void begin_internal_host_access(BufferHostAccessMode) const override;
-    void end_internal_host_access(BufferHostAccessMode) const noexcept override;
-    void prepare_host_access() const override;
+    void begin_host_access(BufferHostAccessMode) const override;
+    void end_host_access(BufferHostAccessMode) const noexcept override;
+    void export_host_access() const override;
     void wait() const override;
     bool ready() const override;
 
@@ -147,6 +146,18 @@ private:
     mutable std::shared_ptr<MetalTask> m_last_use;
     mutable size_t m_active_host_accesses = 0;
     mutable std::atomic<bool> m_host_exported{false};
+}; /* end class MetalBufferAccess */
+
+class MetalBufferRemover final : public ConcreteBuffer::remover_type
+{
+public:
+    MetalBufferRemover(id<MTLBuffer> buffer, size_t resource_offset);
+
+    void operator()(int8_t *, size_t) const override {}
+    ConcreteBuffer::access_type const * access_state() const noexcept override { return &m_access; }
+
+private:
+    MetalBufferAccess m_access;
 }; /* end class MetalBufferRemover */
 
 MetalTask::MetalTask(
@@ -268,13 +279,18 @@ void MetalTask::rethrow_error() const
     }
 }
 
-MetalBufferRemover::MetalBufferRemover(id<MTLBuffer> buffer, size_t resource_offset)
+MetalBufferAccess::MetalBufferAccess(id<MTLBuffer> buffer, size_t resource_offset)
     : m_buffer(buffer)
     , m_resource_offset(resource_offset)
 {
 }
 
-void MetalBufferRemover::begin_internal_host_access(BufferHostAccessMode) const
+MetalBufferRemover::MetalBufferRemover(id<MTLBuffer> buffer, size_t resource_offset)
+    : m_access(buffer, resource_offset)
+{
+}
+
+void MetalBufferAccess::begin_host_access(BufferHostAccessMode) const
 {
     std::unique_lock lock(m_access_mutex);
     wait_for_task(m_last_use);
@@ -282,40 +298,50 @@ void MetalBufferRemover::begin_internal_host_access(BufferHostAccessMode) const
     ++m_active_host_accesses;
 }
 
-void MetalBufferRemover::end_internal_host_access(BufferHostAccessMode) const noexcept
+void MetalBufferAccess::end_host_access(BufferHostAccessMode) const noexcept
 {
     std::scoped_lock lock(m_access_mutex);
     --m_active_host_accesses;
 }
 
-void MetalBufferRemover::prepare_host_access() const
+void MetalBufferAccess::export_host_access() const
+{
+    if (m_host_exported.load(std::memory_order_acquire))
+    {
+        return;
+    }
+
+    std::unique_lock lock(m_access_mutex);
+    if (m_host_exported.load(std::memory_order_relaxed))
+    {
+        return;
+    }
+    wait_for_task(m_last_use);
+    m_last_use.reset();
+    m_host_exported.store(true, std::memory_order_release);
+    ++metal_counters().m_host_exports;
+}
+
+void MetalBufferAccess::wait() const
 {
     std::unique_lock lock(m_access_mutex);
-    m_host_exported.store(true);
     wait_for_task(m_last_use);
     m_last_use.reset();
 }
 
-void MetalBufferRemover::wait() const
-{
-    std::unique_lock lock(m_access_mutex);
-    wait_for_task(m_last_use);
-    m_last_use.reset();
-}
-
-bool MetalBufferRemover::ready() const
+bool MetalBufferAccess::ready() const
 {
     std::shared_ptr<MetalTask> const task = last_use();
     return !task || task->ready();
 }
 
-std::shared_ptr<MetalTask> MetalBufferRemover::last_use() const
+std::shared_ptr<MetalTask> MetalBufferAccess::last_use() const
 {
     std::scoped_lock lock(m_access_mutex);
     return m_last_use;
 }
 
-void MetalBufferRemover::wait_for_task(std::shared_ptr<MetalTask> const & task)
+void MetalBufferAccess::wait_for_task(std::shared_ptr<MetalTask> const & task)
 {
     if (task)
     {
@@ -324,18 +350,14 @@ void MetalBufferRemover::wait_for_task(std::shared_ptr<MetalTask> const & task)
     }
 }
 
-MetalBufferRemover const & require_metal_buffer(ConcreteBuffer const & buffer)
+MetalBufferAccess const & require_metal_buffer(ConcreteBuffer const & buffer)
 {
-    if (!buffer.has_remover())
+    auto const * access = dynamic_cast<MetalBufferAccess const *>(buffer.access_state());
+    if (access == nullptr)
     {
         throw std::invalid_argument("Metal operation requires Metal-backed buffers");
     }
-    auto const * remover = dynamic_cast<MetalBufferRemover const *>(&buffer.get_remover());
-    if (remover == nullptr)
-    {
-        throw std::invalid_argument("Metal operation requires Metal-backed buffers");
-    }
-    return *remover;
+    return *access;
 }
 
 size_t checked_dimension(ssize_t value, std::string_view name)
@@ -404,9 +426,9 @@ public:
 
 private:
     static NSArray<id<MTLBuffer>> * retain_resources(
-        MetalBufferRemover const & lhs,
-        MetalBufferRemover const & rhs,
-        MetalBufferRemover const & output);
+        MetalBufferAccess const & lhs,
+        MetalBufferAccess const & rhs,
+        MetalBufferAccess const & output);
 
     __strong id<MTLDevice> m_device;
     __strong id<MTLCommandQueue> m_queue;
@@ -469,9 +491,9 @@ std::shared_ptr<ConcreteBuffer> MetalManager::Impl::make_buffer(size_t nbytes, s
 }
 
 NSArray<id<MTLBuffer>> * MetalManager::Impl::retain_resources(
-    MetalBufferRemover const & lhs,
-    MetalBufferRemover const & rhs,
-    MetalBufferRemover const & output)
+    MetalBufferAccess const & lhs,
+    MetalBufferAccess const & rhs,
+    MetalBufferAccess const & output)
 {
     return @[ lhs.buffer(), rhs.buffer(), output.buffer() ];
 }
@@ -519,20 +541,20 @@ void MetalManager::Impl::gemm_async(MetalGemmOperation const & operation)
         *operation.m_output.m_buffer,
         "output");
 
-    MetalBufferRemover const & lhs = require_metal_buffer(*operation.m_lhs.m_buffer);
-    MetalBufferRemover const & rhs = require_metal_buffer(*operation.m_rhs.m_buffer);
-    MetalBufferRemover const & output = require_metal_buffer(*operation.m_output.m_buffer);
+    MetalBufferAccess const & lhs = require_metal_buffer(*operation.m_lhs.m_buffer);
+    MetalBufferAccess const & rhs = require_metal_buffer(*operation.m_rhs.m_buffer);
+    MetalBufferAccess const & output = require_metal_buffer(*operation.m_output.m_buffer);
     id<MTLBuffer> lhs_buffer = lhs.buffer();
     id<MTLBuffer> rhs_buffer = rhs.buffer();
     id<MTLBuffer> output_buffer = output.buffer();
 
     std::scoped_lock submit_lock(m_submit_mutex);
-    std::vector<MetalBufferRemover const *> buffers{&lhs, &rhs, &output};
-    std::ranges::sort(buffers, std::less<MetalBufferRemover const *>());
+    std::vector<MetalBufferAccess const *> buffers{&lhs, &rhs, &output};
+    std::ranges::sort(buffers, std::less<MetalBufferAccess const *>());
     buffers.erase(std::unique(buffers.begin(), buffers.end()), buffers.end());
     std::vector<std::unique_lock<std::mutex>> access_locks;
     access_locks.reserve(buffers.size());
-    for (MetalBufferRemover const * buffer : buffers)
+    for (MetalBufferAccess const * buffer : buffers)
     {
         access_locks.emplace_back(buffer->access_mutex());
         if (buffer->host_exported())
@@ -548,7 +570,7 @@ void MetalManager::Impl::gemm_async(MetalGemmOperation const & operation)
     }
 
     std::vector<std::shared_ptr<MetalTask>> predecessors;
-    for (MetalBufferRemover const * buffer : buffers)
+    for (MetalBufferAccess const * buffer : buffers)
     {
         std::shared_ptr<MetalTask> const & last_use = buffer->last_use_unlocked();
         if (last_use && std::ranges::find(predecessors, last_use) == predecessors.end())
@@ -613,7 +635,7 @@ void MetalManager::Impl::gemm_async(MetalGemmOperation const & operation)
         command,
         retain_resources(lhs, rhs, output),
         std::move(predecessors));
-    for (MetalBufferRemover const * buffer : buffers)
+    for (MetalBufferAccess const * buffer : buffers)
     {
         buffer->set_last_use_unlocked(task);
     }
@@ -663,6 +685,7 @@ MetalStatistics MetalManager::statistics() const noexcept
         .m_allocated_buffers = counters.m_allocated_buffers.load(),
         .m_submitted_commands = counters.m_submitted_commands.load(),
         .m_host_waits = counters.m_host_waits.load(),
+        .m_host_exports = counters.m_host_exports.load(),
     };
 }
 
@@ -672,6 +695,7 @@ void MetalManager::reset_statistics() noexcept
     counters.m_allocated_buffers.store(0);
     counters.m_submitted_commands.store(0);
     counters.m_host_waits.store(0);
+    counters.m_host_exports.store(0);
 }
 
 } /* end namespace device */

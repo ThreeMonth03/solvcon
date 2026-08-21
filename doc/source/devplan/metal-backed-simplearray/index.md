@@ -120,6 +120,21 @@ payload. Instead, an active-access count prevents a command from being
 submitted until the recoverable CPU access ends. This avoids both an unnoticed
 race and a same-thread deadlock.
 
+Allocation ownership and access coordination are separate. A
+`ConcreteBufferRemover` only controls memory lifetime. An optional
+`ConcreteBufferAccess` owns device identity, pending work, host leases, and the
+sticky-export state. Ordinary malloc and external NumPy buffers have no access
+control block, so `begin()`, `end()`, `data()`, and `logical_data()` take one
+inline unlikely null-pointer branch and return the cached CPU pointer. They do
+not call a virtual no-op through the remover. Metal buffers enter the slower
+access path only at a host boundary.
+
+The first unrestricted Metal host export waits for pending work and sets an
+irreversible atomic export flag under the allocation lock. Later raw access
+observes that flag and returns without taking the mutex again. Scoped library
+operations acquire one lease and use unchecked pointers for their complete
+loop, rather than repeating synchronization checks for each element.
+
 The Metal runtime uses one serial command queue. `matmul_metal()` commits a
 command buffer and returns immediately. A subsequent operation can consume the
 pending output because queue order supplies the GPU-to-GPU dependency. CPU work
@@ -143,6 +158,8 @@ intentionally narrower:
 - Asynchronous GPU submission and resident matmul chaining on one queue.
 - Scoped C++ host read/write access and lifetime-bound Python NumPy views.
 - Scoped internal host access for `sum()`, `fill()`, and buffer copies.
+- Nullable access control that leaves the CPU/NumPy pointer path free of
+  remover dispatch and avoids repeated Metal export locks.
 - Allocation-wide dependency tracking shared by all views.
 - CPU and non-Metal builds retain their existing default behavior.
 
@@ -258,6 +275,9 @@ treated as hardware- and workload-scoped feasibility evidence.
 - All 244 C++ tests passed with `BUILD_METAL=ON`.
 - All six `make lint` checks passed. Local clang-format 19 reported only the
   expected version warning against the CI pin of 20.
+- An optimized arm64 compiler probe reduced CPU `ConcreteBuffer::data()` to
+  one access-state load, one conditional branch, and the cached pointer load;
+  the CPU path contains no virtual call or mutex operation.
 - Manual concurrency stress covered 500 host-export/submission races and 6000
   submissions with concurrent CPU copies and waits. A 100,000-cycle
   submit/wait run retained bounded resident memory.

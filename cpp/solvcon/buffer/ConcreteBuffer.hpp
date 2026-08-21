@@ -66,6 +66,29 @@ namespace detail
 // https://bugzilla.redhat.com/show_bug.cgi?id=1569374
 
 /**
+ * Coordinate access to storage that can be used asynchronously. CPU-only
+ * buffers leave this control block absent from their fast path.
+ */
+class ConcreteBufferAccess
+{
+public:
+    ConcreteBufferAccess() = default;
+    ConcreteBufferAccess(ConcreteBufferAccess const &) = delete;
+    ConcreteBufferAccess(ConcreteBufferAccess &&) = delete;
+    ConcreteBufferAccess & operator=(ConcreteBufferAccess const &) = delete;
+    ConcreteBufferAccess & operator=(ConcreteBufferAccess &&) = delete;
+    virtual ~ConcreteBufferAccess() = default;
+
+    virtual BufferDevice device() const noexcept = 0;
+    virtual void begin_host_access(BufferHostAccessMode) const = 0;
+    virtual void end_host_access(BufferHostAccessMode) const noexcept = 0;
+    virtual void export_host_access() const = 0;
+    virtual void wait() const = 0;
+    virtual bool ready() const = 0;
+    virtual bool host_exported() const noexcept = 0;
+}; /* end class ConcreteBufferAccess */
+
+/**
  * The base class of memory deallocator for ConcreteBuffer.  When the object
  * exists in ConcreteBufferDataDeleter (the unique_ptr deleter), the deleter
  * calls it to release the memory of the ConcreteBuffer data buffer.
@@ -102,13 +125,7 @@ struct ConcreteBufferRemover
         deallocate_memory(p, alignment);
     }
 
-    virtual BufferDevice device() const noexcept { return BufferDevice::Cpu; }
-    virtual void begin_internal_host_access(BufferHostAccessMode) const {}
-    virtual void end_internal_host_access(BufferHostAccessMode) const noexcept {}
-    virtual void prepare_host_access() const {}
-    virtual void wait() const {}
-    virtual bool ready() const { return true; }
-    virtual bool host_exported() const noexcept { return false; }
+    virtual ConcreteBufferAccess const * access_state() const noexcept { return nullptr; }
 
 }; /* end struct ConcreteBufferRemover */
 
@@ -179,12 +196,13 @@ private:
 public:
 
     using remover_type = detail::ConcreteBufferRemover;
+    using access_type = detail::ConcreteBufferAccess;
     using size_type = std::size_t;
 
     class HostAccessGuard
     {
     public:
-        HostAccessGuard(remover_type const * remover, BufferHostAccessMode mode);
+        HostAccessGuard(access_type const * access, BufferHostAccessMode mode);
 
         HostAccessGuard(HostAccessGuard const &) = delete;
         HostAccessGuard & operator=(HostAccessGuard const &) = delete;
@@ -194,7 +212,7 @@ public:
         ~HostAccessGuard();
 
     private:
-        remover_type const * m_remover;
+        access_type const * m_access;
         BufferHostAccessMode m_mode;
     }; /* end class HostAccessGuard */
 
@@ -282,6 +300,7 @@ public:
         , m_alignment(validate_alignment(alignment, "ConcreteBuffer::ConcreteBuffer"))
         , m_data(data, data_deleter_type(std::move(remover), m_alignment))
     {
+        m_access = has_remover() ? m_data.get_deleter().remover->access_state() : nullptr;
         m_begin = m_data.get(); // overwrite m_begin and m_end once we have the data
         m_end = m_begin + m_nbytes;
     }
@@ -335,40 +354,42 @@ public:
     /// Return the device that owns this storage.
     BufferDevice device() const noexcept
     {
-        return has_remover() ? m_data.get_deleter().remover->device() : BufferDevice::Cpu;
+        return m_access != nullptr ? m_access->device() : BufferDevice::Cpu;
     }
     /// Wait for the last asynchronous use of this storage.
     void wait() const
     {
-        if (has_remover())
+        if (m_access != nullptr)
         {
-            m_data.get_deleter().remover->wait();
+            m_access->wait();
         }
     }
     /// Return true when the last asynchronous use has completed.
     bool ready() const
     {
-        return !has_remover() || m_data.get_deleter().remover->ready();
+        return m_access == nullptr || m_access->ready();
     }
     /// Return true after an unrestricted host pointer has escaped.
     bool host_exported() const noexcept
     {
-        return has_remover() && m_data.get_deleter().remover->host_exported();
+        return m_access != nullptr && m_access->host_exported();
     }
 
     void prepare_buffer_host_access() const
     {
-        if (has_remover())
+        if (m_access != nullptr) [[unlikely]]
         {
-            m_data.get_deleter().remover->prepare_host_access();
+            m_access->export_host_access();
         }
     }
 
     /// Hold recoverable host access until the returned guard is destroyed.
     HostAccessGuard host_access(BufferHostAccessMode mode) const
     {
-        return HostAccessGuard(remover(), mode);
+        return HostAccessGuard(m_access, mode);
     }
+
+    access_type const * access_state() const noexcept { return m_access; }
 
     // NOLINTNEXTLINE(modernize-avoid-c-arrays,cppcoreguidelines-avoid-c-arrays)
     using unique_ptr_type = std::unique_ptr<int8_t, data_deleter_type>;
@@ -396,8 +417,6 @@ private:
 
     template <typename T>
     friend class SimpleArray;
-
-    remover_type const * remover() const noexcept { return has_remover() ? m_data.get_deleter().remover.get() : nullptr; }
 
     void copy_from(ConcreteBuffer const & other);
 
@@ -431,40 +450,41 @@ private:
 
     size_t m_nbytes;
     size_t m_alignment = 0; // Alignment of the data buffer in bytes. 0 means no alignment.
+    access_type const * m_access = nullptr;
     unique_ptr_type m_data;
 }; /* end class ConcreteBuffer */
 
-inline ConcreteBuffer::HostAccessGuard::HostAccessGuard(remover_type const * remover, BufferHostAccessMode mode)
-    : m_remover(remover)
+inline ConcreteBuffer::HostAccessGuard::HostAccessGuard(access_type const * access, BufferHostAccessMode mode)
+    : m_access(access)
     , m_mode(mode)
 {
-    if (m_remover != nullptr)
+    if (m_access != nullptr)
     {
-        m_remover->begin_internal_host_access(m_mode);
+        m_access->begin_host_access(m_mode);
     }
 }
 
 inline ConcreteBuffer::HostAccessGuard::HostAccessGuard(HostAccessGuard && other) noexcept
-    : m_remover(std::exchange(other.m_remover, nullptr))
+    : m_access(std::exchange(other.m_access, nullptr))
     , m_mode(other.m_mode)
 {
 }
 
 inline ConcreteBuffer::HostAccessGuard::~HostAccessGuard()
 {
-    if (m_remover != nullptr)
+    if (m_access != nullptr)
     {
-        m_remover->end_internal_host_access(m_mode);
+        m_access->end_host_access(m_mode);
     }
 }
 
 inline void ConcreteBuffer::copy_from(ConcreteBuffer const & other)
 {
-    using access_type = std::pair<remover_type const *, BufferHostAccessMode>;
-    std::array<access_type, 2> accesses{
-        access_type{remover(), BufferHostAccessMode::Write},
-        access_type{other.remover(), BufferHostAccessMode::Read}};
-    std::ranges::sort(accesses, std::less<>(), &access_type::first);
+    using access_pair_type = std::pair<access_type const *, BufferHostAccessMode>;
+    std::array<access_pair_type, 2> accesses{
+        access_pair_type{m_access, BufferHostAccessMode::Write},
+        access_pair_type{other.m_access, BufferHostAccessMode::Read}};
+    std::ranges::sort(accesses, std::less<>(), &access_pair_type::first);
 
     std::optional<HostAccessGuard> first;
     std::optional<HostAccessGuard> second;

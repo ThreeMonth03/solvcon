@@ -2878,7 +2878,7 @@ auto SimpleArray<T>::internal_host_read(Operation && operation) const
     static_assert(!std::is_pointer_v<result_type> && !std::is_reference_v<result_type>);
 
     typename buffer_type::HostAccessGuard access(
-        m_buffer ? m_buffer->remover() : nullptr,
+        m_buffer ? m_buffer->access_state() : nullptr,
         BufferHostAccessMode::Read);
     value_type const * data = m_buffer ? m_buffer->template data_unchecked<value_type>() : nullptr;
     return std::invoke(std::forward<Operation>(operation), data, m_logical_data);
@@ -2892,7 +2892,7 @@ auto SimpleArray<T>::internal_host_write(Operation && operation)
     static_assert(!std::is_pointer_v<result_type> && !std::is_reference_v<result_type>);
 
     typename buffer_type::HostAccessGuard access(
-        m_buffer ? m_buffer->remover() : nullptr,
+        m_buffer ? m_buffer->access_state() : nullptr,
         BufferHostAccessMode::Write);
     value_type * data = m_buffer ? m_buffer->template data_unchecked<value_type>() : nullptr;
     return std::invoke(std::forward<Operation>(operation), data, m_logical_data);

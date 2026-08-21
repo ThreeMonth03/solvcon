@@ -796,12 +796,14 @@ void wrap_Toggle(pybind11::module & mod)
             result["allocated_buffers"] = statistics.m_allocated_buffers;
             result["submitted_commands"] = statistics.m_submitted_commands;
             result["host_waits"] = statistics.m_host_waits;
+            result["host_exports"] = statistics.m_host_exports;
             return result;
 #else // SOLVCON_METAL
             py::dict result;
             result["allocated_buffers"] = 0;
             result["submitted_commands"] = 0;
             result["host_waits"] = 0;
+            result["host_exports"] = 0;
             return result;
 #endif // SOLVCON_METAL
         });
