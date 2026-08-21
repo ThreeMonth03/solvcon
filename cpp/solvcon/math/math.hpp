@@ -6,6 +6,7 @@
  */
 
 #include <solvcon/math/Complex.hpp>
+#include <solvcon/math/Float16.hpp>
 #include <solvcon/math/blas_compat.hpp>
 #ifdef SC_HAS_VENDOR_LAPACK
 #include <solvcon/math/lapack_compat.hpp>
@@ -79,6 +80,10 @@ inline auto abs(T const & val)
     if constexpr (is_complex_v<T>)
     {
         return std::sqrt(val.norm());
+    }
+    else if constexpr (is_float16_v<T>)
+    {
+        return half_float::abs(val);
     }
     else
     {

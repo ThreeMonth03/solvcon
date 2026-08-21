@@ -108,6 +108,26 @@ if(BUILD_METAL)
     add_compile_options(-DSOLVCON_METAL)
 endif()
 
+include(FetchContent)
+
+set(SOLVCON_HALF_VERSION "2.2.1")
+set(SOLVCON_HALF_SHA256
+    "76ddbf406e9d9b772ec73af2bf925b38b290b4390cc4064720a08d4b4bca0aa9")
+FetchContent_Declare(
+    half_float
+    URL
+        "https://sourceforge.net/projects/half/files/half/${SOLVCON_HALF_VERSION}/half-${SOLVCON_HALF_VERSION}.zip/download"
+    URL_HASH SHA256=${SOLVCON_HALF_SHA256}
+    DOWNLOAD_EXTRACT_TIMESTAMP ON
+)
+FetchContent_MakeAvailable(half_float)
+
+add_library(solvcon_half INTERFACE)
+target_include_directories(
+    solvcon_half SYSTEM INTERFACE
+    "${half_float_SOURCE_DIR}/include"
+)
+
 # The mcap subsystem reads MCAP recordings, and lz4 and zstd decompress their
 # chunks. No other part of solvcon needs those two libraries, so the option
 # keeps them out of a build that does not read recordings. The option starts

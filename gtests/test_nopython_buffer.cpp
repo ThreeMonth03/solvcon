@@ -65,6 +65,32 @@ TEST(SimpleArray, minmaxsum)
     EXPECT_EQ(arr_int.max(), 9);
 }
 
+TEST(SimpleArray, float16_storage_and_matmul)
+{
+    namespace sc = solvcon;
+
+    static_assert(sizeof(sc::Float16) == 2);
+    sc::SimpleArray<sc::Float16> lhs(sc::small_vector<ssize_t>{2, 3});
+    sc::SimpleArray<sc::Float16> rhs(sc::small_vector<ssize_t>{3, 2});
+    float const lhs_values[] = {1, 2, 3, 4, 5, 6};
+    float const rhs_values[] = {1, 2, 3, 4, 5, 6};
+    for (size_t i = 0; i < lhs.size(); ++i)
+    {
+        lhs[i] = sc::Float16(lhs_values[i]);
+    }
+    for (size_t i = 0; i < rhs.size(); ++i)
+    {
+        rhs[i] = sc::Float16(rhs_values[i]);
+    }
+
+    sc::SimpleArray<sc::Float16> const result = lhs.matmul(rhs);
+
+    EXPECT_FLOAT_EQ(22.0F, static_cast<float>(result(0, 0)));
+    EXPECT_FLOAT_EQ(28.0F, static_cast<float>(result(0, 1)));
+    EXPECT_FLOAT_EQ(49.0F, static_cast<float>(result(1, 0)));
+    EXPECT_FLOAT_EQ(64.0F, static_cast<float>(result(1, 1)));
+}
+
 TEST(SimpleArray, argminmax_axis_rejects_rank_zero_result)
 {
     using namespace solvcon;
@@ -182,6 +208,9 @@ TEST(SimpleArray, logical_data)
 
 TEST(SimpleArray_DataType, from_type)
 {
+    solvcon::DataType dt_half = solvcon::DataType::from<solvcon::Float16>();
+    EXPECT_EQ(dt_half.type(), solvcon::DataType::Float16);
+
     solvcon::DataType dt_double = solvcon::DataType::from<double>();
     EXPECT_EQ(dt_double.type(), solvcon::DataType::Float64);
 
@@ -191,13 +220,15 @@ TEST(SimpleArray_DataType, from_type)
 
 TEST(SimpleArray_DataType, from_string)
 {
+    solvcon::DataType dt_half = solvcon::DataType("float16");
+    EXPECT_EQ(dt_half.type(), solvcon::DataType::Float16);
+
     solvcon::DataType dt_double = solvcon::DataType("float64");
     EXPECT_EQ(dt_double.type(), solvcon::DataType::Float64);
 
     solvcon::DataType dt_bool = solvcon::DataType("bool");
     EXPECT_EQ(dt_bool.type(), solvcon::DataType::Bool);
 
-    EXPECT_THROW(solvcon::DataType("float16"), std::invalid_argument); // float16 does not exist
     EXPECT_THROW(solvcon::DataType("bool8"), std::invalid_argument); // bool8 does not exist
 }
 

@@ -714,6 +714,7 @@ class SOLVCON_PYTHON_WRAPPER_VISIBILITY WrapSimpleArray
             SC_DECL_WHERE_TYPED(Uint16)
             SC_DECL_WHERE_TYPED(Uint32)
             SC_DECL_WHERE_TYPED(Uint64)
+            SC_DECL_WHERE_TYPED(Float16)
             SC_DECL_WHERE_TYPED(Float32)
             SC_DECL_WHERE_TYPED(Float64)
         default:
