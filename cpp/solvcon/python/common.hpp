@@ -232,7 +232,7 @@ pybind11::array host_lease_to_ndarray(std::unique_ptr<Lease> lease, bool writabl
     namespace py = pybind11;
     Lease * owner = lease.get();
     py::capsule base(owner, [](void * ptr)
-                     { delete static_cast<Lease *>(ptr); });
+                     { std::default_delete<Lease>{}(static_cast<Lease *>(ptr)); });
     lease.release();
 
     std::vector<py::ssize_t> const shape(owner->shape().begin(), owner->shape().end());

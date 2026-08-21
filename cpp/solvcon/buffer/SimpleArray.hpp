@@ -1959,6 +1959,7 @@ public:
         HostAccessLease & operator=(HostAccessLease const &) = delete;
         HostAccessLease(HostAccessLease &&) noexcept = default;
         HostAccessLease & operator=(HostAccessLease &&) = delete;
+        ~HostAccessLease() = default;
 
         pointer_type data() const noexcept { return m_data; }
         shape_type const & shape() const noexcept { return m_shape; }

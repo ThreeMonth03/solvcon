@@ -35,12 +35,6 @@ public:
     }
 }; /* end class CpuBufferBackend */
 
-BufferBackend const & cpu_buffer_backend()
-{
-    static CpuBufferBackend backend;
-    return backend;
-}
-
 #ifndef SOLVCON_METAL
 class UnavailableBufferBackend final : public BufferBackend
 {
@@ -54,27 +48,33 @@ public:
     bool built() const noexcept override { return false; }
     bool available() const noexcept override { return false; }
 
-    std::shared_ptr<ConcreteBuffer> allocate(size_t, size_t) const override;
+    std::shared_ptr<ConcreteBuffer> allocate(size_t, size_t) const override
+    {
+        throw std::runtime_error(std::format(
+            "ConcreteBuffer: {} support is not built",
+            buffer_device_label(m_device)));
+    }
 
 private:
     BufferDevice m_device;
 }; /* end class UnavailableBufferBackend */
-
-std::shared_ptr<ConcreteBuffer> UnavailableBufferBackend::allocate(size_t, size_t) const
-{
-    throw std::runtime_error(std::format(
-        "ConcreteBuffer: {} support is not built",
-        buffer_device_label(m_device)));
-}
-
-BufferBackend const & unavailable_metal_backend()
-{
-    static UnavailableBufferBackend backend(BufferDevice::Metal);
-    return backend;
-}
 #endif // SOLVCON_METAL
 
 } /* end namespace */
+
+static BufferBackend const & cpu_buffer_backend()
+{
+    static CpuBufferBackend const backend;
+    return backend;
+}
+
+#ifndef SOLVCON_METAL
+static BufferBackend const & unavailable_metal_backend()
+{
+    static UnavailableBufferBackend const backend(BufferDevice::Metal);
+    return backend;
+}
+#endif // SOLVCON_METAL
 
 BufferBackend const & buffer_backend(BufferDevice device)
 {

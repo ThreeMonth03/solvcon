@@ -26,7 +26,7 @@ template <>
 struct format_descriptor<solvcon::Float16>
 {
     static constexpr char c = 'e';
-    static constexpr char value[2] = {c, '\0'};
+    static constexpr char value[2] = {c, '\0'}; // NOLINT(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
     static std::string format() { return std::string(1, c); }
 }; /* end struct format_descriptor */
 
