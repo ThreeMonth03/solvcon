@@ -29,6 +29,49 @@ The current runtime deliberately requires a unified-memory Metal device. A
 discrete GPU needs managed-memory dirty tracking and is not yet a resident
 implementation.
 
+## Portable backend boundary
+
+`ConcreteBuffer` does not select a platform API. Owned allocation crosses one
+backend-neutral interface:
+
+```text
+SimpleArray
+    |
+ConcreteBuffer
+    |
+device::BufferBackend
+    +-- CpuBufferBackend          every platform
+    +-- MetalManager              macOS build only
+    +-- future CUDA/HIP backend   separate task
+```
+
+`BufferDevice` identity and string conversion live in
+`device/BufferDevice.hpp`. `BufferBackend` separates compile-time support
+(`built()`) from runtime availability (`available()`) and owns the allocation
+entry point. The single dispatcher lives in `device/BufferBackend.cpp`.
+`ConcreteBuffer.hpp` contains neither Metal types nor Metal build guards.
+
+A build without Metal still supplies an unavailable Metal provider. Requesting
+Metal storage produces a runtime error, while CPU allocation follows the same
+provider contract. `device/CMakeLists.txt` includes generic sources on every
+platform and adds `metal.mm` only for a Metal build. Windows and Ubuntu never
+compile Objective-C++ or include an Apple framework.
+
+This boundary deliberately covers allocation, not every GPU API. The current
+`ConcreteBuffer` contract still requires non-CPU storage to expose a stable
+CPU-visible address because existing `SimpleArray` pointer APIs depend on it.
+Shared `MTLBuffer` satisfies that contract. A device-only CUDA or HIP backend
+needs a separate host-mapping or staging design before registration; it must
+not pretend that a device pointer is CPU-addressable.
+
+The separation leaves four reviewable follow-up tasks:
+
+1. Add a device identity and provider to the backend dispatcher.
+2. Implement storage ownership and allocation-wide access state in the new
+   platform directory.
+3. Add explicit compute operations without changing buffer allocation.
+4. Expose backend capabilities and operations in the Python binding.
+
 ## Public experiment
 
 CPU storage remains the default:
@@ -162,6 +205,8 @@ intentionally narrower:
   remover dispatch and avoids repeated Metal export locks.
 - Allocation-wide dependency tracking shared by all views.
 - CPU and non-Metal builds retain their existing default behavior.
+- Backend-neutral allocation dispatch keeps Metal types and build guards out
+  of `ConcreteBuffer`.
 
 The Python experiment is exposed through the typed classes such as
 `SimpleArrayFloat32`. The type-erased `solvcon.SimpleArray` (`SimpleArrayPlex`)
@@ -267,12 +312,14 @@ treated as hardware- and workload-scoped feasibility evidence.
 
 ## Verification
 
-- The Metal-enabled Python suite passed 1731 tests, with 557 platform or
+- The Metal-enabled Python suite passed 1730 tests, with 558 platform or
   optional-feature skips and 3 expected failures. The focused Metal suite
   passed 23 tests and 15 subtests, with 1 skip.
-- The Metal-disabled Python suite passed 1710 tests, with 578 skips and 3
-  expected failures.
-- All 244 C++ tests passed with `BUILD_METAL=ON`.
+- The Metal-disabled buffer and Metal contract subset passed 240 tests and 147
+  subtests, with 21 expected skips.
+- All 246 C++ tests passed independently with `BUILD_METAL=ON` and
+  `BUILD_METAL=OFF`. The two backend contract tests cover the CPU provider and
+  the build-dependent Metal provider.
 - All six `make lint` checks passed. Local clang-format 19 reported only the
   expected version warning against the CI pin of 20.
 - An optimized arm64 compiler probe reduced CPU `ConcreteBuffer::data()` to
@@ -326,10 +373,13 @@ The resulting decisions are:
    dependency scheduler, byte-range tracking, or multiple streams.
 6. Restrict the first resident implementation to unified-memory devices rather
    than pretending per-operation managed-memory synchronization is resident.
+7. Dispatch owned buffer allocation through `BufferBackend`, keeping platform
+   types and conditional compilation outside `ConcreteBuffer`.
 
-The implementation lives in `ConcreteBuffer.hpp`, `SimpleArray.hpp`, and
+The buffer contract lives in `ConcreteBuffer.hpp`; allocation dispatch lives in
+`device/BufferBackend.cpp`; and the Apple implementation lives in
 `device/metal/metal.mm`. Runtime coverage is in
-`tests/test_metal_simplearray.py`; the opt-in benchmark is
-`profiling/profile_metal_simplearray.py`.
+`tests/test_metal_simplearray.py` and `gtests/test_nopython_buffer.cpp`; the
+opt-in benchmark is `profiling/profile_metal_simplearray.py`.
 
 <!-- vim: set ft=markdown ff=unix fenc=utf8 et sw=2 ts=2 sts=2 tw=79: -->
