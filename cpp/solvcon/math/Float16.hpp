@@ -27,6 +27,19 @@ static_assert(std::is_trivially_copyable_v<Float16>);
 template <typename T>
 inline constexpr bool is_float16_v = std::is_same_v<std::remove_cv_t<T>, Float16>;
 
+template <typename T, typename U>
+T number_cast(U const & value)
+{
+    if constexpr (is_float16_v<T>)
+    {
+        return Float16(static_cast<float>(value));
+    }
+    else
+    {
+        return static_cast<T>(value);
+    }
+}
+
 template <typename T>
 inline constexpr bool is_floating_number_v = std::is_floating_point_v<T> || is_float16_v<T>;
 

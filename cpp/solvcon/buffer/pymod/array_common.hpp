@@ -47,7 +47,7 @@ public:
             PyErr_Clear();
             return false;
         }
-        value = solvcon::Float16(static_cast<float>(number));
+        value = solvcon::number_cast<solvcon::Float16>(number);
         return true;
     }
 

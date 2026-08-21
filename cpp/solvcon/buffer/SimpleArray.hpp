@@ -545,7 +545,7 @@ public:
             sum += sv[i] * weight[i];
             total_weight += weight[i];
         }
-        if (total_weight == static_cast<value_type>(0))
+        if (total_weight == number_cast<value_type>(0))
         {
             throw std::runtime_error("SimpleArray::average_op(): total weight is zero");
         }
@@ -587,7 +587,7 @@ public:
             sum += athis->at(sidx) * weight.at(sidx);
             total_weight += weight.at(sidx);
         } while (range.next(sidx));
-        if (total_weight == static_cast<value_type>(0))
+        if (total_weight == number_cast<value_type>(0))
         {
             throw std::runtime_error("SimpleArray::average(): total weight is zero");
         }
@@ -648,7 +648,7 @@ public:
             }
         }
         // NOLINTEND(bugprone-branch-clone)
-        return acc / static_cast<real_type>(n - ddof);
+        return acc / number_cast<real_type>(n - ddof);
     }
 
     auto var(const shape_type & axis, size_t ddof) const
@@ -694,14 +694,14 @@ public:
             // already performed this conversion, and narrowing `n` first
             // would move the product into a signed type that overflows
             // instead of the defined size_t wrap.
-            acc = static_cast<real_type>(acc - n * mu * mu);
+            acc = number_cast<real_type>(acc - n * mu * mu);
         }
-        return acc / static_cast<real_type>(n - ddof);
+        return acc / number_cast<real_type>(n - ddof);
     }
 
     real_type std_op(small_vector<value_type> & sv, size_t ddof) const
     {
-        return static_cast<real_type>(std::sqrt(var_op(sv, ddof)));
+        return number_cast<real_type>(std::sqrt(var_op(sv, ddof)));
     }
 
     auto std(const shape_type & axis, size_t ddof) const
@@ -712,7 +712,7 @@ public:
     real_type std(size_t ddof) const
     {
         auto athis = static_cast<A const *>(this);
-        return static_cast<real_type>(std::sqrt(athis->var(ddof)));
+        return number_cast<real_type>(std::sqrt(athis->var(ddof)));
     }
 
     value_type min() const
@@ -751,7 +751,7 @@ public:
         {
             for (size_t i = 0; i < athis->size(); ++i)
             {
-                ret.data(i) = static_cast<value_type>(solvcon::abs(athis->data(i)));
+                ret.data(i) = number_cast<value_type>(solvcon::abs(athis->data(i)));
             }
         }
         return ret;
@@ -853,7 +853,7 @@ private:
     // real_type rather than from a size_t, so the conversion needs two steps.
     static value_type convert_count(size_t count)
     {
-        return static_cast<value_type>(static_cast<real_type>(count));
+        return number_cast<value_type>(number_cast<real_type>(count));
     }
 
     static value_type wrapping_sub(value_type lhs, value_type rhs) { return wrapping_op(lhs, rhs, std::minus<>{}); }
@@ -1220,11 +1220,11 @@ detail::SimpleArrayMixinCalculators<A, T>::wrapping_op(value_type lhs, value_typ
     if constexpr (std::is_integral_v<value_type> && !is_bool_v<value_type>)
     {
         using unsigned_type = std::make_unsigned_t<value_type>;
-        return static_cast<value_type>(op(static_cast<unsigned_type>(lhs), static_cast<unsigned_type>(rhs)));
+        return number_cast<value_type>(op(static_cast<unsigned_type>(lhs), static_cast<unsigned_type>(rhs)));
     }
     else
     {
-        return static_cast<value_type>(op(lhs, rhs));
+        return number_cast<value_type>(op(lhs, rhs));
     }
 }
 
@@ -1307,7 +1307,7 @@ detail::SimpleArrayMixinCalculators<A, T>::median_op(small_vector<value_type> & 
             return v1;
         }
         value_type const v2 = simd::max(sv.begin(), sv.begin() + n / 2);
-        value_type const result = static_cast<value_type>(v1 + v2) / static_cast<value_type>(2.0);
+        value_type const result = number_cast<value_type>(v1 + v2) / number_cast<value_type>(2.0);
         return result;
     }
 }
@@ -1363,18 +1363,18 @@ detail::SimpleArrayMixinCalculators<A, T>::median_freq(small_vector<value_type> 
     if constexpr (std::is_same_v<value_type, uint8_t>)
     {
         const int m = (b1 + b2) / 2;
-        return static_cast<value_type>(m);
+        return number_cast<value_type>(m);
     }
     else if constexpr (std::is_same_v<value_type, int8_t>)
     {
         const int v1 = b1 - 128;
         const int v2 = b2 - 128;
-        return static_cast<value_type>((v1 + v2) / 2);
+        return number_cast<value_type>((v1 + v2) / 2);
     }
     else
     {
         const uint32_t ones = freq[1];
-        return static_cast<value_type>(ones * 2 >= n);
+        return number_cast<value_type>(ones * 2 >= n);
     }
 }
 
@@ -1736,11 +1736,11 @@ public:
     {
         validate_positive("eye", n);
         shape_type const shape{n, n};
-        A result(shape, static_cast<value_type>(0));
+        A result(shape, number_cast<value_type>(0));
 
         for (ssize_t i = 0; i < n; ++i)
         {
-            result(i, i) = static_cast<value_type>(1);
+            result(i, i) = number_cast<value_type>(1);
         }
 
         return result;
@@ -1750,7 +1750,7 @@ public:
     {
         validate_positive("scaled_eye", n);
         shape_type const shape{n, n};
-        A result(shape, static_cast<value_type>(0));
+        A result(shape, number_cast<value_type>(0));
 
         for (ssize_t i = 0; i < n; ++i)
         {
@@ -1787,7 +1787,7 @@ public:
             {
                 for (ssize_t j = 0; j < athis->shape(1); ++j)
                 {
-                    result(i, j) = (result(i, j) + (*athis)(j, i).conj()) / static_cast<value_type>(2.0);
+                    result(i, j) = (result(i, j) + (*athis)(j, i).conj()) / number_cast<value_type>(2.0);
                 }
             }
         }
@@ -1797,7 +1797,7 @@ public:
             {
                 for (ssize_t j = 0; j < athis->shape(1); ++j)
                 {
-                    result(i, j) = (result(i, j) + (*athis)(j, i)) / static_cast<value_type>(2.0);
+                    result(i, j) = (result(i, j) + (*athis)(j, i)) / number_cast<value_type>(2.0);
                 }
             }
         }
@@ -1808,7 +1808,7 @@ public:
     {
         auto athis = static_cast<A const *>(this);
         validate_square("trace");
-        auto result = static_cast<value_type>(0);
+        auto result = number_cast<value_type>(0);
         for (ssize_t i = 0; i < athis->shape(0); ++i)
         {
             result += (*athis)(i, i);
@@ -3891,7 +3891,7 @@ SimpleArray<uint64_t> detail::SimpleArrayMixinSearch<A, T>::argwhere() const
     ssize_t count = 0;
     for (size_t i = 0; i < athis->size(); ++i)
     {
-        if (athis->data(i) != value_type(0))
+        if (athis->data(i) != number_cast<value_type>(0))
         {
             ++count;
         }
@@ -3904,7 +3904,7 @@ SimpleArray<uint64_t> detail::SimpleArrayMixinSearch<A, T>::argwhere() const
     ssize_t idx = 0;
     for (size_t i = 0; i < athis->size(); ++i)
     {
-        if (athis->data(i) == value_type(0))
+        if (athis->data(i) == number_cast<value_type>(0))
         {
             continue;
         }

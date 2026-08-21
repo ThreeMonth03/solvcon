@@ -43,6 +43,21 @@ class Float16ArrayTC(unittest.TestCase):
         np.testing.assert_array_equal(np.abs(lhs_np), lhs.abs().ndarray)
         self.assertEqual(float(lhs_np.sum(dtype="float16")), lhs.sum())
         self.assertEqual(float(lhs_np.mean(dtype="float16")), lhs.mean())
+        self.assertEqual(float(lhs_np.var(dtype="float16")), lhs.var())
+        self.assertEqual(float(lhs_np.std(dtype="float16")), lhs.std())
+        self.assertEqual(float(np.median(lhs_np)), lhs.median())
+
+    def test_cpu_matrix_helpers(self):
+        np.testing.assert_array_equal(
+            np.eye(3, dtype="float16"),
+            sc.SimpleArrayFloat16.eye(3).ndarray)
+
+        source = np.array([[1, 3], [5, 7]], dtype="float16")
+        array = sc.SimpleArrayFloat16(array=source)
+        np.testing.assert_array_equal(
+            np.array([[1, 4], [4, 7]], dtype="float16"),
+            array.symmetrize().ndarray)
+        self.assertEqual(8.0, array.trace())
 
     def test_cpu_matmul_uses_float16_storage(self):
         lhs_np = np.arange(15, dtype="float16").reshape(3, 5) / 8
@@ -69,9 +84,10 @@ class Float16ArrayTC(unittest.TestCase):
             collector.as_array().ndarray)
 
         target = sc.SimpleArrayFloat16((2, 3))
-        source = np.arange(6, dtype="float16").reshape(2, 3)
+        source = np.arange(6, dtype="float64").reshape(2, 3) / 3
         target[...] = source
-        np.testing.assert_array_equal(source, target.ndarray)
+        np.testing.assert_array_equal(source.astype("float16"),
+                                      target.ndarray)
 
 
 # vim: set ff=unix fenc=utf8 et sw=4 ts=4 sts=4 tw=79:
