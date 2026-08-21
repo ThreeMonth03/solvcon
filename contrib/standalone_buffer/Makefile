@@ -3,6 +3,11 @@
 
 SCROOT := $(realpath ../..)
 SETUPROOT ?= $(SCROOT)/$(BUILD_PATH)/standalone_buffer
+HALF_VERSION := 2.2.1
+HALF_ROOT := $(SETUPROOT)/thirdparty/half
+HALF_ARCHIVE := $(HALF_ROOT)/half-$(HALF_VERSION).zip
+HALF_HEADER := $(HALF_ROOT)/include/half.hpp
+HALF_URL := https://sourceforge.net/projects/half/files/half/$(HALF_VERSION)/half-$(HALF_VERSION).zip/download
 
 ifeq ($(SETUPROOT),)
 	SETUPROOT := local_standalone_buffer
@@ -11,6 +16,7 @@ endif
 CFLAGS := \
 	-std=c++23 -fPIC \
 	-I$(SETUPROOT) \
+	-isystem $(HALF_ROOT)/include \
 	-I$(shell python3 -c 'import numpy as np; print(np.get_include())') \
 	-I$(shell python3 -c 'import pybind11; print(pybind11.get_include())') \
 	-I$(shell $(DIRNAME_PYTHON)/python3-config --prefix)/include \
@@ -22,6 +28,10 @@ LDFLAGS := \
 	-L$(shell $(DIRNAME_PYTHON)/python3-config --prefix)/lib \
 	-lpython$(shell python3 -c 'import sys; print("%d.%d" % sys.version_info[0:2])') \
 	$(shell $(DIRNAME_PYTHON)/python3-config --ldflags) \
+
+ifeq ($(shell uname),Darwin)
+	LDFLAGS += -framework Accelerate
+endif
 
 MODPATH := $(SETUPROOT)/modbuf$(shell $(DIRNAME_PYTHON)/python3-config --extension-suffix)
 
@@ -63,7 +73,13 @@ $(SETUPROOT)/buffer_pymod.o: $(SETUPROOT)/solvcon/buffer/pymod/buffer_pymod.cpp 
 $(SETUPROOT)/BufferExpander.o: $(SETUPROOT)/solvcon/buffer/BufferExpander.cpp Makefile
 	c++ $(CFLAGS) -c $< -o $@
 
+$(SETUPROOT)/ConcreteBuffer.o: $(SETUPROOT)/solvcon/buffer/ConcreteBuffer.cpp Makefile
+	c++ $(CFLAGS) -c $< -o $@
+
 $(SETUPROOT)/SimpleArray.o: $(SETUPROOT)/solvcon/buffer/SimpleArray.cpp Makefile
+	c++ $(CFLAGS) -c $< -o $@
+
+$(SETUPROOT)/BufferBackend.o: $(SETUPROOT)/solvcon/device/BufferBackend.cpp Makefile
 	c++ $(CFLAGS) -c $< -o $@
 
 $(SETUPROOT)/blas_compat.o: $(SETUPROOT)/solvcon/math/blas_compat.cpp Makefile
@@ -80,7 +96,9 @@ $(SETUPROOT)/radix_tree.o: $(SETUPROOT)/solvcon/profiling/RadixTree.cpp Makefile
 
 OBJS = \
 	$(SETUPROOT)/BufferExpander.o \
+	$(SETUPROOT)/ConcreteBuffer.o \
 	$(SETUPROOT)/SimpleArray.o \
+	$(SETUPROOT)/BufferBackend.o \
 	$(SETUPROOT)/blas_compat.o \
 	$(SETUPROOT)/wrap_ConcreteBuffer.o \
 	$(SETUPROOT)/wrap_SimpleArray.o \
@@ -95,7 +113,17 @@ OBJS = \
 	$(SETUPROOT)/radix_tree.o \
 	$(SETUPROOT)/modbuf.o
 
-$(MODPATH): Makefile $(OBJS)
+$(HALF_ARCHIVE): Makefile
+	mkdir -p $(HALF_ROOT)
+	curl -fsSL --retry 3 --output $@.tmp $(HALF_URL)
+	mv $@.tmp $@
+
+$(HALF_HEADER): $(HALF_ARCHIVE) fetch_half.py
+	python3 fetch_half.py $(HALF_ARCHIVE) $(HALF_ROOT)
+
+$(OBJS): | $(HALF_HEADER)
+
+$(MODPATH): Makefile $(HALF_HEADER) $(OBJS)
 	c++ $(LDFLAGS) $(OBJS) -o $@
 
 .PHONY: copy
@@ -106,6 +134,10 @@ copy:
 	mkdir -p $(SETUPROOT)/solvcon
 	cp $(SCROOT)/cpp/solvcon/base.hpp $(SETUPROOT)/solvcon/base.hpp
 	cp -a $(SCROOT)/cpp/solvcon/buffer $(SETUPROOT)/solvcon/buffer
+	mkdir -p $(SETUPROOT)/solvcon/device
+	cp $(SCROOT)/cpp/solvcon/device/BufferBackend.cpp $(SETUPROOT)/solvcon/device/BufferBackend.cpp
+	cp $(SCROOT)/cpp/solvcon/device/BufferBackend.hpp $(SETUPROOT)/solvcon/device/BufferBackend.hpp
+	cp $(SCROOT)/cpp/solvcon/device/BufferDevice.hpp $(SETUPROOT)/solvcon/device/BufferDevice.hpp
 	mkdir -p $(SETUPROOT)/solvcon/python
 	cp $(SCROOT)/cpp/solvcon/python/common.hpp $(SETUPROOT)/solvcon/python/common.hpp
 	cp -a $(SCROOT)/cpp/solvcon/toggle $(SETUPROOT)/solvcon/toggle
