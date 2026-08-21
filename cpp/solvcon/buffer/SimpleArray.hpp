@@ -18,6 +18,10 @@
 #include <solvcon/math/math.hpp>
 #include <solvcon/simd/simd.hpp>
 
+#ifdef SOLVCON_METAL
+#include <solvcon/device/metal/metal.hpp>
+#endif
+
 // TODO: Solve circular include between <solvcon/toggle/toggle.hpp> and SimpleArray class.
 // Since it will happen circulate include when using <solvcon/toggle/toggle.hpp>,
 // I use <solvcon/profiling/RadixTree.hpp> instead.
@@ -54,7 +58,7 @@ template <typename T>
 concept IntegralType = std::is_integral_v<T>;
 
 template <typename T>
-concept ArithmeticType = std::is_arithmetic_v<T>;
+concept ArithmeticType = is_arithmetic_number_v<T>;
 
 template <typename T>
 concept SimpleArrayType = requires(T t) {
@@ -261,7 +265,9 @@ public:
     A & fill(value_type const & value)
     {
         auto athis = static_cast<A *>(this);
-        std::fill(athis->begin(), athis->end(), value);
+        athis->internal_host_write(
+            [&](value_type * data, value_type *)
+            { std::fill_n(data, athis->size(), value); });
         return *athis;
     }
 
@@ -305,14 +311,17 @@ public:
         {
             return zero();
         }
-        // Either C- or F-contiguous arrays occupy a single dense block in
-        // memory, so a linear buffer sweep visits every element exactly
-        // once, in C order or F order respectively.
-        if (athis->is_c_contiguous() || athis->is_f_contiguous())
-        {
-            return sum_contiguous(athis->data(), n);
-        }
-        return sum_strided(athis->logical_data(), athis->shape(), athis->stride());
+        return athis->internal_host_read(
+            [&](value_type const * data, value_type const * logical_data)
+            {
+                // Either C- or F-contiguous arrays occupy a single dense
+                // block, so a linear sweep visits every element exactly once.
+                if (athis->is_c_contiguous() || athis->is_f_contiguous())
+                {
+                    return sum_contiguous(data, n);
+                }
+                return sum_strided(logical_data, athis->shape(), athis->stride());
+            });
     }
 
 private:
@@ -529,8 +538,8 @@ public:
         {
             throw std::runtime_error("SimpleArray::average_op(): weight size does not match array size");
         }
-        value_type sum = 0;
-        value_type total_weight = 0;
+        value_type sum{};
+        value_type total_weight{};
         for (size_t i = 0; i < n; ++i)
         {
             sum += sv[i] * weight[i];
@@ -569,8 +578,8 @@ public:
                 throw std::runtime_error("SimpleArray::average(): weight shape does not match array shape");
             }
         }
-        value_type sum = 0;
-        value_type total_weight = 0;
+        value_type sum{};
+        value_type total_weight{};
         auto const range = IndexRange(*athis);
         shape_type sidx = range.first();
         do
@@ -588,7 +597,7 @@ public:
     value_type mean_op(small_vector<value_type> & sv) const
     {
         const size_t n = sv.size();
-        value_type sum = 0;
+        value_type sum{};
         for (const auto & v : sv)
         {
             sum += v;
@@ -620,7 +629,7 @@ public:
             throw std::runtime_error("SimpleArray::var_op(): ddof must be less than the number of elements");
         }
         value_type const mu = mean_op(sv);
-        real_type acc = 0;
+        real_type acc{};
         // The complex and real branches differ; clang-tidy cannot tell the
         // type-dependent expressions apart in the uninstantiated template.
         // NOLINTBEGIN(bugprone-branch-clone)
@@ -639,7 +648,7 @@ public:
             }
         }
         // NOLINTEND(bugprone-branch-clone)
-        return acc / static_cast<real_type>(n - ddof);
+        return acc / convert_real_count(n - ddof);
     }
 
     auto var(const shape_type & axis, size_t ddof) const
@@ -659,7 +668,7 @@ public:
         auto const range = IndexRange(*athis);
         shape_type sidx = range.first();
         value_type const mu = athis->mean();
-        real_type acc = 0;
+        real_type acc{};
         if constexpr (is_complex_v<value_type>)
         {
             do
@@ -687,7 +696,7 @@ public:
             // instead of the defined size_t wrap.
             acc = static_cast<real_type>(acc - n * mu * mu);
         }
-        return acc / static_cast<real_type>(n - ddof);
+        return acc / convert_real_count(n - ddof);
     }
 
     real_type std_op(small_vector<value_type> & sv, size_t ddof) const
@@ -738,11 +747,11 @@ public:
     {
         auto athis = static_cast<A const *>(this);
         A ret(*athis);
-        if constexpr (!std::is_same_v<bool, std::remove_const_t<value_type>> && std::is_signed_v<value_type>)
+        if constexpr (!std::is_same_v<bool, std::remove_const_t<value_type>> && is_signed_number_v<value_type>)
         {
             for (size_t i = 0; i < athis->size(); ++i)
             {
-                ret.data(i) = static_cast<value_type>(std::abs(athis->data(i)));
+                ret.data(i) = static_cast<value_type>(solvcon::abs(athis->data(i)));
             }
         }
         return ret;
@@ -844,7 +853,26 @@ private:
     // real_type rather than from a size_t, so the conversion needs two steps.
     static value_type convert_count(size_t count)
     {
-        return static_cast<value_type>(static_cast<real_type>(count));
+        if constexpr (is_float16_v<value_type>)
+        {
+            return float16_cast(count);
+        }
+        else
+        {
+            return static_cast<value_type>(static_cast<real_type>(count));
+        }
+    }
+
+    static real_type convert_real_count(size_t count)
+    {
+        if constexpr (is_float16_v<real_type>)
+        {
+            return float16_cast(count);
+        }
+        else
+        {
+            return static_cast<real_type>(count);
+        }
     }
 
     static value_type wrapping_sub(value_type lhs, value_type rhs) { return wrapping_op(lhs, rhs, std::minus<>{}); }
@@ -1187,6 +1215,9 @@ public:
 
     A matmul(A const & other) const;
     A & imatmul(A const & other);
+#ifdef SOLVCON_METAL
+    A matmul_metal(A const & other) const;
+#endif
 
 private:
     static void find_two_bins(const uint32_t * freq, size_t n, int & bin1, int & bin2);
@@ -1395,6 +1426,76 @@ A & SimpleArrayMixinCalculators<A, T>::imatmul(A const & other)
     return *athis;
 }
 
+#ifdef SOLVCON_METAL
+template <typename A, typename T>
+A SimpleArrayMixinCalculators<A, T>::matmul_metal(A const & other) const
+{
+    using value_type = typename A::value_type;
+    if constexpr (!std::is_same_v<value_type, float> && !is_float16_v<value_type>)
+    {
+        throw std::invalid_argument("matmul_metal supports only float16 and float32");
+    }
+    else
+    {
+        auto const * athis = static_cast<A const *>(this);
+        MatmulPlan plan = MatmulPlan::make(*athis, other);
+        if (athis->device() != BufferDevice::Metal || other.device() != BufferDevice::Metal)
+        {
+            throw std::invalid_argument("matmul_metal requires Metal-backed operands");
+        }
+        if (athis->ndim() != 2 || other.ndim() != 2 || plan.has_batch_axes())
+        {
+            throw std::invalid_argument("matmul_metal currently supports only two-dimensional matrices");
+        }
+        if (plan.rows() == 0 || plan.columns() == 0)
+        {
+            return A(plan.output_shape(), BufferDevice::Metal);
+        }
+        if (plan.inner_size() == 0)
+        {
+            return A(plan.output_shape(), value_type{}, BufferDevice::Metal);
+        }
+
+        bool const lhs_supported = plan.lhs_inner_stride() == 1 &&
+                                   plan.lhs_row_stride() >= plan.inner_size();
+        bool const rhs_supported = plan.rhs_column_stride() == 1 &&
+                                   plan.rhs_inner_stride() >= plan.columns();
+        if (!lhs_supported || !rhs_supported)
+        {
+            throw std::invalid_argument("matmul_metal requires positive row-major matrix strides");
+        }
+
+        A output(plan.output_shape(), BufferDevice::Metal);
+        device::MetalGemmOperation const operation{
+            .m_data_type = is_float16_v<value_type>
+                               ? device::MetalGemmDataType::Float16
+                               : device::MetalGemmDataType::Float32,
+            .m_rows = plan.rows(),
+            .m_columns = plan.columns(),
+            .m_inner_size = plan.inner_size(),
+            .m_lhs = {
+                .m_buffer = &athis->buffer(),
+                .m_byte_offset = athis->data_offset(),
+                .m_leading_dimension = plan.lhs_row_stride(),
+            },
+            .m_rhs = {
+                .m_buffer = &other.buffer(),
+                .m_byte_offset = other.data_offset(),
+                .m_leading_dimension = plan.rhs_inner_stride(),
+            },
+            .m_output = {
+                .m_buffer = &output.buffer(),
+                .m_byte_offset = output.data_offset(),
+                .m_leading_dimension = plan.columns(),
+            },
+        };
+        device::MetalManager::instance().gemm_async(operation);
+        return output;
+    }
+}
+
+#endif
+
 /**
  * Find the two bins that correspond to the median values for frequency-based median calculation.
  * This function is used for small data types (uint8_t, int8_t, bool) where frequency counting
@@ -1462,7 +1563,7 @@ bool nan_aware_less(V const & lhs, V const & rhs)
         }
         return nan_aware_less(lhs.imag(), rhs.imag());
     }
-    else if constexpr (std::is_floating_point_v<V>)
+    else if constexpr (is_floating_number_v<V>)
     {
         if (std::isnan(rhs))
         {
@@ -1584,7 +1685,7 @@ void SimpleArrayMixinSort<A, T>::sort()
         // Complex numbers are sorted lexicographically by real and then imaginary parts.
         std::sort(athis->begin(), athis->end(), NanAwareLess{});
     }
-    else if constexpr (std::is_floating_point_v<value_type>)
+    else if constexpr (is_floating_number_v<value_type>)
     {
         // Partition the array into two parts: non-NaN values and NaN values.
         auto * const mid = std::partition(athis->begin(), athis->end(), [](value_type const & v)
@@ -1852,12 +1953,49 @@ private:
 
     using internal_types = detail::SimpleArrayInternalTypes<T>;
 
+    template <typename A, typename U>
+    friend class detail::SimpleArrayMixinSum;
+    template <typename A, typename U>
+    friend class detail::SimpleArrayMixinModifiers;
+
 public:
     template <typename U>
     using rebind = SimpleArray<U>;
     using value_type = typename internal_types::value_type;
     using shape_type = typename internal_types::shape_type;
     using buffer_type = typename internal_types::buffer_type;
+
+    template <bool Writable>
+    class HostAccessLease
+    {
+    public:
+        using array_type = std::conditional_t<Writable, SimpleArray, SimpleArray const>;
+        using pointer_type = std::conditional_t<Writable, value_type *, value_type const *>;
+
+        explicit HostAccessLease(array_type & array);
+
+        HostAccessLease(HostAccessLease const &) = delete;
+        HostAccessLease & operator=(HostAccessLease const &) = delete;
+        HostAccessLease(HostAccessLease &&) noexcept = default;
+        HostAccessLease & operator=(HostAccessLease &&) = delete;
+        ~HostAccessLease() = default;
+
+        pointer_type data() const noexcept { return m_data; }
+        shape_type const & shape() const noexcept { return m_shape; }
+        shape_type const & stride() const noexcept { return m_stride; }
+
+    private:
+        static constexpr BufferHostAccessMode ACCESS_MODE = Writable ? BufferHostAccessMode::Write : BufferHostAccessMode::Read;
+
+        std::shared_ptr<buffer_type> m_buffer;
+        typename buffer_type::HostAccessGuard m_access;
+        pointer_type m_data;
+        shape_type m_shape;
+        shape_type m_stride;
+    }; /* end class HostAccessLease */
+
+    using host_read_lease_type = HostAccessLease<false>;
+    using host_write_lease_type = HostAccessLease<true>;
 
     enum class ArrayOrder : std::uint8_t
     {
@@ -1889,6 +2027,11 @@ public:
     {
     }
 
+    SimpleArray(ssize_t length, BufferDevice device, size_t alignment = 0)
+        : SimpleArray(shape_type{length}, device, alignment)
+    {
+    }
+
     template <InputIterator InputIt>
     SimpleArray(InputIt first, InputIt last, size_t alignment = 0)
         : SimpleArray(last - first, alignment)
@@ -1898,24 +2041,36 @@ public:
 
     // NOLINTNEXTLINE(modernize-pass-by-value)
     explicit SimpleArray(shape_type const & shape)
-        : m_shape(shape)
-        , m_stride(calc_stride(m_shape))
+        : SimpleArray(shape, BufferDevice::Cpu, 0)
     {
-        if (!m_shape.empty())
-        {
-            m_buffer = buffer_type::construct(static_cast<size_t>(storage_size(m_shape, m_stride)) * ITEMSIZE, 0);
-            update_data_pointers();
-        }
     }
 
     // NOLINTNEXTLINE(modernize-pass-by-value)
     SimpleArray(shape_type const & shape, size_t alignment, with_alignment_t const & /* unnamed argument for tagging */)
+        : SimpleArray(shape, BufferDevice::Cpu, alignment)
+    {
+    }
+
+    // NOLINTNEXTLINE(modernize-pass-by-value)
+    SimpleArray(shape_type const & shape, BufferDevice device, size_t alignment = 0)
         : m_shape(shape)
         , m_stride(calc_stride(m_shape))
     {
-        if (!m_shape.empty())
+        if (m_shape.empty())
         {
-            m_buffer = buffer_type::construct(static_cast<size_t>(storage_size(m_shape, m_stride)) * ITEMSIZE, alignment);
+            if (device != BufferDevice::Cpu)
+            {
+                throw std::invalid_argument(std::format(
+                    "SimpleArray: scalar {} storage is not supported",
+                    buffer_device_label(device)));
+            }
+        }
+        else
+        {
+            m_buffer = buffer_type::construct(
+                static_cast<size_t>(storage_size(m_shape, m_stride)) * ITEMSIZE,
+                alignment,
+                device);
             update_data_pointers();
         }
     }
@@ -1932,8 +2087,19 @@ public:
         std::fill(begin(), end(), value);
     }
 
+    SimpleArray(shape_type const & shape, value_type const & value, BufferDevice device, size_t alignment = 0)
+        : SimpleArray(shape, device, alignment)
+    {
+        std::fill_n(m_logical_data, size(), value);
+    }
+
     explicit SimpleArray(std::vector<ssize_t> const & shape)
         : SimpleArray(shape_type(shape))
+    {
+    }
+
+    SimpleArray(std::vector<ssize_t> const & shape, BufferDevice device, size_t alignment = 0)
+        : SimpleArray(shape_type(shape), device, alignment)
     {
     }
 
@@ -2176,18 +2342,47 @@ public:
     /// Return the underlying buffer alignment in bytes. If no buffer or no alignment, return 0.
     size_t alignment() const noexcept { return m_buffer ? m_buffer->alignment() : 0; }
 
+    /// Return the device that owns the underlying storage.
+    BufferDevice device() const noexcept { return m_buffer ? m_buffer->device() : BufferDevice::Cpu; }
+    /// Return true when the last asynchronous use has completed.
+    bool ready() const { return !m_buffer || m_buffer->ready(); }
+    /// Wait for the last asynchronous use without exporting host memory.
+    void wait() const
+    {
+        if (m_buffer)
+        {
+            m_buffer->wait();
+        }
+    }
+    /// Return true after a raw host pointer or view has escaped.
+    bool host_exported() const noexcept { return m_buffer && m_buffer->host_exported(); }
+
+    /// Deep-copy this logical storage to the requested device.
+    SimpleArray to(BufferDevice target_device) const;
+
+    /**
+     * Hold read-only host access without permanently exporting the buffer.
+     * A pointer obtained from the lease must not outlive the lease.
+     */
+    host_read_lease_type host_read() const { return host_read_lease_type(*this); }
+    /**
+     * Hold writable host access without permanently exporting the buffer.
+     * A pointer obtained from the lease must not outlive the lease.
+     */
+    host_write_lease_type host_write() { return host_write_lease_type(*this); }
+
     using iterator = T *;
     using const_iterator = T const *;
 
-    iterator begin() noexcept { return data(); }
-    iterator end() noexcept { return data() + size(); }
-    const_iterator begin() const noexcept { return data(); }
-    const_iterator end() const noexcept { return data() + size(); }
-    const_iterator cbegin() const noexcept { return begin(); }
-    const_iterator cend() const noexcept { return end(); }
+    iterator begin() { return data(); }
+    iterator end() { return data() + size(); }
+    const_iterator begin() const { return data(); }
+    const_iterator end() const { return data() + size(); }
+    const_iterator cbegin() const { return begin(); }
+    const_iterator cend() const { return end(); }
 
-    value_type const & operator[](size_t it) const noexcept { return data(it); }
-    value_type & operator[](size_t it) noexcept { return data(it); }
+    value_type const & operator[](size_t it) const { return data(it); }
+    value_type & operator[](size_t it) { return data(it); }
 
     value_type const & at(ssize_t it) const
     {
@@ -2254,7 +2449,7 @@ public:
         m_nghost = nghost;
         if (bool(*this))
         {
-            m_body = calc_body(logical_data(), m_stride, m_nghost);
+            m_body = calc_body(m_logical_data, m_stride, m_nghost);
         }
     }
 
@@ -2345,9 +2540,17 @@ public:
     value_type & operator()(Args... args) { return *vptr(args...); }
 
     template <typename... Args>
-    value_type const * vptr(Args... args) const { return m_body + buffer_offset(m_stride, args...); }
+    value_type const * vptr(Args... args) const
+    {
+        m_buffer->prepare_buffer_host_access();
+        return m_body + buffer_offset(m_stride, args...);
+    }
     template <typename... Args>
-    value_type * vptr(Args... args) { return m_body + buffer_offset(m_stride, args...); }
+    value_type * vptr(Args... args)
+    {
+        m_buffer->prepare_buffer_host_access();
+        return m_body + buffer_offset(m_stride, args...);
+    }
 
     std::span<value_type> as_span()
     {
@@ -2370,20 +2573,55 @@ public:
     value_type const * data() const { return buffer().template data<value_type>(); }
     value_type * data() { return buffer().template data<value_type>(); }
 
-    value_type const * logical_data() const { return m_logical_data; }
-    value_type * logical_data() { return m_logical_data; }
+    value_type const * logical_data() const
+    {
+        if (m_buffer)
+        {
+            m_buffer->prepare_buffer_host_access();
+        }
+        return m_logical_data;
+    }
+    value_type * logical_data()
+    {
+        if (m_buffer)
+        {
+            m_buffer->prepare_buffer_host_access();
+        }
+        return m_logical_data;
+    }
 
     buffer_type const & buffer() const { return *m_buffer; }
     buffer_type & buffer() { return *m_buffer; }
 
-    value_type const * body() const { return m_body; }
-    value_type * body() { return m_body; }
+    value_type const * body() const
+    {
+        if (m_buffer)
+        {
+            m_buffer->prepare_buffer_host_access();
+        }
+        return m_body;
+    }
+    value_type * body()
+    {
+        if (m_buffer)
+        {
+            m_buffer->prepare_buffer_host_access();
+        }
+        return m_body;
+    }
+
+    size_t data_offset() const noexcept { return logical_data_offset(); }
 
     bool is_c_contiguous() const { return is_c_contiguous(m_shape, m_stride); }
     bool is_f_contiguous() const { return is_f_contiguous(m_shape, m_stride); }
 
 private:
-    size_t logical_data_offset() const;
+    template <typename Operation>
+    auto internal_host_read(Operation && operation) const;
+    template <typename Operation>
+    auto internal_host_write(Operation && operation);
+
+    size_t logical_data_offset() const noexcept;
     void update_data_pointers(size_t data_offset = 0);
     void copy_logical_into(SimpleArray & out) const;
 
@@ -2647,6 +2885,45 @@ private:
 }; /* end class SimpleArray */
 
 template <typename T>
+template <bool Writable>
+SimpleArray<T>::HostAccessLease<Writable>::HostAccessLease(array_type & array)
+    : m_buffer(array.m_buffer)
+    , m_access(m_buffer ? m_buffer->host_access(ACCESS_MODE) : typename buffer_type::HostAccessGuard(nullptr, ACCESS_MODE))
+    , m_data(array.m_logical_data)
+    , m_shape(array.m_shape)
+    , m_stride(array.m_stride)
+{
+}
+
+template <typename T>
+template <typename Operation>
+auto SimpleArray<T>::internal_host_read(Operation && operation) const
+{
+    using result_type = std::invoke_result_t<Operation, value_type const *, value_type const *>;
+    static_assert(!std::is_pointer_v<result_type> && !std::is_reference_v<result_type>);
+
+    typename buffer_type::HostAccessGuard access(
+        m_buffer ? m_buffer->access_state() : nullptr,
+        BufferHostAccessMode::Read);
+    value_type const * data = m_buffer ? m_buffer->template data_unchecked<value_type>() : nullptr;
+    return std::invoke(std::forward<Operation>(operation), data, m_logical_data);
+}
+
+template <typename T>
+template <typename Operation>
+auto SimpleArray<T>::internal_host_write(Operation && operation)
+{
+    using result_type = std::invoke_result_t<Operation, value_type *, value_type *>;
+    static_assert(!std::is_pointer_v<result_type> && !std::is_reference_v<result_type>);
+
+    typename buffer_type::HostAccessGuard access(
+        m_buffer ? m_buffer->access_state() : nullptr,
+        BufferHostAccessMode::Write);
+    value_type * data = m_buffer ? m_buffer->template data_unchecked<value_type>() : nullptr;
+    return std::invoke(std::forward<Operation>(operation), data, m_logical_data);
+}
+
+template <typename T>
 template <size_t N>
 std::mdspan<typename SimpleArray<T>::value_type, std::dextents<ssize_t, N>, detail::SignedStrideLayout>
 SimpleArray<T>::as_mdspan()
@@ -2685,20 +2962,42 @@ SimpleArray<T>::as_mdspan() const
 }
 
 template <typename T>
-size_t SimpleArray<T>::logical_data_offset() const
+SimpleArray<T> SimpleArray<T>::to(BufferDevice target_device) const
+{
+    if (!m_buffer)
+    {
+        if (target_device != BufferDevice::Cpu)
+        {
+            throw std::invalid_argument(std::format(
+                "SimpleArray: scalar {} storage is not supported",
+                buffer_device_label(target_device)));
+        }
+        SimpleArray result(m_shape, BufferDevice::Cpu);
+        result.m_nghost = m_nghost;
+        return result;
+    }
+    size_t const data_offset = logical_data_offset();
+    SimpleArray result(m_shape, m_stride, m_buffer->clone_to(target_device), data_offset);
+    result.m_nghost = m_nghost;
+    result.update_data_pointers(data_offset);
+    return result;
+}
+
+template <typename T>
+size_t SimpleArray<T>::logical_data_offset() const noexcept
 {
     if (!m_logical_data)
     {
         return 0;
     }
-    value_type const * data_ptr = m_buffer->template data<value_type>();
+    value_type const * data_ptr = m_buffer->template data_unchecked<value_type>();
     return static_cast<size_t>(m_logical_data - data_ptr) * ITEMSIZE;
 }
 
 template <typename T>
 void SimpleArray<T>::update_data_pointers(size_t data_offset)
 {
-    value_type * data_ptr = m_buffer ? m_buffer->template data<value_type>() : nullptr;
+    value_type * data_ptr = m_buffer ? m_buffer->template data_unchecked<value_type>() : nullptr;
     m_logical_data = data_ptr ? data_ptr + data_offset / ITEMSIZE : nullptr;
     m_body = calc_body(m_logical_data, m_stride, m_nghost);
 }
@@ -3356,7 +3655,7 @@ size_t detail::SimpleArrayMixinSearch<A, T>::argmin() const
         {
             value_type const current_value = ptr[i];
 
-            if constexpr (std::is_floating_point_v<value_type>)
+            if constexpr (is_floating_number_v<value_type>)
             {
                 if (std::isnan(current_value))
                 {
@@ -3384,7 +3683,7 @@ size_t detail::SimpleArrayMixinSearch<A, T>::argmin() const
     {
         value_type const current_value = *(ptr + unchecked_logical_offset(*athis, idx));
 
-        if constexpr (std::is_floating_point_v<value_type>)
+        if constexpr (is_floating_number_v<value_type>)
         {
             if (std::isnan(current_value))
             {
@@ -3424,7 +3723,7 @@ size_t detail::SimpleArrayMixinSearch<A, T>::argmax() const
         {
             value_type const current_value = ptr[i];
 
-            if constexpr (std::is_floating_point_v<value_type>)
+            if constexpr (is_floating_number_v<value_type>)
             {
                 if (std::isnan(current_value))
                 {
@@ -3452,7 +3751,7 @@ size_t detail::SimpleArrayMixinSearch<A, T>::argmax() const
     {
         value_type const current_value = *(ptr + unchecked_logical_offset(*athis, idx));
 
-        if constexpr (std::is_floating_point_v<value_type>)
+        if constexpr (is_floating_number_v<value_type>)
         {
             if (std::isnan(current_value))
             {
@@ -3516,7 +3815,7 @@ SimpleArray<uint64_t> detail::SimpleArrayMixinSearch<A, T>::argmin(ssize_t axis)
         {
             ssize_t const current_index = input_index + i * axis_stride;
             value_type const current_value = (*athis)[static_cast<size_t>(current_index)];
-            if constexpr (std::is_floating_point_v<value_type>)
+            if constexpr (is_floating_number_v<value_type>)
             {
                 if (std::isnan(current_value))
                 {
@@ -3584,7 +3883,7 @@ SimpleArray<uint64_t> detail::SimpleArrayMixinSearch<A, T>::argmax(ssize_t axis)
         {
             ssize_t const current_index = input_index + i * axis_stride;
             value_type const current_value = (*athis)[static_cast<size_t>(current_index)];
-            if constexpr (std::is_floating_point_v<value_type>)
+            if constexpr (is_floating_number_v<value_type>)
             {
                 if (std::isnan(current_value))
                 {
@@ -3778,6 +4077,7 @@ using SimpleArrayUint8 = SimpleArray<uint8_t>;
 using SimpleArrayUint16 = SimpleArray<uint16_t>;
 using SimpleArrayUint32 = SimpleArray<uint32_t>;
 using SimpleArrayUint64 = SimpleArray<uint64_t>;
+using SimpleArrayFloat16 = SimpleArray<Float16>;
 using SimpleArrayFloat32 = SimpleArray<float>;
 using SimpleArrayFloat64 = SimpleArray<double>;
 using SimpleArrayComplex64 = SimpleArray<Complex<float>>;
@@ -3786,10 +4086,10 @@ using SimpleArrayComplex128 = SimpleArray<Complex<double>>;
 /**
  * Runtime element-type tag mirroring the scalar types a SimpleArray supports.
  *
- * Covers bool, the signed and unsigned 8- to 64-bit integers, the 32- and
- * 64-bit floats, and the 64- and 128-bit complex types. Converts to and from
- * its enum and a type string, and DataType::from<T>() maps a C++ type to its
- * tag.
+ * Covers bool, the signed and unsigned 8- to 64-bit integers, the 16-, 32-,
+ * and 64-bit floats, and the 64- and 128-bit complex types. Converts to and
+ * from its enum and a type string, and DataType::from<T>() maps a C++ type to
+ * its tag.
  *
  * @ingroup group_core
  */
@@ -3808,6 +4108,7 @@ public:
         Uint16,
         Uint32,
         Uint64,
+        Float16,
         Float32,
         Float64,
         Complex64,

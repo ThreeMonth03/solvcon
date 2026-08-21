@@ -15,20 +15,60 @@
 #include <solvcon/base.hpp>
 #include <solvcon/buffer/BufferBase.hpp>
 #include <solvcon/buffer/small_vector.hpp>
+#include <solvcon/device/BufferDevice.hpp>
 
 #include <algorithm>
+#include <array>
+#include <cstdint>
+#include <functional>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
+#include <string_view>
+#include <utility>
 
 namespace solvcon
 {
+
+template <typename T>
+class SimpleArray;
+
+/// Access mode held by a scoped host lease.
+enum class BufferHostAccessMode : std::uint8_t
+{
+    Read,
+    Write,
+}; /* end enum class BufferHostAccessMode */
 
 namespace detail
 {
 
 // Take the remover and deleter classes outside ConcreteBuffer to work around
 // https://bugzilla.redhat.com/show_bug.cgi?id=1569374
+
+/**
+ * Coordinate access to storage that can be used asynchronously. CPU-only
+ * buffers leave this control block absent from their fast path.
+ */
+class ConcreteBufferAccess
+{
+public:
+    ConcreteBufferAccess() = default;
+    ConcreteBufferAccess(ConcreteBufferAccess const &) = delete;
+    ConcreteBufferAccess(ConcreteBufferAccess &&) = delete;
+    ConcreteBufferAccess & operator=(ConcreteBufferAccess const &) = delete;
+    ConcreteBufferAccess & operator=(ConcreteBufferAccess &&) = delete;
+    virtual ~ConcreteBufferAccess() = default;
+
+    virtual BufferDevice device() const noexcept = 0;
+    virtual void begin_host_access(BufferHostAccessMode) const = 0;
+    virtual void end_host_access(BufferHostAccessMode) const noexcept = 0;
+    virtual void export_host_access() const = 0;
+    virtual void wait() const = 0;
+    virtual bool ready() const = 0;
+    virtual bool host_exported() const noexcept = 0;
+}; /* end class ConcreteBufferAccess */
 
 /**
  * The base class of memory deallocator for ConcreteBuffer.  When the object
@@ -66,6 +106,8 @@ struct ConcreteBufferRemover
     {
         deallocate_memory(p, alignment);
     }
+
+    virtual ConcreteBufferAccess const * access_state() const noexcept { return nullptr; }
 
 }; /* end struct ConcreteBufferRemover */
 
@@ -122,7 +164,7 @@ struct ConcreteBufferDataDeleter
  */
 class ConcreteBuffer
     : public std::enable_shared_from_this<ConcreteBuffer>
-    , public BufferBase<ConcreteBuffer>
+    , public BufferBase<ConcreteBuffer, true>
 {
 
 private:
@@ -136,12 +178,33 @@ private:
 public:
 
     using remover_type = detail::ConcreteBufferRemover;
+    using access_type = detail::ConcreteBufferAccess;
     using size_type = std::size_t;
+
+    class HostAccessGuard
+    {
+    public:
+        HostAccessGuard(access_type const * access, BufferHostAccessMode mode);
+
+        HostAccessGuard(HostAccessGuard const &) = delete;
+        HostAccessGuard & operator=(HostAccessGuard const &) = delete;
+        HostAccessGuard(HostAccessGuard && other) noexcept;
+        HostAccessGuard & operator=(HostAccessGuard &&) = delete;
+
+        ~HostAccessGuard();
+
+    private:
+        access_type const * m_access;
+        BufferHostAccessMode m_mode;
+    }; /* end class HostAccessGuard */
 
     static std::shared_ptr<ConcreteBuffer> construct(size_t nbytes, size_t alignment = 0)
     {
         return std::make_shared<ConcreteBuffer>(nbytes, alignment, ctor_passkey());
     }
+
+    /// Allocate an owned buffer on the requested device.
+    static std::shared_ptr<ConcreteBuffer> construct(size_t nbytes, size_t alignment, BufferDevice target_device);
 
     /*
      * This factory method is dangerous since the data pointer passed in will
@@ -162,12 +225,10 @@ public:
     /// Construct an empty ConcreteBuffer with no data and no alignment.
     static std::shared_ptr<ConcreteBuffer> construct() { return construct(0, 0); }
 
-    std::shared_ptr<ConcreteBuffer> clone() const
-    {
-        std::shared_ptr<ConcreteBuffer> ret = construct(nbytes(), m_alignment);
-        std::copy_n(data(), size(), (*ret).data());
-        return ret;
-    }
+    std::shared_ptr<ConcreteBuffer> clone() const { return clone_to(device()); }
+
+    /// Deep-copy the bytes into storage owned by the requested device.
+    std::shared_ptr<ConcreteBuffer> clone_to(BufferDevice target_device) const;
 
     /**
      * @param[in] nbytes
@@ -177,7 +238,7 @@ public:
      *      0 means no alignment. Valid values are 0, 16, 32, or 64.
      */
     ConcreteBuffer(size_t nbytes, size_t alignment, const ctor_passkey &)
-        : BufferBase<ConcreteBuffer>() // don't delegate m_begin and m_end, which will be overwritten later
+        : BufferBase<ConcreteBuffer, true>() // don't delegate m_begin and m_end, which will be overwritten later
         , m_nbytes(nbytes)
         , m_alignment(validate_alignment(alignment, "ConcreteBuffer::ConcreteBuffer"))
         , m_data(allocate(nbytes, m_alignment))
@@ -200,11 +261,12 @@ public:
      */
     // NOLINTNEXTLINE(readability-non-const-parameter)
     ConcreteBuffer(size_t nbytes, int8_t * data, std::unique_ptr<remover_type> && remover, size_t alignment, const ctor_passkey &)
-        : BufferBase<ConcreteBuffer>() // don't delegate m_begin and m_end, which will be overwritten later
+        : BufferBase<ConcreteBuffer, true>() // don't delegate m_begin and m_end, which will be overwritten later
         , m_nbytes(nbytes)
         , m_alignment(validate_alignment(alignment, "ConcreteBuffer::ConcreteBuffer"))
         , m_data(data, data_deleter_type(std::move(remover), m_alignment))
     {
+        m_access = has_remover() ? m_data.get_deleter().remover->access_state() : nullptr;
         m_begin = m_data.get(); // overwrite m_begin and m_end once we have the data
         m_end = m_begin + m_nbytes;
     }
@@ -221,7 +283,7 @@ public:
     // Avoid enabled_shared_from_this copy constructor
     // NOLINTNEXTLINE(bugprone-copy-constructor-init)
     ConcreteBuffer(ConcreteBuffer const & other)
-        : BufferBase<ConcreteBuffer>() // don't delegate m_begin and m_end, which will be overwritten later
+        : BufferBase<ConcreteBuffer, true>() // don't delegate m_begin and m_end, which will be overwritten later
         , m_nbytes(other.m_nbytes)
         , m_alignment(other.m_alignment)
         , m_data(allocate(other.m_nbytes, other.m_alignment))
@@ -232,7 +294,7 @@ public:
         {
             throw std::out_of_range("Buffer size mismatch");
         }
-        std::copy_n(other.data(), size(), data());
+        copy_from(other);
     }
 #ifdef __GNUC__
 #pragma GCC diagnostic pop
@@ -245,7 +307,7 @@ public:
             {
                 throw std::out_of_range("Buffer size mismatch");
             }
-            std::copy_n(other.data(), size(), data());
+            copy_from(other);
         }
         return *this;
     }
@@ -255,6 +317,45 @@ public:
     remover_type & get_remover() { return *m_data.get_deleter().remover; }
 
     size_type alignment() const noexcept { return m_alignment; }
+    /// Return the device that owns this storage.
+    BufferDevice device() const noexcept
+    {
+        return m_access != nullptr ? m_access->device() : BufferDevice::Cpu;
+    }
+    /// Wait for the last asynchronous use of this storage.
+    void wait() const
+    {
+        if (m_access != nullptr)
+        {
+            m_access->wait();
+        }
+    }
+    /// Return true when the last asynchronous use has completed.
+    bool ready() const
+    {
+        return m_access == nullptr || m_access->ready();
+    }
+    /// Return true after an unrestricted host pointer has escaped.
+    bool host_exported() const noexcept
+    {
+        return m_access != nullptr && m_access->host_exported();
+    }
+
+    void prepare_buffer_host_access() const
+    {
+        if (m_access != nullptr) [[unlikely]]
+        {
+            m_access->export_host_access();
+        }
+    }
+
+    /// Hold recoverable host access until the returned guard is destroyed.
+    HostAccessGuard host_access(BufferHostAccessMode mode) const
+    {
+        return HostAccessGuard(m_access, mode);
+    }
+
+    access_type const * access_state() const noexcept { return m_access; }
 
     // NOLINTNEXTLINE(modernize-avoid-c-arrays,cppcoreguidelines-avoid-c-arrays)
     using unique_ptr_type = std::unique_ptr<int8_t, data_deleter_type>;
@@ -262,6 +363,25 @@ public:
     static constexpr const char * name() { return "ConcreteBuffer"; }
 
 private:
+    template <typename T>
+    T const * data_unchecked() const noexcept
+    {
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+        return reinterpret_cast<T const *>(m_begin);
+    }
+
+    template <typename T>
+    T * data_unchecked() noexcept
+    {
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+        return reinterpret_cast<T *>(m_begin);
+    }
+
+    template <typename T>
+    friend class SimpleArray;
+
+    void copy_from(ConcreteBuffer const & other);
+
     static unique_ptr_type allocate(size_t nbytes, size_t alignment)
     {
         unique_ptr_type ret(nullptr, data_deleter_type());
@@ -292,8 +412,57 @@ private:
 
     size_t m_nbytes;
     size_t m_alignment = 0; // Alignment of the data buffer in bytes. 0 means no alignment.
+    access_type const * m_access = nullptr;
     unique_ptr_type m_data;
 }; /* end class ConcreteBuffer */
+
+inline ConcreteBuffer::HostAccessGuard::HostAccessGuard(access_type const * access, BufferHostAccessMode mode)
+    : m_access(access)
+    , m_mode(mode)
+{
+    if (m_access != nullptr)
+    {
+        m_access->begin_host_access(m_mode);
+    }
+}
+
+inline ConcreteBuffer::HostAccessGuard::HostAccessGuard(HostAccessGuard && other) noexcept
+    : m_access(std::exchange(other.m_access, nullptr))
+    , m_mode(other.m_mode)
+{
+}
+
+inline ConcreteBuffer::HostAccessGuard::~HostAccessGuard()
+{
+    if (m_access != nullptr)
+    {
+        m_access->end_host_access(m_mode);
+    }
+}
+
+inline void ConcreteBuffer::copy_from(ConcreteBuffer const & other)
+{
+    using access_pair_type = std::pair<access_type const *, BufferHostAccessMode>;
+    std::array<access_pair_type, 2> accesses{
+        access_pair_type{m_access, BufferHostAccessMode::Write},
+        access_pair_type{other.m_access, BufferHostAccessMode::Read}};
+    std::ranges::sort(accesses, std::less<>(), &access_pair_type::first);
+
+    std::optional<HostAccessGuard> first;
+    std::optional<HostAccessGuard> second;
+    if (accesses[0].first != nullptr)
+    {
+        BufferHostAccessMode const mode = accesses[0].first == accesses[1].first
+                                              ? BufferHostAccessMode::Write
+                                              : accesses[0].second;
+        first.emplace(accesses[0].first, mode);
+    }
+    if (accesses[1].first != nullptr && accesses[1].first != accesses[0].first)
+    {
+        second.emplace(accesses[1].first, accesses[1].second);
+    }
+    std::copy_n(other.data_unchecked<int8_t>(), size(), data_unchecked<int8_t>());
+}
 
 } /* end namespace solvcon */
 

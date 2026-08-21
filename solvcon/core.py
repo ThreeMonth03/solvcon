@@ -28,6 +28,7 @@ list_of_buffer = [
     'SimpleArrayUint16',
     'SimpleArrayUint32',
     'SimpleArrayUint64',
+    'SimpleArrayFloat16',
     'SimpleArrayFloat32',
     'SimpleArrayFloat64',
     'SimpleArrayComplex64',
@@ -41,6 +42,7 @@ list_of_buffer = [
     'SimpleCollectorUint16',
     'SimpleCollectorUint32',
     'SimpleCollectorUint64',
+    'SimpleCollectorFloat16',
     'SimpleCollectorFloat32',
     'SimpleCollectorFloat64',
     'SimpleCollectorComplex64',
@@ -96,6 +98,8 @@ list_of_toggle = [
     'ToggleSubscription',
     'METAL_BUILT',
     'metal_running',
+    'metal_statistics',
+    'reset_metal_statistics',
 ]
 
 # transform directory symbols

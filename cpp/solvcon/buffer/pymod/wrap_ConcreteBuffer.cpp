@@ -43,7 +43,10 @@ WrapConcreteBuffer::WrapConcreteBuffer(pybind11::module & mod, char const * pyna
                 }),
             py::arg("array"),
             py::arg("alignment") = 0)
-        .def_timed("clone", &wrapped_type::clone)
+        .def_timed(
+            "clone",
+            [](wrapped_type const & self)
+            { return self.clone(); })
         .def_property_readonly("nbytes", &wrapped_type::nbytes)
         .def_property_readonly("alignment", &wrapped_type::alignment)
         .def("__len__", &wrapped_type::size)

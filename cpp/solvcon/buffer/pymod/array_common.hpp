@@ -22,8 +22,59 @@
 namespace pybind11
 {
 
+template <>
+struct format_descriptor<solvcon::Float16>
+{
+    static constexpr char c = 'e';
+    static constexpr char value[2] = {c, '\0'}; // NOLINT(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
+    static std::string format() { return std::string(1, c); }
+}; /* end struct format_descriptor */
+
 namespace detail
 {
+
+template <>
+struct type_caster<solvcon::Float16>
+{
+public:
+    PYBIND11_TYPE_CASTER(solvcon::Float16, const_name("float16"));
+
+    bool load(pybind11::handle src, bool)
+    {
+        double const number = PyFloat_AsDouble(src.ptr());
+        if (number == -1.0 && PyErr_Occurred())
+        {
+            PyErr_Clear();
+            return false;
+        }
+        value = solvcon::float16_cast(number);
+        return true;
+    }
+
+    static pybind11::handle cast(
+        solvcon::Float16 src,
+        pybind11::return_value_policy,
+        pybind11::handle)
+    {
+        return pybind11::float_(static_cast<float>(src)).release();
+    }
+}; /* end struct type_caster */
+
+template <>
+struct npy_format_descriptor<solvcon::Float16>
+{
+    static constexpr auto name = const_name("float16");
+
+    static pybind11::dtype dtype()
+    {
+        return pybind11::dtype("float16");
+    }
+
+    static std::string format()
+    {
+        return pybind11::format_descriptor<solvcon::Float16>::format();
+    }
+}; /* end struct npy_format_descriptor */
 
 template <>
 struct npy_format_descriptor<solvcon::Complex<double>>
@@ -235,6 +286,17 @@ public:
 
     static pybind11::buffer_info get_buffer_info(SimpleArray<T> & array)
     {
+        T * logical_data = nullptr;
+        if (array.device() != BufferDevice::Cpu)
+        {
+            pybind11::gil_scoped_release const release;
+            logical_data = array.logical_data();
+        }
+        else
+        {
+            logical_data = array.logical_data();
+        }
+
         std::vector<pybind11::ssize_t> stride;
         auto const itemsize = static_cast<pybind11::ssize_t>(sizeof(T));
         for (ssize_t const i : array.stride())
@@ -261,7 +323,7 @@ public:
         }
 
         return pybind11::buffer_info(
-            array.logical_data(), /* Pointer to buffer */
+            logical_data, /* Pointer to buffer */
             sizeof(T), /* Size of one scalar */
             format, /* Python struct-style format descriptor */
             array.ndim(), /* Number of dimensions */

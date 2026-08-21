@@ -6,6 +6,7 @@
  */
 
 #include <solvcon/math/Complex.hpp>
+#include <solvcon/math/Float16.hpp>
 #include <solvcon/math/blas_compat.hpp>
 #ifdef SC_HAS_VENDOR_LAPACK
 #include <solvcon/math/lapack_compat.hpp>
@@ -34,7 +35,7 @@ inline constexpr T pow(T base, std::integral_constant<size_t, N> /*unused*/)
 
 template <typename T>
 // NOLINTNEXTLINE(google-runtime-float,modernize-use-std-numbers,modernize-avoid-c-style-cast)
-constexpr T pi_v = std::enable_if_t<std::is_floating_point_v<T>, T>(3.141592653589793238462643383279502884L);
+constexpr T pi_v = std::enable_if_t<is_floating_number_v<T>, T>(3.141592653589793238462643383279502884L);
 
 } /* end namespace detail */
 
@@ -79,6 +80,10 @@ inline auto abs(T const & val)
     if constexpr (is_complex_v<T>)
     {
         return std::sqrt(val.norm());
+    }
+    else if constexpr (is_float16_v<T>)
+    {
+        return half_float::abs(val);
     }
     else
     {

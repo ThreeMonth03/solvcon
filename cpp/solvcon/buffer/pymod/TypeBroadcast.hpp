@@ -82,7 +82,14 @@ struct TypeBroadcastImpl
             {
                 auto * ptr_out = arr_out.logical_data() + offset_out;
                 // FIXME: NOLINTNEXTLINE(bugprone-signed-char-misuse,cert-str34-c)
-                *ptr_out = static_cast<out_type>(*ptr_in);
+                if constexpr (is_float16_v<out_type>)
+                {
+                    *ptr_out = float16_cast(*ptr_in);
+                }
+                else
+                {
+                    *ptr_out = static_cast<out_type>(*ptr_in);
+                }
             }
             else
             {
@@ -185,6 +192,10 @@ struct TypeBroadcast
         else if (dtype_is_type<uint64_t>(arr_in))
         {
             TypeBroadcastImpl<T, uint64_t>::broadcast(arr_out, slices, arr_in);
+        }
+        else if (dtype_is_type<Float16>(arr_in))
+        {
+            TypeBroadcastImpl<T, Float16>::broadcast(arr_out, slices, arr_in);
         }
         else if (dtype_is_type<float>(arr_in))
         {

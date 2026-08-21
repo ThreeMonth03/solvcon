@@ -46,6 +46,7 @@ static auto execute_callback_with_typed_array(A & arrayplex, C && callback)
         SC_DECL_RUN_CALLBACK_WITH_TYPED_ARRAY(DataType::Uint16, SimpleArrayUint16)
         SC_DECL_RUN_CALLBACK_WITH_TYPED_ARRAY(DataType::Uint32, SimpleArrayUint32)
         SC_DECL_RUN_CALLBACK_WITH_TYPED_ARRAY(DataType::Uint64, SimpleArrayUint64)
+        SC_DECL_RUN_CALLBACK_WITH_TYPED_ARRAY(DataType::Float16, SimpleArrayFloat16)
         SC_DECL_RUN_CALLBACK_WITH_TYPED_ARRAY(DataType::Float32, SimpleArrayFloat32)
         SC_DECL_RUN_CALLBACK_WITH_TYPED_ARRAY(DataType::Float64, SimpleArrayFloat64)
         SC_DECL_RUN_CALLBACK_WITH_TYPED_ARRAY(DataType::Complex64, SimpleArrayComplex64)
@@ -88,6 +89,7 @@ static void verify_python_value_datatype(pybind11::object const & value, DataTyp
         }
         break;
     }
+    case DataType::Float16:
     case DataType::Float32:
     case DataType::Float64:
     {
@@ -143,6 +145,7 @@ static pybind11::object get_typed_array_value(const SimpleArrayPlex & array_plex
         SC_DECL_GET_TYPED_ARRAY_VALUE_BY_INDEX(DataType::Uint16, SimpleArrayUint16)
         SC_DECL_GET_TYPED_ARRAY_VALUE_BY_INDEX(DataType::Uint32, SimpleArrayUint32)
         SC_DECL_GET_TYPED_ARRAY_VALUE_BY_INDEX(DataType::Uint64, SimpleArrayUint64)
+        SC_DECL_GET_TYPED_ARRAY_VALUE_BY_INDEX(DataType::Float16, SimpleArrayFloat16)
         SC_DECL_GET_TYPED_ARRAY_VALUE_BY_INDEX(DataType::Float32, SimpleArrayFloat32)
         SC_DECL_GET_TYPED_ARRAY_VALUE_BY_INDEX(DataType::Float64, SimpleArrayFloat64)
         SC_DECL_GET_TYPED_ARRAY_VALUE_BY_INDEX(DataType::Complex64, SimpleArrayComplex64)
@@ -177,6 +180,7 @@ static pybind11::object get_typed_array(const SimpleArrayPlex & array_plex)
         SC_DECL_GET_TYPED_ARRAY(DataType::Uint16, SimpleArrayUint16)
         SC_DECL_GET_TYPED_ARRAY(DataType::Uint32, SimpleArrayUint32)
         SC_DECL_GET_TYPED_ARRAY(DataType::Uint64, SimpleArrayUint64)
+        SC_DECL_GET_TYPED_ARRAY(DataType::Float16, SimpleArrayFloat16)
         SC_DECL_GET_TYPED_ARRAY(DataType::Float32, SimpleArrayFloat32)
         SC_DECL_GET_TYPED_ARRAY(DataType::Float64, SimpleArrayFloat64)
         SC_DECL_GET_TYPED_ARRAY(DataType::Complex64, SimpleArrayComplex64)

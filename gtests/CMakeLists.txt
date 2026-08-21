@@ -91,6 +91,7 @@ add_executable(
     ${SOLVCON_TOGGLE_SOURCES}
     ${SOLVCON_PROFILING_SOURCES}
     ${SOLVCON_BUFFER_SOURCES}
+    ${SOLVCON_DEVICE_SOURCES}
     ${SOLVCON_SERIALIZATION_SOURCES}
     ${SOLVCON_TRANSFORM_SOURCES}
     ${SOLVCON_MATH_SOURCES}
@@ -103,8 +104,22 @@ target_link_libraries(
     test_nopython
     GTest::gtest_main
     GTest::gmock_main
+    solvcon_half
     ${APPLE_FWK_ACCELERATE}
 )
+
+if (BUILD_METAL)
+    target_link_libraries(
+        test_nopython
+        ${APPLE_FWK_FOUNDATION}
+        ${APPLE_FWK_METAL}
+        ${APPLE_FWK_MPS}
+    )
+    target_compile_options(
+        test_nopython PRIVATE
+        "$<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>"
+    )
+endif () # BUILD_METAL
 
 include(GoogleTest)
 gtest_discover_tests(test_nopython PROPERTIES LABELS "cpp")

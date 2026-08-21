@@ -105,8 +105,35 @@ set(QT_NO_PRIVATE_MODULE_WARNING ON)
 option(BUILD_METAL "build with Metal" OFF)
 message(STATUS "BUILD_METAL: ${BUILD_METAL}")
 if(BUILD_METAL)
+    if(NOT APPLE)
+        message(FATAL_ERROR "BUILD_METAL requires macOS")
+    endif()
+    enable_language(OBJCXX)
+    set(CMAKE_OBJCXX_STANDARD 23)
+    set(CMAKE_OBJCXX_STANDARD_REQUIRED ON)
+    set(CMAKE_OBJCXX_EXTENSIONS OFF)
     add_compile_options(-DSOLVCON_METAL)
 endif()
+
+include(FetchContent)
+
+set(SOLVCON_HALF_VERSION "2.2.1")
+set(SOLVCON_HALF_SHA256
+    "76ddbf406e9d9b772ec73af2bf925b38b290b4390cc4064720a08d4b4bca0aa9")
+FetchContent_Declare(
+    half_float
+    URL
+        "https://sourceforge.net/projects/half/files/half/${SOLVCON_HALF_VERSION}/half-${SOLVCON_HALF_VERSION}.zip/download"
+    URL_HASH SHA256=${SOLVCON_HALF_SHA256}
+    DOWNLOAD_EXTRACT_TIMESTAMP ON
+)
+FetchContent_MakeAvailable(half_float)
+
+add_library(solvcon_half INTERFACE)
+target_include_directories(
+    solvcon_half SYSTEM INTERFACE
+    "${half_float_SOURCE_DIR}/include"
+)
 
 # The mcap subsystem reads MCAP recordings, and lz4 and zstd decompress their
 # chunks. No other part of solvcon needs those two libraries, so the option
@@ -293,10 +320,6 @@ if(SOLVCON_PROFILE)
     else()
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DSOLVCON_PROFILE")
     endif()
-endif()
-
-if(BUILD_METAL)
-include_directories(SYSTEM "${CMAKE_CURRENT_LIST_DIR}/thirdparty/install/metal-cpp")
 endif()
 
 # Pybind11 2.12.0 is the first version that supports compiling for numpy 2.0.0.

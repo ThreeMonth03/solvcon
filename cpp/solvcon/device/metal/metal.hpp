@@ -7,36 +7,73 @@
 
 /**
  * @file
- * Singleton manager for the Metal GPU device used by the linear algebra
- * backend.
+ * Metal-backed buffer allocation and asynchronous matrix multiplication.
  *
  * @ingroup group_core
  */
 
-// forward declaration.
-namespace MTL
-{
-class Device;
-} /* end namespace MTL */
+#include <solvcon/base.hpp>
+#include <solvcon/device/BufferBackend.hpp>
+
+#include <cstddef>
+#include <cstdint>
+#include <memory>
 
 namespace solvcon
 {
 
+class ConcreteBuffer;
+
 namespace device
 {
 
-/**
- * Process-wide owner of the single Metal device handle.
- *
- * The instance is created on first access and acquires the Metal device in
- * startup(); shutdown() releases it. Copy and move are deleted so the device
- * has exactly one owner.
- *
- * @ingroup group_core
- */
-class MetalManager
+/// Read-only row-major matrix view over a Metal-backed ConcreteBuffer.
+struct MetalMatrixView
 {
+    ConcreteBuffer const * m_buffer;
+    size_t m_byte_offset;
+    ssize_t m_leading_dimension;
+}; /* end struct MetalMatrixView */
 
+/// Writable row-major matrix view over a Metal-backed ConcreteBuffer.
+struct MetalOutputView
+{
+    ConcreteBuffer * m_buffer;
+    size_t m_byte_offset;
+    ssize_t m_leading_dimension;
+}; /* end struct MetalOutputView */
+
+/// Element type used by a native Metal GEMM.
+enum class MetalGemmDataType : std::uint8_t
+{
+    Float16,
+    Float32,
+}; /* end enum class MetalGemmDataType */
+
+/// Native floating-point GEMM dimensions and buffer views.
+struct MetalGemmOperation
+{
+    MetalGemmDataType m_data_type;
+    ssize_t m_rows;
+    ssize_t m_columns;
+    ssize_t m_inner_size;
+    MetalMatrixView m_lhs;
+    MetalMatrixView m_rhs;
+    MetalOutputView m_output;
+}; /* end struct MetalGemmOperation */
+
+/// Process-wide diagnostic counters for the prototype Metal runtime.
+struct MetalStatistics
+{
+    std::uint64_t m_allocated_buffers;
+    std::uint64_t m_submitted_commands;
+    std::uint64_t m_host_waits;
+    std::uint64_t m_host_exports;
+}; /* end struct MetalStatistics */
+
+/// Own the process-wide Metal device and serial command queue.
+class MetalManager : public BufferBackend
+{
 public:
 
     static MetalManager & instance();
@@ -45,17 +82,30 @@ public:
     MetalManager(MetalManager &&) = delete;
     MetalManager & operator=(MetalManager const &) = delete;
     MetalManager & operator=(MetalManager &&) = delete;
-    ~MetalManager() { shutdown(); }
+    ~MetalManager();
 
-    void startup();
-    bool started() { return nullptr != m_device; }
-    void shutdown();
+    /// Return true when a unified-memory Metal device and queue are ready.
+    bool started() const noexcept;
+
+    BufferDevice device() const noexcept override { return BufferDevice::Metal; }
+    bool built() const noexcept override { return true; }
+    bool available() const noexcept override { return started(); }
+    /// Allocate CPU-visible shared Metal storage.
+    std::shared_ptr<ConcreteBuffer> allocate(size_t nbytes, size_t alignment) const override;
+    /// Submit one floating-point GEMM without waiting for completion.
+    void gemm_async(MetalGemmOperation const & operation);
+
+    /// Return process-wide diagnostic counters.
+    MetalStatistics statistics() const noexcept;
+    /// Reset process-wide diagnostic counters.
+    void reset_statistics() noexcept;
 
 private:
+    class Impl;
 
-    MetalManager() { startup(); }
+    MetalManager();
 
-    MTL::Device * m_device = nullptr;
+    std::unique_ptr<Impl> const m_impl;
 
 }; /* end class MetalManager */
 

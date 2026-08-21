@@ -48,6 +48,7 @@ add_subdirectory(math)
 add_subdirectory(linalg)
 add_subdirectory(timeseries)
 add_subdirectory(simd)
+add_subdirectory(device)
 
 set(SOLVCON_ROOT_HEADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/solvcon.hpp
@@ -58,23 +59,6 @@ set(SOLVCON_ROOT_HEADERS
 set(SOLVCON_ROOT_FILES
     ${SOLVCON_ROOT_HEADERS}
     CACHE FILEPATH "" FORCE)
-
-if (BUILD_METAL)
-    add_subdirectory(device/metal)
-    set(SOLVCON_DEVICE_HEADERS
-        ${SOLVCON_DEVICE_HEADERS}
-        ${SOLVCON_METAL_HEADERS}
-        CACHE FILEPATH "" FORCE)
-    set(SOLVCON_DEVICE_SOURCES
-        ${SOLVCON_DEVICE_SOURCES}
-        ${SOLVCON_METAL_SOURCES}
-        CACHE FILEPATH "" FORCE)
-else () # BUILD_METAL
-    set(SOLVCON_DEVICE_HEADERS
-        CACHE FILEPATH "" FORCE)
-    set(SOLVCON_DEVICE_SOURCES
-        CACHE FILEPATH "" FORCE)
-endif () #BUILD_METAL
 
 set(SOLVCON_DEVICE_FILES
     ${SOLVCON_DEVICE_HEADERS}
@@ -124,6 +108,7 @@ add_library(
     STATIC
     ${SOLVCON_TERMINAL_FILES}
 )
+target_link_libraries(solvcon_primary PUBLIC solvcon_half)
 
 set(SOLVCON_LIBRARIES solvcon_primary)
 
@@ -245,6 +230,14 @@ if (APPLE)
         ${APPLE_FWK_QUARTZ_CORE}
         ${APPLE_FWK_METAL}
     )
+    if (BUILD_METAL)
+        find_library(APPLE_FWK_MPS MetalPerformanceShaders REQUIRED)
+        target_link_libraries(solvcon_primary PRIVATE ${APPLE_FWK_MPS})
+        target_compile_options(
+            solvcon_primary PRIVATE
+            "$<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>"
+        )
+    endif () # BUILD_METAL
     # Accelerate/vecLib provides BLAS + LAPACK.
     target_compile_definitions(solvcon_primary PUBLIC SC_HAS_VENDOR_LAPACK)
     if (CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64)$")
