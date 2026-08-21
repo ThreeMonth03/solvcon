@@ -15,6 +15,7 @@
 #include <solvcon/base.hpp>
 #include <solvcon/buffer/BufferBase.hpp>
 #include <solvcon/buffer/small_vector.hpp>
+#include <solvcon/device/BufferDevice.hpp>
 
 #include <algorithm>
 #include <array>
@@ -33,31 +34,12 @@ namespace solvcon
 template <typename T>
 class SimpleArray;
 
-/// Storage device selected for an owned ConcreteBuffer.
-enum class BufferDevice : std::uint8_t
-{
-    Cpu,
-    Metal,
-}; /* end enum class BufferDevice */
-
 /// Access mode held by a scoped host lease.
 enum class BufferHostAccessMode : std::uint8_t
 {
     Read,
     Write,
 }; /* end enum class BufferHostAccessMode */
-
-constexpr std::string_view buffer_device_name(BufferDevice device) noexcept
-{
-    switch (device)
-    {
-    case BufferDevice::Cpu:
-        return "cpu";
-    case BufferDevice::Metal:
-        return "metal";
-    }
-    return "unknown";
-}
 
 namespace detail
 {
@@ -222,18 +204,7 @@ public:
     }
 
     /// Allocate an owned buffer on the requested device.
-    static std::shared_ptr<ConcreteBuffer> construct(size_t nbytes, size_t alignment, BufferDevice device)
-    {
-        if (device == BufferDevice::Cpu)
-        {
-            return construct(nbytes, alignment);
-        }
-#ifdef SOLVCON_METAL
-        return construct_metal(nbytes, alignment);
-#else
-        throw std::runtime_error("ConcreteBuffer: Metal support is not built");
-#endif
-    }
+    static std::shared_ptr<ConcreteBuffer> construct(size_t nbytes, size_t alignment, BufferDevice target_device);
 
     /*
      * This factory method is dangerous since the data pointer passed in will
@@ -257,12 +228,7 @@ public:
     std::shared_ptr<ConcreteBuffer> clone() const { return clone_to(device()); }
 
     /// Deep-copy the bytes into storage owned by the requested device.
-    std::shared_ptr<ConcreteBuffer> clone_to(BufferDevice target_device) const
-    {
-        std::shared_ptr<ConcreteBuffer> ret = construct(nbytes(), m_alignment, target_device);
-        ret->copy_from(*this);
-        return ret;
-    }
+    std::shared_ptr<ConcreteBuffer> clone_to(BufferDevice target_device) const;
 
     /**
      * @param[in] nbytes
@@ -397,10 +363,6 @@ public:
     static constexpr const char * name() { return "ConcreteBuffer"; }
 
 private:
-#ifdef SOLVCON_METAL
-    static std::shared_ptr<ConcreteBuffer> construct_metal(size_t nbytes, size_t alignment);
-#endif
-
     template <typename T>
     T const * data_unchecked() const noexcept
     {

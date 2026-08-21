@@ -2035,9 +2035,11 @@ public:
     {
         if (m_shape.empty())
         {
-            if (device == BufferDevice::Metal)
+            if (device != BufferDevice::Cpu)
             {
-                throw std::invalid_argument("SimpleArray: scalar Metal storage is not supported by this prototype");
+                throw std::invalid_argument(std::format(
+                    "SimpleArray: scalar {} storage is not supported",
+                    buffer_device_label(device)));
             }
         }
         else
@@ -2941,9 +2943,11 @@ SimpleArray<T> SimpleArray<T>::to(BufferDevice target_device) const
 {
     if (!m_buffer)
     {
-        if (target_device == BufferDevice::Metal)
+        if (target_device != BufferDevice::Cpu)
         {
-            throw std::invalid_argument("SimpleArray: scalar Metal storage is not supported by this prototype");
+            throw std::invalid_argument(std::format(
+                "SimpleArray: scalar {} storage is not supported",
+                buffer_device_label(target_device)));
         }
         SimpleArray result(m_shape, BufferDevice::Cpu);
         result.m_nghost = m_nghost;

@@ -13,6 +13,7 @@
  */
 
 #include <solvcon/base.hpp>
+#include <solvcon/device/BufferBackend.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -63,7 +64,7 @@ struct MetalStatistics
 }; /* end struct MetalStatistics */
 
 /// Own the process-wide Metal device and serial command queue.
-class MetalManager
+class MetalManager : public BufferBackend
 {
 public:
 
@@ -78,8 +79,11 @@ public:
     /// Return true when a unified-memory Metal device and queue are ready.
     bool started() const noexcept;
 
+    BufferDevice device() const noexcept override { return BufferDevice::Metal; }
+    bool built() const noexcept override { return true; }
+    bool available() const noexcept override { return started(); }
     /// Allocate CPU-visible shared Metal storage.
-    std::shared_ptr<ConcreteBuffer> make_buffer(size_t nbytes, size_t alignment);
+    std::shared_ptr<ConcreteBuffer> allocate(size_t nbytes, size_t alignment) const override;
     /// Submit one FP32 GEMM without waiting for completion.
     void gemm_async(MetalGemmOperation const & operation);
 

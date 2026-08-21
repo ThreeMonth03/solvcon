@@ -200,7 +200,7 @@ std::enable_if_t<is_simple_array_v<S>, pybind11::array> to_ndarray(S && sarr)
     using T = typename std::remove_reference_t<S>::value_type;
     using pointer_type = decltype(sarr.logical_data());
     pointer_type logical_data = nullptr;
-    if (sarr.device() == BufferDevice::Metal)
+    if (sarr.device() != BufferDevice::Cpu)
     {
         py::gil_scoped_release const release;
         logical_data = sarr.logical_data();

@@ -38,13 +38,10 @@ inline BufferDevice parse_buffer_device(std::string const & name)
     std::string normalized;
     normalized.reserve(name.size());
     std::ranges::transform(name, std::back_inserter(normalized), lower_ascii);
-    if (normalized == "cpu")
+    std::optional<BufferDevice> const device = buffer_device_from_name(normalized);
+    if (device)
     {
-        return BufferDevice::Cpu;
-    }
-    if (normalized == "metal")
-    {
-        return BufferDevice::Metal;
+        return *device;
     }
     throw std::invalid_argument(std::format("unsupported SimpleArray device '{}'", name));
 }

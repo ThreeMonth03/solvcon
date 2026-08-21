@@ -236,7 +236,7 @@ public:
     static pybind11::buffer_info get_buffer_info(SimpleArray<T> & array)
     {
         T * logical_data = nullptr;
-        if (array.device() == BufferDevice::Metal)
+        if (array.device() != BufferDevice::Cpu)
         {
             pybind11::gil_scoped_release const release;
             logical_data = array.logical_data();

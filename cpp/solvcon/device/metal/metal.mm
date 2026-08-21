@@ -662,7 +662,7 @@ bool MetalManager::started() const noexcept
     return m_impl->started();
 }
 
-std::shared_ptr<ConcreteBuffer> MetalManager::make_buffer(size_t nbytes, size_t alignment)
+std::shared_ptr<ConcreteBuffer> MetalManager::allocate(size_t nbytes, size_t alignment) const
 {
     @autoreleasepool
     {
@@ -699,11 +699,6 @@ void MetalManager::reset_statistics() noexcept
 }
 
 } /* end namespace device */
-
-std::shared_ptr<ConcreteBuffer> ConcreteBuffer::construct_metal(size_t nbytes, size_t alignment)
-{
-    return device::MetalManager::instance().make_buffer(nbytes, alignment);
-}
 
 } /* end namespace solvcon */
 
