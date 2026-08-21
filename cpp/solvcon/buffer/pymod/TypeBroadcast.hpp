@@ -82,7 +82,14 @@ struct TypeBroadcastImpl
             {
                 auto * ptr_out = arr_out.logical_data() + offset_out;
                 // FIXME: NOLINTNEXTLINE(bugprone-signed-char-misuse,cert-str34-c)
-                *ptr_out = number_cast<out_type>(*ptr_in);
+                if constexpr (is_float16_v<out_type>)
+                {
+                    *ptr_out = float16_cast(*ptr_in);
+                }
+                else
+                {
+                    *ptr_out = static_cast<out_type>(*ptr_in);
+                }
             }
             else
             {
