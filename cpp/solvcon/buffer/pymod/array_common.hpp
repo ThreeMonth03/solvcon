@@ -205,6 +205,33 @@ inline solvcon::detail::shape_type make_shape(pybind11::object const & shape_in)
     return shape;
 }
 
+namespace detail
+{
+
+template <typename T>
+struct PythonScalarCaster
+{
+    static bool check(pybind11::object const & value) { return PyNumber_Check(value.ptr()); }
+    static T cast(pybind11::object const & value) { return value.cast<T>(); }
+}; /* end struct PythonScalarCaster */
+
+template <typename U>
+struct PythonScalarCaster<Complex<U>>
+{
+    static bool check(pybind11::object const & value)
+    {
+        return PyNumber_Check(value.ptr()) || pybind11::isinstance<Complex<U>>(value);
+    }
+
+    static Complex<U> cast(pybind11::object const & value)
+    {
+        pybind11::object const complex_class = pybind11::module_::import("builtins").attr("complex");
+        return complex_class(value).cast<std::complex<U>>();
+    }
+}; /* end struct PythonScalarCaster */
+
+} /* end namespace detail */
+
 /// Helper class for array property in Python.
 template <typename T>
 class ArrayPropertyHelper
@@ -337,41 +364,12 @@ private:
             return false;
         }
 
-        bool const is_number = PyNumber_Check(py_value.ptr());
-
-        if constexpr (std::is_same_v<T, Complex<float>> || std::is_same_v<T, Complex<double>>)
-        {
-            return is_number || pybind11::isinstance<T>(py_value);
-        }
-        else
-        {
-            return is_number;
-        }
-    }
-
-    template <typename U>
-    static Complex<U> cast_complex_scalar(
-        pybind11::object const & py_value)
-    {
-        pybind11::object const complex_class =
-            pybind11::module_::import("builtins").attr("complex");
-        return complex_class(py_value).cast<std::complex<U>>();
+        return detail::PythonScalarCaster<T>::check(py_value);
     }
 
     static T cast_scalar(pybind11::object const & py_value)
     {
-        if constexpr (std::is_same_v<T, Complex<float>>)
-        {
-            return cast_complex_scalar<float>(py_value);
-        }
-        else if constexpr (std::is_same_v<T, Complex<double>>)
-        {
-            return cast_complex_scalar<double>(py_value);
-        }
-        else
-        {
-            return py_value.cast<T>();
-        }
+        return detail::PythonScalarCaster<T>::cast(py_value);
     }
 
     static std::vector<shape_type> make_default_slices(SimpleArray<T> const & arr)

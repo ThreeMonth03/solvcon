@@ -74,16 +74,17 @@ inline auto real(T const & val)
     }
 }
 
+inline Float16 abs(Float16 const & val)
+{
+    return half_float::abs(val);
+}
+
 template <typename T>
 inline auto abs(T const & val)
 {
     if constexpr (is_complex_v<T>)
     {
         return std::sqrt(val.norm());
-    }
-    else if constexpr (is_float16_v<T>)
-    {
-        return half_float::abs(val);
     }
     else
     {

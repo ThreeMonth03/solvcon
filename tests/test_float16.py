@@ -89,5 +89,27 @@ class Float16ArrayTC(unittest.TestCase):
         np.testing.assert_array_equal(source.astype("float16"),
                                       target.ndarray)
 
+        target[0, 0] = 7.25
+        self.assertEqual(np.float16(7.25), target.ndarray[0, 0])
+
+        wider = sc.SimpleArrayFloat64((2, 3))
+        wider[...] = target.ndarray
+        np.testing.assert_array_equal(target.ndarray.astype("float64"),
+                                      wider.ndarray)
+
+        with self.assertRaisesRegex(
+                RuntimeError,
+                "Cannot convert between complex and non-complex types"):
+            target[...] = np.ones((2, 3), dtype="complex64")
+
+    def test_nan_ordering_and_reductions(self):
+        source = np.array([2, np.nan, -1, 4], dtype="float16")
+        array = sc.SimpleArrayFloat16(array=source.copy())
+
+        self.assertEqual(np.argmin(source), array.argmin())
+        self.assertEqual(np.argmax(source), array.argmax())
+        array.sort()
+        np.testing.assert_array_equal(np.sort(source), array.ndarray)
+
 
 # vim: set ff=unix fenc=utf8 et sw=4 ts=4 sts=4 tw=79:

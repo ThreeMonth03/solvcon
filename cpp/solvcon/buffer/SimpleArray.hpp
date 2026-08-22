@@ -54,7 +54,7 @@ template <typename T>
 concept IntegralType = std::is_integral_v<T>;
 
 template <typename T>
-concept ArithmeticType = is_arithmetic_number_v<T>;
+concept ArithmeticType = std::numeric_limits<std::remove_cv_t<T>>::is_specialized;
 
 template <typename T>
 concept SimpleArrayType = requires(T t) {
@@ -283,6 +283,19 @@ struct select_real_t<Complex<U>>
 {
     using type = U;
 }; /* end struct select_real_t */
+
+template <typename U>
+U count_cast(size_t count)
+{
+    if constexpr (std::is_same_v<std::remove_cv_t<U>, Float16>)
+    {
+        return float16_cast(count);
+    }
+    else
+    {
+        return static_cast<U>(count);
+    }
+}
 
 template <typename A, typename T>
 class SimpleArrayMixinSum
@@ -738,7 +751,7 @@ public:
     {
         auto athis = static_cast<A const *>(this);
         A ret(*athis);
-        if constexpr (!std::is_same_v<bool, std::remove_const_t<value_type>> && is_signed_number_v<value_type>)
+        if constexpr (!is_bool_v<value_type> && !std::is_unsigned_v<value_type> && !is_complex_v<value_type>)
         {
             for (size_t i = 0; i < athis->size(); ++i)
             {
@@ -844,26 +857,12 @@ private:
     // real_type rather than from a size_t, so the conversion needs two steps.
     static value_type convert_count(size_t count)
     {
-        if constexpr (is_float16_v<value_type>)
-        {
-            return float16_cast(count);
-        }
-        else
-        {
-            return static_cast<value_type>(static_cast<real_type>(count));
-        }
+        return static_cast<value_type>(detail::count_cast<real_type>(count));
     }
 
     static real_type convert_real_count(size_t count)
     {
-        if constexpr (is_float16_v<real_type>)
-        {
-            return float16_cast(count);
-        }
-        else
-        {
-            return static_cast<real_type>(count);
-        }
+        return detail::count_cast<real_type>(count);
     }
 
     static value_type wrapping_sub(value_type lhs, value_type rhs) { return wrapping_op(lhs, rhs, std::minus<>{}); }
@@ -1481,7 +1480,7 @@ bool nan_aware_less(V const & lhs, V const & rhs)
         }
         return nan_aware_less(lhs.imag(), rhs.imag());
     }
-    else if constexpr (is_floating_number_v<V>)
+    else if constexpr (std::numeric_limits<std::remove_cv_t<V>>::has_quiet_NaN)
     {
         if (std::isnan(rhs))
         {
@@ -1603,7 +1602,7 @@ void SimpleArrayMixinSort<A, T>::sort()
         // Complex numbers are sorted lexicographically by real and then imaginary parts.
         std::sort(athis->begin(), athis->end(), NanAwareLess{});
     }
-    else if constexpr (is_floating_number_v<value_type>)
+    else if constexpr (std::numeric_limits<std::remove_cv_t<value_type>>::has_quiet_NaN)
     {
         // Partition the array into two parts: non-NaN values and NaN values.
         auto * const mid = std::partition(athis->begin(), athis->end(), [](value_type const & v)
@@ -3375,7 +3374,7 @@ size_t detail::SimpleArrayMixinSearch<A, T>::argmin() const
         {
             value_type const current_value = ptr[i];
 
-            if constexpr (is_floating_number_v<value_type>)
+            if constexpr (std::numeric_limits<std::remove_cv_t<value_type>>::has_quiet_NaN)
             {
                 if (std::isnan(current_value))
                 {
@@ -3403,7 +3402,7 @@ size_t detail::SimpleArrayMixinSearch<A, T>::argmin() const
     {
         value_type const current_value = *(ptr + unchecked_logical_offset(*athis, idx));
 
-        if constexpr (is_floating_number_v<value_type>)
+        if constexpr (std::numeric_limits<std::remove_cv_t<value_type>>::has_quiet_NaN)
         {
             if (std::isnan(current_value))
             {
@@ -3443,7 +3442,7 @@ size_t detail::SimpleArrayMixinSearch<A, T>::argmax() const
         {
             value_type const current_value = ptr[i];
 
-            if constexpr (is_floating_number_v<value_type>)
+            if constexpr (std::numeric_limits<std::remove_cv_t<value_type>>::has_quiet_NaN)
             {
                 if (std::isnan(current_value))
                 {
@@ -3471,7 +3470,7 @@ size_t detail::SimpleArrayMixinSearch<A, T>::argmax() const
     {
         value_type const current_value = *(ptr + unchecked_logical_offset(*athis, idx));
 
-        if constexpr (is_floating_number_v<value_type>)
+        if constexpr (std::numeric_limits<std::remove_cv_t<value_type>>::has_quiet_NaN)
         {
             if (std::isnan(current_value))
             {
@@ -3535,7 +3534,7 @@ SimpleArray<uint64_t> detail::SimpleArrayMixinSearch<A, T>::argmin(ssize_t axis)
         {
             ssize_t const current_index = input_index + i * axis_stride;
             value_type const current_value = (*athis)[static_cast<size_t>(current_index)];
-            if constexpr (is_floating_number_v<value_type>)
+            if constexpr (std::numeric_limits<std::remove_cv_t<value_type>>::has_quiet_NaN)
             {
                 if (std::isnan(current_value))
                 {
@@ -3603,7 +3602,7 @@ SimpleArray<uint64_t> detail::SimpleArrayMixinSearch<A, T>::argmax(ssize_t axis)
         {
             ssize_t const current_index = input_index + i * axis_stride;
             value_type const current_value = (*athis)[static_cast<size_t>(current_index)];
-            if constexpr (is_floating_number_v<value_type>)
+            if constexpr (std::numeric_limits<std::remove_cv_t<value_type>>::has_quiet_NaN)
             {
                 if (std::isnan(current_value))
                 {

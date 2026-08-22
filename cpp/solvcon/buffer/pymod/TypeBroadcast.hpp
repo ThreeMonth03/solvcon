@@ -19,6 +19,38 @@ namespace python
 namespace detail
 {
 
+template <typename To, typename From>
+struct ArrayElementConverter;
+
+template <typename To, typename From>
+requires(!is_complex_v<To> && !is_complex_v<From> && !std::is_same_v<std::remove_cv_t<To>, Float16> && requires(From const & value) { static_cast<To>(value); })
+struct ArrayElementConverter<To, From>
+{
+    static To convert(From const & value)
+    {
+        // FIXME: NOLINTNEXTLINE(bugprone-signed-char-misuse,cert-str34-c)
+        return static_cast<To>(value);
+    }
+}; /* end struct ArrayElementConverter */
+
+template <typename From>
+requires(!is_complex_v<From> && requires(From const & value) { static_cast<float>(value); })
+struct ArrayElementConverter<Float16, From>
+{
+    static Float16 convert(From const & value) { return float16_cast(value); }
+}; /* end struct ArrayElementConverter */
+
+template <typename T>
+struct ArrayElementConverter<Complex<T>, Complex<T>>
+{
+    static Complex<T> convert(Complex<T> const & value) { return value; }
+}; /* end struct ArrayElementConverter */
+
+template <typename To, typename From>
+concept ArrayElementConvertible = requires(From const & value) {
+    ArrayElementConverter<To, From>::convert(value);
+};
+
 inline solvcon::detail::shape_type shape_from_slices(
     std::vector<solvcon::detail::shape_type> const & slices)
 {
@@ -76,20 +108,10 @@ struct TypeBroadcastImpl
             const D * ptr_in = arr_in->data() + input_offset(*arr_in, sidx);
             ssize_t const offset_out = output_offset(arr_out, slices, sidx);
 
-            constexpr bool valid_conversion = (!is_complex_v<T> && !is_complex_v<D>) || (is_complex_v<T> && is_complex_v<D> && std::is_same_v<T, D>);
-
-            if constexpr (valid_conversion)
+            if constexpr (detail::ArrayElementConvertible<out_type, D>)
             {
                 auto * ptr_out = arr_out.logical_data() + offset_out;
-                // FIXME: NOLINTNEXTLINE(bugprone-signed-char-misuse,cert-str34-c)
-                if constexpr (is_float16_v<out_type>)
-                {
-                    *ptr_out = float16_cast(*ptr_in);
-                }
-                else
-                {
-                    *ptr_out = static_cast<out_type>(*ptr_in);
-                }
+                *ptr_out = detail::ArrayElementConverter<out_type, D>::convert(*ptr_in);
             }
             else
             {

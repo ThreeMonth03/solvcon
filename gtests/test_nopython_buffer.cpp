@@ -2,6 +2,8 @@
 
 #include <gtest/gtest.h>
 
+#include <cmath>
+#include <limits>
 #include <random>
 #ifdef Py_PYTHON_H
 #error "Python.h should not be included."
@@ -89,6 +91,27 @@ TEST(SimpleArray, float16_storage_and_matmul)
     EXPECT_FLOAT_EQ(28.0F, static_cast<float>(result(0, 1)));
     EXPECT_FLOAT_EQ(49.0F, static_cast<float>(result(1, 0)));
     EXPECT_FLOAT_EQ(64.0F, static_cast<float>(result(1, 1)));
+}
+
+TEST(SimpleArray, float16_nan_ordering)
+{
+    namespace sc = solvcon;
+
+    sc::SimpleArray<sc::Float16> array(4);
+    array[0] = sc::Float16(2.0F);
+    array[1] = std::numeric_limits<sc::Float16>::quiet_NaN();
+    array[2] = sc::Float16(-1.0F);
+    array[3] = sc::Float16(4.0F);
+
+    EXPECT_EQ(1, array.argmin());
+    EXPECT_EQ(1, array.argmax());
+
+    array.sort();
+
+    EXPECT_FLOAT_EQ(-1.0F, static_cast<float>(array[0]));
+    EXPECT_FLOAT_EQ(2.0F, static_cast<float>(array[1]));
+    EXPECT_FLOAT_EQ(4.0F, static_cast<float>(array[2]));
+    EXPECT_TRUE(std::isnan(static_cast<float>(array[3])));
 }
 
 TEST(SimpleArray, argminmax_axis_rejects_rank_zero_result)
