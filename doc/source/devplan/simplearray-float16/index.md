@@ -27,9 +27,10 @@ and a NumPy view. Arithmetic uses the generic CPU `SimpleArray` operations.
 ### Portable scalar type
 
 `solvcon::Float16` aliases `half_float::half` version 2.2.1. The dependency is
-pinned by version and SHA-256. Small SOLVCON traits classify the alias as a
-floating-point, arithmetic, and signed number without specializing standard
-library traits.
+pinned by version and SHA-256. SOLVCON does not add global numeric traits for
+the alias or specialize standard library traits. Generic operations use the
+standard capabilities supplied by the binary16 implementation, including
+`std::numeric_limits<Float16>`.
 
 Scalar conversion first converts the source to `float`, then constructs the
 half value. This provides one explicit conversion path on Apple Clang, GCC,
@@ -48,16 +49,21 @@ The Python module exports `SimpleArrayFloat16` and
 `e` format and NumPy's `float16` dtype. Arrays created from compatible NumPy
 storage retain the existing zero-copy behavior.
 
+Typed NumPy assignment uses a local element converter for each supported
+source and destination relationship. Python scalar assignment uses a separate
+caster because its source is a dynamic Python object. This keeps FP16 and
+Complex conversion rules out of the generic array implementation.
+
 ### CPU operations
 
-The arithmetic concept and floating-point branches recognize FP16. Existing
-element-wise operations, reductions, sorting, searching, matrix helpers, and
-generic matrix multiplication are reused. Count conversions used by means and
+Existing element-wise operations, reductions, sorting, searching, matrix
+helpers, and generic matrix multiplication are reused. NaN-aware operations
+query `std::numeric_limits`, while count conversions used by means and
 variances use the explicit FP16 conversion helper.
 
 ## Code locations
 
-- `cpp/solvcon/math/Float16.hpp`: dependency alias and numeric traits.
+- `cpp/solvcon/math/Float16.hpp`: dependency alias and explicit conversion.
 - `cpp/solvcon/buffer/SimpleArray.*`: compile-time and runtime array support.
 - `cpp/solvcon/buffer/pymod/`: Python scalar, buffer, NumPy, Plex, collector,
   and broadcast integration.
