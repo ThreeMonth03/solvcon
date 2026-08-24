@@ -1202,6 +1202,13 @@ class SimpleArrayBasicTC(unittest.TestCase):
         sarr[:, :] = rhs
         np.testing.assert_array_equal(rhs, sarr.ndarray)
 
+        rhs = np.array([[1 + 2j, 3 + 4j]], dtype='complex64')
+        sarr = solvcon.SimpleArrayComplex64((1, 2))
+        sarr[0, 0] = solvcon.complex64(5, 6)
+        self.assertEqual(5 + 6j, complex(sarr[0, 0]))
+        sarr[:, :] = rhs
+        np.testing.assert_array_equal(rhs, sarr.ndarray)
+
     def test_SimpleArray_broadcast_slice_shape(self):
         ndarr = np.arange(2 * 3 * 4, dtype='float64').reshape((2, 3, 4))
 

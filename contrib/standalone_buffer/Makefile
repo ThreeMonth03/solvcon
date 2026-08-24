@@ -3,6 +3,11 @@
 
 SCROOT := $(realpath ../..)
 SETUPROOT ?= $(SCROOT)/$(BUILD_PATH)/standalone_buffer
+HALF_VERSION := 2.2.1
+HALF_ROOT := $(SETUPROOT)/thirdparty/half
+HALF_ARCHIVE := $(HALF_ROOT)/half-$(HALF_VERSION).zip
+HALF_HEADER := $(HALF_ROOT)/include/half.hpp
+HALF_URL := https://sourceforge.net/projects/half/files/half/$(HALF_VERSION)/half-$(HALF_VERSION).zip/download
 
 ifeq ($(SETUPROOT),)
 	SETUPROOT := local_standalone_buffer
@@ -11,6 +16,7 @@ endif
 CFLAGS := \
 	-std=c++23 -fPIC \
 	-I$(SETUPROOT) \
+	-isystem $(HALF_ROOT)/include \
 	-I$(shell python3 -c 'import numpy as np; print(np.get_include())') \
 	-I$(shell python3 -c 'import pybind11; print(pybind11.get_include())') \
 	-I$(shell $(DIRNAME_PYTHON)/python3-config --prefix)/include \
@@ -22,6 +28,10 @@ LDFLAGS := \
 	-L$(shell $(DIRNAME_PYTHON)/python3-config --prefix)/lib \
 	-lpython$(shell python3 -c 'import sys; print("%d.%d" % sys.version_info[0:2])') \
 	$(shell $(DIRNAME_PYTHON)/python3-config --ldflags) \
+
+ifeq ($(shell uname),Darwin)
+	LDFLAGS += -framework Accelerate
+endif
 
 MODPATH := $(SETUPROOT)/modbuf$(shell $(DIRNAME_PYTHON)/python3-config --extension-suffix)
 
@@ -95,7 +105,17 @@ OBJS = \
 	$(SETUPROOT)/radix_tree.o \
 	$(SETUPROOT)/modbuf.o
 
-$(MODPATH): Makefile $(OBJS)
+$(HALF_ARCHIVE): Makefile
+	mkdir -p $(HALF_ROOT)
+	curl -fsSL --retry 3 --output $@.tmp $(HALF_URL)
+	mv $@.tmp $@
+
+$(HALF_HEADER): $(HALF_ARCHIVE) fetch_half.py
+	python3 fetch_half.py $(HALF_ARCHIVE) $(HALF_ROOT)
+
+$(OBJS): | $(HALF_HEADER)
+
+$(MODPATH): Makefile $(HALF_HEADER) $(OBJS)
 	c++ $(LDFLAGS) $(OBJS) -o $@
 
 .PHONY: copy

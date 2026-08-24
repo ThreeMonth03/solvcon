@@ -132,6 +132,7 @@ add_library(
     STATIC
     ${SOLVCON_TERMINAL_FILES}
 )
+target_link_libraries(solvcon_primary PUBLIC solvcon_half)
 
 set(SOLVCON_LIBRARIES solvcon_primary)
 

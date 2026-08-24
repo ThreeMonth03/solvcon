@@ -6,6 +6,7 @@
  */
 
 #include <solvcon/math/Complex.hpp>
+#include <solvcon/math/Float16.hpp>
 #include <solvcon/math/blas_compat.hpp>
 #ifdef SC_HAS_VENDOR_LAPACK
 #include <solvcon/math/lapack_compat.hpp>
@@ -71,6 +72,11 @@ inline auto real(T const & val)
     {
         return val;
     }
+}
+
+inline Float16 abs(Float16 const & val)
+{
+    return half_float::abs(val);
 }
 
 template <typename T>
