@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <array>
+#include <limits>
 #include <utility>
 
 namespace solvcon
@@ -45,6 +46,26 @@ std::optional<MatmulKernel> matmul_kernel_from_name(std::string_view name) noexc
         }
     }
     return std::nullopt;
+}
+
+MatmulLayout::MatmulLayout(shape_type shape, shape_type strides)
+    : m_shape(std::move(shape))
+    , m_strides(std::move(strides))
+{
+    if (m_shape.empty() || m_shape.size() != m_strides.size())
+    {
+        throw std::invalid_argument("shape and strides must have the same nonzero rank");
+    }
+    constexpr ssize_t MAX_ELEMENTS = std::numeric_limits<ssize_t>::max();
+    ssize_t size = 1;
+    for (ssize_t const extent : m_shape)
+    {
+        if (extent < 0 || std::max(extent, ssize_t{1}) > MAX_ELEMENTS / size)
+        {
+            throw std::invalid_argument("shape exceeds the supported element count");
+        }
+        size *= std::max(extent, ssize_t{1});
+    }
 }
 
 MatmulPlan::MatmulPlan(
