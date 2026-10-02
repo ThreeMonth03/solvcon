@@ -703,6 +703,8 @@ class ResultViewTC(unittest.TestCase):
         font.setPointSize(14)
         self.app.setFont(font)
         self.widget = _inspector.ResultView(_inspector.MatmulForm.describe)
+        self.addCleanup(self.app.sendPostedEvents,
+                        self.widget, QtCore.QEvent.DeferredDelete)
         self.addCleanup(self.widget.deleteLater)
         operand = spec.OperandSpec((2, 2), (2, 1))
         request = matmul.MatmulSpec(
