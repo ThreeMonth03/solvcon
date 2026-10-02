@@ -44,7 +44,7 @@ jobs:
     if: |
       needs.check_skip.outputs.skip != 'true' &&
       github.repository == 'ThreeMonth03/solvcon' &&
-      github.ref == 'refs/heads/diagnose/pilot-qt-crash-1611'
+      github.ref == 'refs/heads/diagnose/1611-native-full-suite'
 
     name: standalone_buffer_${{ matrix.os }}
 
@@ -108,13 +108,13 @@ jobs:
     if: |
       needs.check_skip.outputs.skip != 'true' &&
       github.repository == 'ThreeMonth03/solvcon' &&
-      github.ref == 'refs/heads/diagnose/pilot-qt-crash-1611'
+      github.ref == 'refs/heads/diagnose/1611-native-full-suite'
 
-    name: build_${{ matrix.os }}_${{ matrix.cmake_build_type }}
+    name: native_${{ matrix.batch }}_${{ matrix.os }}_${{ matrix.cmake_build_type }}
 
     runs-on: ${{ matrix.os }}
 
-    timeout-minutes: ${{ fromJSON(vars.SCGH_TIMEOUT_BUILD || vars.MMGH_TIMEOUT_BUILD || '45') }}
+    timeout-minutes: 90
 
     env:
       # A matrix entry naming no parallelism must fall back here rather than
@@ -137,21 +137,49 @@ jobs:
       AQT_CONFIG: "thirdparty/aqt_settings.ini"
 
     strategy:
-        matrix:
-          # One build type per host rather than the same one twice. macOS
-          # takes RelWithDebInfo, which is what a bare `make` configures and
-          # what no other job on a pull request builds; ubuntu and the
-          # devbuild_windows job cover Release. Parallelism follows the host as well:
-          # ubuntu-24.04 has 4 virtual cores and 16 GB, while macos-26 has 3
-          # cores and 7 GB, where a third compiler swaps until the job hits
-          # its timeout.
-          include:
-            - os: ubuntu-24.04
-              cmake_build_type: Release
-              build_metal: OFF
-              make_parallel: -j4
-
-        fail-fast: false
+      fail-fast: false
+      matrix:
+        include:
+          - batch: 1
+            os: ubuntu-24.04
+            cmake_build_type: Release
+            build_metal: OFF
+            make_parallel: -j4
+          - batch: 2
+            os: ubuntu-24.04
+            cmake_build_type: Release
+            build_metal: OFF
+            make_parallel: -j4
+          - batch: 3
+            os: ubuntu-24.04
+            cmake_build_type: Release
+            build_metal: OFF
+            make_parallel: -j4
+          - batch: 4
+            os: ubuntu-24.04
+            cmake_build_type: Release
+            build_metal: OFF
+            make_parallel: -j4
+          - batch: 5
+            os: ubuntu-24.04
+            cmake_build_type: Release
+            build_metal: OFF
+            make_parallel: -j4
+          - batch: 6
+            os: ubuntu-24.04
+            cmake_build_type: Release
+            build_metal: OFF
+            make_parallel: -j4
+          - batch: 7
+            os: ubuntu-24.04
+            cmake_build_type: Release
+            build_metal: OFF
+            make_parallel: -j4
+          - batch: 8
+            os: ubuntu-24.04
+            cmake_build_type: Release
+            build_metal: OFF
+            make_parallel: -j4
 
     steps:
 
@@ -176,6 +204,27 @@ jobs:
           sudo apt-get -qy install --no-install-recommends gdb
         fi
         gdb --version
+
+    - name: Verify native core capture
+      env:
+        CRASH_DIR: ${{ runner.temp }}/pilot-1611-native
+      run: |
+        mkdir -p "$CRASH_DIR"
+        echo "CRASH_DIR=$CRASH_DIR" >> "$GITHUB_ENV"
+        sudo sysctl -w "kernel.core_pattern=$CRASH_DIR/core.%e.%p.%t"
+        ulimit -c unlimited
+        {
+          git rev-parse HEAD
+          uname -a
+          lscpu
+          python3 --version
+          g++ --version
+          python3 -m pip freeze
+          cat /proc/sys/kernel/core_pattern
+          cat /proc/sys/kernel/randomize_va_space
+          df -h "$CRASH_DIR"
+        } > "$CRASH_DIR/environment.txt"
+        python3 contrib/ci/collect-1611-core.py preflight "$CRASH_DIR"
 
     - name: setup dependencies for macOS
       if: runner.os == 'macOS'
@@ -251,28 +300,39 @@ jobs:
           install_name_tool -add_rpath $(qtpaths --install-prefix)/lib ${PYSIDE6_PATH}/QtGui.abi3.so
           install_name_tool -add_rpath $(qtpaths --install-prefix)/lib ${PYSIDE6_PATH}/QtCore.abi3.so
         fi
-        # A pull request skips tests/gui here, because run_pilot_pytest below
-        # runs it seconds later in the pilot binary. A push and the nightly
-        # run the whole suite in both Qt hosts. SOLVCON_TEST_SHOW_WINDOWS is left at the
-        # default either way, so any window stays off the screen.
-        set -o pipefail
-        command -v gdb
-        for attempt in 1 2 3 ; do
-          echo "Qt test attempt ${attempt}"
+        ulimit -c unlimited
+        for attempt in $(seq 1 20) ; do
+          echo "Qt native test attempt ${attempt}/20"
+          date -u +%FT%TZ > "$CRASH_DIR/attempt-${attempt}.started"
+          set +e
           make pytest ${JOB_MAKE_ARGS} \
-            "PYTEST=gdb --batch --nx --return-child-result -ex 'set disable-randomization off' -ex run -ex 'thread apply all bt' -ex 'info sharedlibrary' --args $(command -v python3) -m pytest" \
-            2>&1 | tee "/tmp/pilot-qt-crash-1611-${attempt}.log"
+            2>&1 | tee "$CRASH_DIR/attempt-${attempt}.log"
+          status=("${PIPESTATUS[@]}")
+          set -e
+          printf '%s\t%s\t%s\n' "$attempt" "${status[0]}" "${status[1]}" \
+            >> "$CRASH_DIR/attempts.tsv"
+          if [ "${status[0]}" -ne 0 ] ; then exit "${status[0]}" ; fi
+          if [ "${status[1]}" -ne 0 ] ; then exit "${status[1]}" ; fi
         done
         echo "::endgroup::"
 
-    - name: Preserve native crash logs
+    - name: Collect native crash evidence
+      if: always()
+      env:
+        CRASH_DIR: ${{ runner.temp }}/pilot-1611-native
+      run: |
+        cp /tmp/xvfb.log "$CRASH_DIR/" || true
+        python3 contrib/ci/collect-1611-core.py collect "$CRASH_DIR"
+
+    - name: Preserve native crash evidence
       if: always()
       uses: actions/upload-artifact@v7
       with:
-        name: pilot-qt-crash-1611
-        path: /tmp/pilot-qt-crash-1611-*.log
-        if-no-files-found: ignore
+        name: pilot-1611-native-${{ matrix.batch }}
+        path: ${{ runner.temp }}/pilot-1611-native/
+        if-no-files-found: warn
         retention-days: 7
+        compression-level: 1
 
     - name: make pilot
       run: |
