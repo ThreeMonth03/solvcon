@@ -44,7 +44,7 @@ jobs:
     if: |
       needs.check_skip.outputs.skip != 'true' &&
       github.repository == 'ThreeMonth03/solvcon' &&
-      github.ref == 'refs/heads/diagnose/1611-native-full-suite'
+      github.ref == 'refs/heads/codex/pilot-ci-wrapper-lifetime'
 
     name: standalone_buffer_${{ matrix.os }}
 
@@ -108,7 +108,7 @@ jobs:
     if: |
       needs.check_skip.outputs.skip != 'true' &&
       github.repository == 'ThreeMonth03/solvcon' &&
-      github.ref == 'refs/heads/diagnose/1611-native-full-suite'
+      github.ref == 'refs/heads/codex/pilot-ci-wrapper-lifetime'
 
     name: native_${{ matrix.batch }}_${{ matrix.os }}_${{ matrix.cmake_build_type }}
 
@@ -282,6 +282,12 @@ jobs:
           CMAKE_ARGS="-DPYTHON_EXECUTABLE=$(which python3)"
         make buildext VERBOSE=1
         echo "::endgroup::"
+
+    - name: Compare layout wrapper lifetime
+      run: |
+        ulimit -c 0
+        python3 contrib/ci/reproduce-1611-layout.py compare \
+          2>&1 | tee "$CRASH_DIR/layout-lifetime.log"
 
     - name: make pytest BUILD_QT=ON
       run: |
