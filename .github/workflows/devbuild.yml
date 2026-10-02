@@ -42,13 +42,9 @@ jobs:
     needs: [check_skip]
 
     if: |
-      needs.check_skip.outputs.skip != 'true' && (
-      github.event_name == 'schedule' ||
-      github.event_name == 'workflow_dispatch' ||
-      github.event_name == 'pull_request' ||
-      (github.event_name == 'push' &&
-       ((vars.SCGH_PUSH_RUN_BRANCH || vars.MMGH_PUSH_RUN_BRANCH) == '*' ||
-        contains(vars.SCGH_PUSH_RUN_BRANCH || vars.MMGH_PUSH_RUN_BRANCH, github.ref_name))))
+      needs.check_skip.outputs.skip != 'true' &&
+      github.repository == 'ThreeMonth03/solvcon' &&
+      github.ref == 'refs/heads/diagnose/pilot-qt-crash-1611'
 
     name: standalone_buffer_${{ matrix.os }}
 
@@ -110,13 +106,9 @@ jobs:
     needs: [check_skip, standalone_buffer]
 
     if: |
-      needs.check_skip.outputs.skip != 'true' && (
-      github.event_name == 'schedule' ||
-      github.event_name == 'workflow_dispatch' ||
-      github.event_name == 'pull_request' ||
-      (github.event_name == 'push' &&
-       ((vars.SCGH_PUSH_RUN_BRANCH || vars.MMGH_PUSH_RUN_BRANCH) == '*' ||
-        contains(vars.SCGH_PUSH_RUN_BRANCH || vars.MMGH_PUSH_RUN_BRANCH, github.ref_name))))
+      needs.check_skip.outputs.skip != 'true' &&
+      github.repository == 'ThreeMonth03/solvcon' &&
+      github.ref == 'refs/heads/diagnose/pilot-qt-crash-1611'
 
     name: build_${{ matrix.os }}_${{ matrix.cmake_build_type }}
 
@@ -158,10 +150,6 @@ jobs:
               cmake_build_type: Release
               build_metal: OFF
               make_parallel: -j4
-            - os: macos-26
-              cmake_build_type: RelWithDebInfo
-              build_metal: ON
-              make_parallel: -j2
 
         fail-fast: false
 
@@ -259,8 +247,24 @@ jobs:
         # runs it seconds later in the pilot binary. A push and the nightly
         # run the whole suite in both Qt hosts. SOLVCON_TEST_SHOW_WINDOWS is left at the
         # default either way, so any window stays off the screen.
-        make ${{ github.event_name == 'pull_request' && 'pytest-fast' || 'pytest' }} ${JOB_MAKE_ARGS}
+        set -o pipefail
+        command -v gdb
+        for attempt in 1 2 3 ; do
+          echo "Qt test attempt ${attempt}"
+          make pytest ${JOB_MAKE_ARGS} \
+            "PYTEST=gdb --batch --nx --return-child-result -ex 'set disable-randomization off' -ex run -ex 'thread apply all bt' -ex 'info sharedlibrary' --args $(command -v python3) -m pytest" \
+            2>&1 | tee "/tmp/pilot-qt-crash-1611-${attempt}.log"
+        done
         echo "::endgroup::"
+
+    - name: Preserve native crash logs
+      if: always()
+      uses: actions/upload-artifact@v7
+      with:
+        name: pilot-qt-crash-1611
+        path: /tmp/pilot-qt-crash-1611-*.log
+        if-no-files-found: ignore
+        retention-days: 7
 
     - name: make pilot
       run: |
