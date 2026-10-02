@@ -44,7 +44,7 @@ jobs:
     if: |
       needs.check_skip.outputs.skip != 'true' &&
       github.repository == 'ThreeMonth03/solvcon' &&
-      github.ref == 'refs/heads/diagnose/pilot-qt-crash-1611'
+      github.ref == 'refs/heads/diagnose/1611-full-cleanup'
 
     name: standalone_buffer_${{ matrix.os }}
 
@@ -108,7 +108,7 @@ jobs:
     if: |
       needs.check_skip.outputs.skip != 'true' &&
       github.repository == 'ThreeMonth03/solvcon' &&
-      github.ref == 'refs/heads/diagnose/pilot-qt-crash-1611'
+      github.ref == 'refs/heads/diagnose/1611-full-cleanup'
 
     name: build_${{ matrix.os }}_${{ matrix.cmake_build_type }}
 
@@ -168,6 +168,14 @@ jobs:
       uses: ./.github/actions/setup_linux
       with:
         workflow: 'build'
+
+    - name: Set up native crash debugger
+      if: runner.os == 'Linux'
+      run: |
+        if ! command -v gdb >/dev/null 2>&1 ; then
+          sudo apt-get -qy install --no-install-recommends gdb
+        fi
+        gdb --version
 
     - name: setup dependencies for macOS
       if: runner.os == 'macOS'
@@ -249,9 +257,11 @@ jobs:
         # default either way, so any window stays off the screen.
         set -o pipefail
         command -v gdb
-        for attempt in 1 2 3 ; do
+        TEST_OPTIONS="-v -s"
+        for attempt in $(seq 1 3) ; do
           echo "Qt test attempt ${attempt}"
           make pytest ${JOB_MAKE_ARGS} \
+            "PYTEST_OPTS=${TEST_OPTIONS}" \
             "PYTEST=gdb --batch --nx --return-child-result -ex 'set disable-randomization off' -ex run -ex 'thread apply all bt' -ex 'info sharedlibrary' --args $(command -v python3) -m pytest" \
             2>&1 | tee "/tmp/pilot-qt-crash-1611-${attempt}.log"
         done
