@@ -169,6 +169,14 @@ jobs:
       with:
         workflow: 'build'
 
+    - name: Set up native crash debugger
+      if: runner.os == 'Linux'
+      run: |
+        if ! command -v gdb >/dev/null 2>&1 ; then
+          sudo apt-get -qy install --no-install-recommends gdb
+        fi
+        gdb --version
+
     - name: setup dependencies for macOS
       if: runner.os == 'macOS'
       uses: ./.github/actions/setup_macos
