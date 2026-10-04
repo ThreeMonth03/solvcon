@@ -1,0 +1,1 @@
+PASS: 54 cases, 648 records, 8712 samples. Shapes, strides, thread limits, balanced orders, timing arithmetic, and checksums verified.

@@ -1,0 +1,38 @@
+{
+  "sha": "a1494b454017d4b6dd7a83cbe85e15746ac78e98",
+  "families": [
+    "single",
+    "batch",
+    "broadcast",
+    "large"
+  ],
+  "small_sides": [
+    8,
+    16,
+    32,
+    64,
+    128,
+    256,
+    512,
+    1024
+  ],
+  "large_sides": [
+    8192,
+    16384,
+    20480
+  ],
+  "dtypes": [
+    "float32",
+    "float64"
+  ],
+  "small_threads": 1,
+  "large_threads": 24,
+  "rounds": 6,
+  "small_batches_per_round": 15,
+  "large_calls_per_round": 1,
+  "relative_frobenius_tolerances": {
+    "float32": 5e-05,
+    "float64": 5e-13
+  },
+  "script_sha256": "7b3ed6e5be8e765c8a6b2afd28de6834defbf150262b9acb7586c18e4727434c"
+}
