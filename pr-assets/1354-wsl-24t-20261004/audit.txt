@@ -1,0 +1,1 @@
+PASS: 54 cases, 162 independent process runs, 3240 timed blocks. All outputs, shapes, strides, shared repetitions, 24-thread runtime limits, CPU affinities, Williams orders, timing arithmetic, and source hashes verified.

@@ -1,0 +1,2346 @@
+{
+  "sha": "a1494b454017d4b6dd7a83cbe85e15746ac78e98",
+  "families": [
+    "single",
+    "batch",
+    "broadcast",
+    "large"
+  ],
+  "small_sides": [
+    8,
+    16,
+    32,
+    64,
+    128,
+    256,
+    512,
+    1024
+  ],
+  "large_sides": [
+    8192,
+    16384,
+    20480
+  ],
+  "dtypes": [
+    "float32",
+    "float64"
+  ],
+  "threads": 24,
+  "affinity": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23
+  ],
+  "replicates": 3,
+  "rounds": 10,
+  "warmup_rounds": 2,
+  "target_batch_ms": 50.0,
+  "common_repetitions_per_case": true,
+  "williams_source_commit": "d2d18841774f9e7dc6fa9173a9aadd79ace3e99c",
+  "williams_source_path": "solvcon/benchmark/collector.py",
+  "large_calls_per_round": 1,
+  "relative_frobenius_tolerances": {
+    "float32": 5e-05,
+    "float64": 5e-13
+  },
+  "script_sha256": "34bdd5d3a80e2b3cc3b775d98c1298ba49696825aace18a5b91cc21a86ad4164",
+  "planned_case_order": [
+    [
+      0,
+      "broadcast",
+      "float32",
+      8
+    ],
+    [
+      0,
+      "batch",
+      "float64",
+      256
+    ],
+    [
+      0,
+      "large",
+      "float64",
+      16384
+    ],
+    [
+      0,
+      "batch",
+      "float64",
+      1024
+    ],
+    [
+      0,
+      "batch",
+      "float32",
+      32
+    ],
+    [
+      0,
+      "large",
+      "float32",
+      20480
+    ],
+    [
+      0,
+      "batch",
+      "float32",
+      8
+    ],
+    [
+      0,
+      "single",
+      "float64",
+      32
+    ],
+    [
+      0,
+      "broadcast",
+      "float32",
+      32
+    ],
+    [
+      0,
+      "single",
+      "float32",
+      8
+    ],
+    [
+      0,
+      "single",
+      "float32",
+      256
+    ],
+    [
+      0,
+      "broadcast",
+      "float64",
+      16
+    ],
+    [
+      0,
+      "single",
+      "float64",
+      512
+    ],
+    [
+      0,
+      "batch",
+      "float64",
+      8
+    ],
+    [
+      0,
+      "batch",
+      "float32",
+      512
+    ],
+    [
+      0,
+      "batch",
+      "float64",
+      64
+    ],
+    [
+      0,
+      "broadcast",
+      "float64",
+      512
+    ],
+    [
+      0,
+      "broadcast",
+      "float64",
+      128
+    ],
+    [
+      0,
+      "batch",
+      "float32",
+      256
+    ],
+    [
+      0,
+      "single",
+      "float32",
+      16
+    ],
+    [
+      0,
+      "broadcast",
+      "float64",
+      1024
+    ],
+    [
+      0,
+      "batch",
+      "float64",
+      32
+    ],
+    [
+      0,
+      "broadcast",
+      "float32",
+      1024
+    ],
+    [
+      0,
+      "broadcast",
+      "float32",
+      128
+    ],
+    [
+      0,
+      "batch",
+      "float64",
+      128
+    ],
+    [
+      0,
+      "single",
+      "float32",
+      32
+    ],
+    [
+      0,
+      "single",
+      "float32",
+      1024
+    ],
+    [
+      0,
+      "batch",
+      "float32",
+      128
+    ],
+    [
+      0,
+      "single",
+      "float32",
+      128
+    ],
+    [
+      0,
+      "broadcast",
+      "float32",
+      64
+    ],
+    [
+      0,
+      "broadcast",
+      "float64",
+      64
+    ],
+    [
+      0,
+      "broadcast",
+      "float64",
+      8
+    ],
+    [
+      0,
+      "large",
+      "float64",
+      8192
+    ],
+    [
+      0,
+      "large",
+      "float64",
+      20480
+    ],
+    [
+      0,
+      "single",
+      "float64",
+      1024
+    ],
+    [
+      0,
+      "single",
+      "float32",
+      512
+    ],
+    [
+      0,
+      "broadcast",
+      "float32",
+      256
+    ],
+    [
+      0,
+      "single",
+      "float64",
+      256
+    ],
+    [
+      0,
+      "batch",
+      "float32",
+      1024
+    ],
+    [
+      0,
+      "broadcast",
+      "float32",
+      512
+    ],
+    [
+      0,
+      "large",
+      "float32",
+      16384
+    ],
+    [
+      0,
+      "single",
+      "float64",
+      16
+    ],
+    [
+      0,
+      "batch",
+      "float64",
+      512
+    ],
+    [
+      0,
+      "single",
+      "float64",
+      8
+    ],
+    [
+      0,
+      "broadcast",
+      "float64",
+      32
+    ],
+    [
+      0,
+      "broadcast",
+      "float64",
+      256
+    ],
+    [
+      0,
+      "single",
+      "float64",
+      128
+    ],
+    [
+      0,
+      "broadcast",
+      "float32",
+      16
+    ],
+    [
+      0,
+      "batch",
+      "float32",
+      16
+    ],
+    [
+      0,
+      "batch",
+      "float64",
+      16
+    ],
+    [
+      0,
+      "batch",
+      "float32",
+      64
+    ],
+    [
+      0,
+      "large",
+      "float32",
+      8192
+    ],
+    [
+      0,
+      "single",
+      "float32",
+      64
+    ],
+    [
+      0,
+      "single",
+      "float64",
+      64
+    ],
+    [
+      1,
+      "single",
+      "float32",
+      64
+    ],
+    [
+      1,
+      "broadcast",
+      "float32",
+      128
+    ],
+    [
+      1,
+      "large",
+      "float64",
+      20480
+    ],
+    [
+      1,
+      "batch",
+      "float32",
+      512
+    ],
+    [
+      1,
+      "single",
+      "float64",
+      256
+    ],
+    [
+      1,
+      "batch",
+      "float64",
+      1024
+    ],
+    [
+      1,
+      "single",
+      "float64",
+      32
+    ],
+    [
+      1,
+      "broadcast",
+      "float32",
+      8
+    ],
+    [
+      1,
+      "broadcast",
+      "float64",
+      1024
+    ],
+    [
+      1,
+      "batch",
+      "float32",
+      128
+    ],
+    [
+      1,
+      "broadcast",
+      "float64",
+      8
+    ],
+    [
+      1,
+      "batch",
+      "float32",
+      256
+    ],
+    [
+      1,
+      "single",
+      "float32",
+      32
+    ],
+    [
+      1,
+      "batch",
+      "float64",
+      512
+    ],
+    [
+      1,
+      "broadcast",
+      "float32",
+      1024
+    ],
+    [
+      1,
+      "broadcast",
+      "float64",
+      16
+    ],
+    [
+      1,
+      "broadcast",
+      "float64",
+      64
+    ],
+    [
+      1,
+      "single",
+      "float64",
+      1024
+    ],
+    [
+      1,
+      "batch",
+      "float32",
+      8
+    ],
+    [
+      1,
+      "batch",
+      "float32",
+      64
+    ],
+    [
+      1,
+      "broadcast",
+      "float32",
+      512
+    ],
+    [
+      1,
+      "batch",
+      "float64",
+      64
+    ],
+    [
+      1,
+      "broadcast",
+      "float64",
+      128
+    ],
+    [
+      1,
+      "large",
+      "float32",
+      8192
+    ],
+    [
+      1,
+      "broadcast",
+      "float64",
+      256
+    ],
+    [
+      1,
+      "single",
+      "float32",
+      128
+    ],
+    [
+      1,
+      "batch",
+      "float64",
+      256
+    ],
+    [
+      1,
+      "single",
+      "float64",
+      8
+    ],
+    [
+      1,
+      "single",
+      "float64",
+      128
+    ],
+    [
+      1,
+      "broadcast",
+      "float64",
+      512
+    ],
+    [
+      1,
+      "single",
+      "float64",
+      64
+    ],
+    [
+      1,
+      "large",
+      "float32",
+      20480
+    ],
+    [
+      1,
+      "batch",
+      "float32",
+      1024
+    ],
+    [
+      1,
+      "large",
+      "float32",
+      16384
+    ],
+    [
+      1,
+      "single",
+      "float32",
+      8
+    ],
+    [
+      1,
+      "single",
+      "float64",
+      512
+    ],
+    [
+      1,
+      "batch",
+      "float64",
+      8
+    ],
+    [
+      1,
+      "broadcast",
+      "float32",
+      256
+    ],
+    [
+      1,
+      "batch",
+      "float64",
+      32
+    ],
+    [
+      1,
+      "batch",
+      "float64",
+      128
+    ],
+    [
+      1,
+      "broadcast",
+      "float64",
+      32
+    ],
+    [
+      1,
+      "large",
+      "float64",
+      16384
+    ],
+    [
+      1,
+      "large",
+      "float64",
+      8192
+    ],
+    [
+      1,
+      "single",
+      "float32",
+      1024
+    ],
+    [
+      1,
+      "single",
+      "float32",
+      256
+    ],
+    [
+      1,
+      "single",
+      "float32",
+      16
+    ],
+    [
+      1,
+      "broadcast",
+      "float32",
+      16
+    ],
+    [
+      1,
+      "broadcast",
+      "float32",
+      64
+    ],
+    [
+      1,
+      "single",
+      "float32",
+      512
+    ],
+    [
+      1,
+      "single",
+      "float64",
+      16
+    ],
+    [
+      1,
+      "batch",
+      "float64",
+      16
+    ],
+    [
+      1,
+      "batch",
+      "float32",
+      32
+    ],
+    [
+      1,
+      "broadcast",
+      "float32",
+      32
+    ],
+    [
+      1,
+      "batch",
+      "float32",
+      16
+    ],
+    [
+      2,
+      "batch",
+      "float32",
+      256
+    ],
+    [
+      2,
+      "single",
+      "float64",
+      32
+    ],
+    [
+      2,
+      "broadcast",
+      "float64",
+      1024
+    ],
+    [
+      2,
+      "single",
+      "float64",
+      8
+    ],
+    [
+      2,
+      "batch",
+      "float32",
+      16
+    ],
+    [
+      2,
+      "single",
+      "float64",
+      64
+    ],
+    [
+      2,
+      "single",
+      "float64",
+      16
+    ],
+    [
+      2,
+      "batch",
+      "float64",
+      16
+    ],
+    [
+      2,
+      "broadcast",
+      "float64",
+      16
+    ],
+    [
+      2,
+      "broadcast",
+      "float32",
+      128
+    ],
+    [
+      2,
+      "large",
+      "float64",
+      20480
+    ],
+    [
+      2,
+      "batch",
+      "float32",
+      64
+    ],
+    [
+      2,
+      "batch",
+      "float32",
+      512
+    ],
+    [
+      2,
+      "large",
+      "float32",
+      8192
+    ],
+    [
+      2,
+      "large",
+      "float32",
+      16384
+    ],
+    [
+      2,
+      "single",
+      "float64",
+      256
+    ],
+    [
+      2,
+      "single",
+      "float32",
+      64
+    ],
+    [
+      2,
+      "batch",
+      "float64",
+      512
+    ],
+    [
+      2,
+      "single",
+      "float32",
+      16
+    ],
+    [
+      2,
+      "broadcast",
+      "float64",
+      256
+    ],
+    [
+      2,
+      "batch",
+      "float32",
+      128
+    ],
+    [
+      2,
+      "batch",
+      "float64",
+      32
+    ],
+    [
+      2,
+      "batch",
+      "float64",
+      8
+    ],
+    [
+      2,
+      "broadcast",
+      "float64",
+      32
+    ],
+    [
+      2,
+      "single",
+      "float32",
+      128
+    ],
+    [
+      2,
+      "broadcast",
+      "float32",
+      256
+    ],
+    [
+      2,
+      "broadcast",
+      "float64",
+      512
+    ],
+    [
+      2,
+      "large",
+      "float64",
+      8192
+    ],
+    [
+      2,
+      "broadcast",
+      "float32",
+      512
+    ],
+    [
+      2,
+      "broadcast",
+      "float32",
+      1024
+    ],
+    [
+      2,
+      "batch",
+      "float64",
+      128
+    ],
+    [
+      2,
+      "batch",
+      "float32",
+      1024
+    ],
+    [
+      2,
+      "batch",
+      "float64",
+      64
+    ],
+    [
+      2,
+      "batch",
+      "float64",
+      256
+    ],
+    [
+      2,
+      "batch",
+      "float32",
+      8
+    ],
+    [
+      2,
+      "large",
+      "float64",
+      16384
+    ],
+    [
+      2,
+      "single",
+      "float32",
+      1024
+    ],
+    [
+      2,
+      "single",
+      "float64",
+      1024
+    ],
+    [
+      2,
+      "single",
+      "float32",
+      8
+    ],
+    [
+      2,
+      "single",
+      "float32",
+      512
+    ],
+    [
+      2,
+      "single",
+      "float32",
+      32
+    ],
+    [
+      2,
+      "broadcast",
+      "float32",
+      32
+    ],
+    [
+      2,
+      "broadcast",
+      "float64",
+      128
+    ],
+    [
+      2,
+      "broadcast",
+      "float64",
+      8
+    ],
+    [
+      2,
+      "broadcast",
+      "float32",
+      16
+    ],
+    [
+      2,
+      "single",
+      "float64",
+      512
+    ],
+    [
+      2,
+      "broadcast",
+      "float32",
+      64
+    ],
+    [
+      2,
+      "single",
+      "float64",
+      128
+    ],
+    [
+      2,
+      "broadcast",
+      "float32",
+      8
+    ],
+    [
+      2,
+      "large",
+      "float32",
+      20480
+    ],
+    [
+      2,
+      "batch",
+      "float32",
+      32
+    ],
+    [
+      2,
+      "broadcast",
+      "float64",
+      64
+    ],
+    [
+      2,
+      "single",
+      "float32",
+      256
+    ],
+    [
+      2,
+      "batch",
+      "float64",
+      1024
+    ]
+  ],
+  "actual_process_order": [
+    {
+      "family": "broadcast",
+      "dtype": "float32",
+      "side": 8,
+      "replicate": 0,
+      "first_timing_completed_unix": 1791128378.7155597,
+      "last_timing_completed_unix": 1791128379.78179
+    },
+    {
+      "family": "batch",
+      "dtype": "float64",
+      "side": 256,
+      "replicate": 0,
+      "first_timing_completed_unix": 1791128381.0498827,
+      "last_timing_completed_unix": 1791128382.6883705
+    },
+    {
+      "family": "large",
+      "dtype": "float64",
+      "side": 16384,
+      "replicate": 0,
+      "first_timing_completed_unix": 1791128524.3128743,
+      "last_timing_completed_unix": 1791128905.8651967
+    },
+    {
+      "family": "broadcast",
+      "dtype": "float64",
+      "side": 64,
+      "replicate": 0,
+      "first_timing_completed_unix": 1791128907.4746687,
+      "last_timing_completed_unix": 1791128908.5771267
+    },
+    {
+      "family": "broadcast",
+      "dtype": "float64",
+      "side": 512,
+      "replicate": 0,
+      "first_timing_completed_unix": 1791128909.486528,
+      "last_timing_completed_unix": 1791128912.508984
+    },
+    {
+      "family": "broadcast",
+      "dtype": "float32",
+      "side": 128,
+      "replicate": 0,
+      "first_timing_completed_unix": 1791128913.3591666,
+      "last_timing_completed_unix": 1791128916.9525707
+    },
+    {
+      "family": "single",
+      "dtype": "float32",
+      "side": 8,
+      "replicate": 0,
+      "first_timing_completed_unix": 1791128917.3502192,
+      "last_timing_completed_unix": 1791128918.7112253
+    },
+    {
+      "family": "batch",
+      "dtype": "float32",
+      "side": 8,
+      "replicate": 0,
+      "first_timing_completed_unix": 1791128919.282446,
+      "last_timing_completed_unix": 1791128920.3706186
+    },
+    {
+      "family": "single",
+      "dtype": "float64",
+      "side": 32,
+      "replicate": 0,
+      "first_timing_completed_unix": 1791128920.9229794,
+      "last_timing_completed_unix": 1791128922.02541
+    },
+    {
+      "family": "broadcast",
+      "dtype": "float32",
+      "side": 512,
+      "replicate": 0,
+      "first_timing_completed_unix": 1791128923.1241412,
+      "last_timing_completed_unix": 1791128928.1371317
+    },
+    {
+      "family": "batch",
+      "dtype": "float32",
+      "side": 512,
+      "replicate": 0,
+      "first_timing_completed_unix": 1791128929.1790304,
+      "last_timing_completed_unix": 1791128933.503607
+    },
+    {
+      "family": "single",
+      "dtype": "float32",
+      "side": 256,
+      "replicate": 0,
+      "first_timing_completed_unix": 1791128934.2154877,
+      "last_timing_completed_unix": 1791128935.5811207
+    },
+    {
+      "family": "single",
+      "dtype": "float64",
+      "side": 512,
+      "replicate": 0,
+      "first_timing_completed_unix": 1791128936.3513374,
+      "last_timing_completed_unix": 1791128938.9381552
+    },
+    {
+      "family": "batch",
+      "dtype": "float64",
+      "side": 64,
+      "replicate": 0,
+      "first_timing_completed_unix": 1791128939.5660434,
+      "last_timing_completed_unix": 1791128940.5676255
+    },
+    {
+      "family": "batch",
+      "dtype": "float32",
+      "side": 32,
+      "replicate": 0,
+      "first_timing_completed_unix": 1791128941.1344807,
+      "last_timing_completed_unix": 1791128942.15416
+    },
+    {
+      "family": "broadcast",
+      "dtype": "float32",
+      "side": 256,
+      "replicate": 0,
+      "first_timing_completed_unix": 1791128943.0638535,
+      "last_timing_completed_unix": 1791128945.1146526
+    },
+    {
+      "family": "batch",
+      "dtype": "float64",
+      "side": 128,
+      "replicate": 0,
+      "first_timing_completed_unix": 1791128945.7448158,
+      "last_timing_completed_unix": 1791128946.5353892
+    },
+    {
+      "family": "broadcast",
+      "dtype": "float64",
+      "side": 256,
+      "replicate": 0,
+      "first_timing_completed_unix": 1791128947.2761674,
+      "last_timing_completed_unix": 1791128948.6441524
+    },
+    {
+      "family": "single",
+      "dtype": "float32",
+      "side": 16,
+      "replicate": 0,
+      "first_timing_completed_unix": 1791128948.8165307,
+      "last_timing_completed_unix": 1791128949.9187627
+    },
+    {
+      "family": "batch",
+      "dtype": "float64",
+      "side": 1024,
+      "replicate": 0,
+      "first_timing_completed_unix": 1791128952.5048182,
+      "last_timing_completed_unix": 1791128957.8143578
+    },
+    {
+      "family": "batch",
+      "dtype": "float64",
+      "side": 8,
+      "replicate": 0,
+      "first_timing_completed_unix": 1791128958.3841963,
+      "last_timing_completed_unix": 1791128959.402045
+    },
+    {
+      "family": "batch",
+      "dtype": "float32",
+      "side": 256,
+      "replicate": 0,
+      "first_timing_completed_unix": 1791128960.310783,
+      "last_timing_completed_unix": 1791128961.135889
+    },
+    {
+      "family": "broadcast",
+      "dtype": "float32",
+      "side": 32,
+      "replicate": 0,
+      "first_timing_completed_unix": 1791128961.7674599,
+      "last_timing_completed_unix": 1791128962.8333528
+    },
+    {
+      "family": "batch",
+      "dtype": "float64",
+      "side": 32,
+      "replicate": 0,
+      "first_timing_completed_unix": 1791128963.409926,
+      "last_timing_completed_unix": 1791128964.4597619
+    },
+    {
+      "family": "single",
+      "dtype": "float32",
+      "side": 32,
+      "replicate": 0,
+      "first_timing_completed_unix": 1791128965.094119,
+      "last_timing_completed_unix": 1791128966.2640436
+    },
+    {
+      "family": "single",
+      "dtype": "float32",
+      "side": 1024,
+      "replicate": 0,
+      "first_timing_completed_unix": 1791128966.920766,
+      "last_timing_completed_unix": 1791128967.6399484
+    },
+    {
+      "family": "batch",
+      "dtype": "float32",
+      "side": 128,
+      "replicate": 0,
+      "first_timing_completed_unix": 1791128973.3899143,
+      "last_timing_completed_unix": 1791128995.3604555
+    },
+    {
+      "family": "single",
+      "dtype": "float32",
+      "side": 128,
+      "replicate": 0,
+      "first_timing_completed_unix": 1791128996.228709,
+      "last_timing_completed_unix": 1791128998.4626806
+    },
+    {
+      "family": "broadcast",
+      "dtype": "float64",
+      "side": 32,
+      "replicate": 0,
+      "first_timing_completed_unix": 1791128999.0538101,
+      "last_timing_completed_unix": 1791129000.1258626
+    },
+    {
+      "family": "broadcast",
+      "dtype": "float32",
+      "side": 1024,
+      "replicate": 0,
+      "first_timing_completed_unix": 1791129002.1595166,
+      "last_timing_completed_unix": 1791129005.624208
+    },
+    {
+      "family": "broadcast",
+      "dtype": "float64",
+      "side": 16,
+      "replicate": 0,
+      "first_timing_completed_unix": 1791129006.1916924,
+      "last_timing_completed_unix": 1791129007.2672052
+    },
+    {
+      "family": "broadcast",
+      "dtype": "float64",
+      "side": 8,
+      "replicate": 0,
+      "first_timing_completed_unix": 1791129007.8313155,
+      "last_timing_completed_unix": 1791129008.892803
+    },
+    {
+      "family": "broadcast",
+      "dtype": "float64",
+      "side": 1024,
+      "replicate": 0,
+      "first_timing_completed_unix": 1791129010.703669,
+      "last_timing_completed_unix": 1791129014.2650185
+    },
+    {
+      "family": "single",
+      "dtype": "float64",
+      "side": 1024,
+      "replicate": 0,
+      "first_timing_completed_unix": 1791129014.958241,
+      "last_timing_completed_unix": 1791129015.9794378
+    },
+    {
+      "family": "single",
+      "dtype": "float32",
+      "side": 512,
+      "replicate": 0,
+      "first_timing_completed_unix": 1791129016.7764003,
+      "last_timing_completed_unix": 1791129018.4842498
+    },
+    {
+      "family": "broadcast",
+      "dtype": "float32",
+      "side": 64,
+      "replicate": 0,
+      "first_timing_completed_unix": 1791129019.120145,
+      "last_timing_completed_unix": 1791129020.1954935
+    },
+    {
+      "family": "single",
+      "dtype": "float64",
+      "side": 256,
+      "replicate": 0,
+      "first_timing_completed_unix": 1791129021.4906726,
+      "last_timing_completed_unix": 1791129023.162742
+    },
+    {
+      "family": "batch",
+      "dtype": "float32",
+      "side": 1024,
+      "replicate": 0,
+      "first_timing_completed_unix": 1791129024.9977179,
+      "last_timing_completed_unix": 1791129027.5967991
+    },
+    {
+      "family": "broadcast",
+      "dtype": "float64",
+      "side": 128,
+      "replicate": 0,
+      "first_timing_completed_unix": 1791129028.5702407,
+      "last_timing_completed_unix": 1791129043.0142472
+    },
+    {
+      "family": "single",
+      "dtype": "float64",
+      "side": 16,
+      "replicate": 0,
+      "first_timing_completed_unix": 1791129043.5986617,
+      "last_timing_completed_unix": 1791129044.335701
+    },
+    {
+      "family": "batch",
+      "dtype": "float64",
+      "side": 512,
+      "replicate": 0,
+      "first_timing_completed_unix": 1791129045.284665,
+      "last_timing_completed_unix": 1791129046.7843955
+    },
+    {
+      "family": "single",
+      "dtype": "float64",
+      "side": 8,
+      "replicate": 0,
+      "first_timing_completed_unix": 1791129047.473982,
+      "last_timing_completed_unix": 1791129048.7137575
+    },
+    {
+      "family": "single",
+      "dtype": "float64",
+      "side": 128,
+      "replicate": 0,
+      "first_timing_completed_unix": 1791129053.051501,
+      "last_timing_completed_unix": 1791129063.3563266
+    },
+    {
+      "family": "broadcast",
+      "dtype": "float32",
+      "side": 16,
+      "replicate": 0,
+      "first_timing_completed_unix": 1791129063.9638932,
+      "last_timing_completed_unix": 1791129065.0960433
+    },
+    {
+      "family": "batch",
+      "dtype": "float32",
+      "side": 16,
+      "replicate": 0,
+      "first_timing_completed_unix": 1791129065.645089,
+      "last_timing_completed_unix": 1791129066.6584883
+    },
+    {
+      "family": "batch",
+      "dtype": "float64",
+      "side": 16,
+      "replicate": 0,
+      "first_timing_completed_unix": 1791129067.2187536,
+      "last_timing_completed_unix": 1791129068.2657032
+    },
+    {
+      "family": "batch",
+      "dtype": "float32",
+      "side": 64,
+      "replicate": 0,
+      "first_timing_completed_unix": 1791129068.8778672,
+      "last_timing_completed_unix": 1791129069.9334395
+    },
+    {
+      "family": "single",
+      "dtype": "float32",
+      "side": 64,
+      "replicate": 0,
+      "first_timing_completed_unix": 1791129070.5014584,
+      "last_timing_completed_unix": 1791129071.527907
+    },
+    {
+      "family": "single",
+      "dtype": "float64",
+      "side": 64,
+      "replicate": 0,
+      "first_timing_completed_unix": 1791129072.093174,
+      "last_timing_completed_unix": 1791129073.1150873
+    },
+    {
+      "family": "batch",
+      "dtype": "float32",
+      "side": 512,
+      "replicate": 1,
+      "first_timing_completed_unix": 1791129073.832233,
+      "last_timing_completed_unix": 1791129075.2153623
+    },
+    {
+      "family": "single",
+      "dtype": "float64",
+      "side": 32,
+      "replicate": 1,
+      "first_timing_completed_unix": 1791129075.7891622,
+      "last_timing_completed_unix": 1791129076.4872322
+    },
+    {
+      "family": "batch",
+      "dtype": "float32",
+      "side": 8,
+      "replicate": 1,
+      "first_timing_completed_unix": 1791129077.0372846,
+      "last_timing_completed_unix": 1791129078.0902846
+    },
+    {
+      "family": "broadcast",
+      "dtype": "float64",
+      "side": 16,
+      "replicate": 1,
+      "first_timing_completed_unix": 1791129078.6767805,
+      "last_timing_completed_unix": 1791129079.796023
+    },
+    {
+      "family": "broadcast",
+      "dtype": "float64",
+      "side": 1024,
+      "replicate": 1,
+      "first_timing_completed_unix": 1791129082.411366,
+      "last_timing_completed_unix": 1791129087.97557
+    },
+    {
+      "family": "single",
+      "dtype": "float64",
+      "side": 256,
+      "replicate": 1,
+      "first_timing_completed_unix": 1791129088.8469348,
+      "last_timing_completed_unix": 1791129089.849378
+    },
+    {
+      "family": "single",
+      "dtype": "float64",
+      "side": 512,
+      "replicate": 1,
+      "first_timing_completed_unix": 1791129090.470216,
+      "last_timing_completed_unix": 1791129091.826432
+    },
+    {
+      "family": "single",
+      "dtype": "float32",
+      "side": 32,
+      "replicate": 1,
+      "first_timing_completed_unix": 1791129092.4401543,
+      "last_timing_completed_unix": 1791129093.5879138
+    },
+    {
+      "family": "batch",
+      "dtype": "float64",
+      "side": 256,
+      "replicate": 1,
+      "first_timing_completed_unix": 1791129095.2671435,
+      "last_timing_completed_unix": 1791129100.1195223
+    },
+    {
+      "family": "single",
+      "dtype": "float32",
+      "side": 64,
+      "replicate": 1,
+      "first_timing_completed_unix": 1791129100.7151659,
+      "last_timing_completed_unix": 1791129101.7731123
+    },
+    {
+      "family": "batch",
+      "dtype": "float64",
+      "side": 512,
+      "replicate": 1,
+      "first_timing_completed_unix": 1791129102.94823,
+      "last_timing_completed_unix": 1791129104.9445944
+    },
+    {
+      "family": "single",
+      "dtype": "float64",
+      "side": 1024,
+      "replicate": 1,
+      "first_timing_completed_unix": 1791129105.8131742,
+      "last_timing_completed_unix": 1791129107.7333658
+    },
+    {
+      "family": "batch",
+      "dtype": "float64",
+      "side": 1024,
+      "replicate": 1,
+      "first_timing_completed_unix": 1791129110.5134704,
+      "last_timing_completed_unix": 1791129114.7400937
+    },
+    {
+      "family": "batch",
+      "dtype": "float32",
+      "side": 128,
+      "replicate": 1,
+      "first_timing_completed_unix": 1791129115.5272532,
+      "last_timing_completed_unix": 1791129116.824895
+    },
+    {
+      "family": "batch",
+      "dtype": "float32",
+      "side": 64,
+      "replicate": 1,
+      "first_timing_completed_unix": 1791129117.4320128,
+      "last_timing_completed_unix": 1791129118.4773865
+    },
+    {
+      "family": "batch",
+      "dtype": "float32",
+      "side": 256,
+      "replicate": 1,
+      "first_timing_completed_unix": 1791129119.678377,
+      "last_timing_completed_unix": 1791129122.4810705
+    },
+    {
+      "family": "broadcast",
+      "dtype": "float32",
+      "side": 512,
+      "replicate": 1,
+      "first_timing_completed_unix": 1791129123.2573025,
+      "last_timing_completed_unix": 1791129124.6674306
+    },
+    {
+      "family": "broadcast",
+      "dtype": "float64",
+      "side": 32,
+      "replicate": 1,
+      "first_timing_completed_unix": 1791129125.2704456,
+      "last_timing_completed_unix": 1791129126.3776605
+    },
+    {
+      "family": "broadcast",
+      "dtype": "float32",
+      "side": 1024,
+      "replicate": 1,
+      "first_timing_completed_unix": 1791129127.7316992,
+      "last_timing_completed_unix": 1791129130.215991
+    },
+    {
+      "family": "batch",
+      "dtype": "float64",
+      "side": 64,
+      "replicate": 1,
+      "first_timing_completed_unix": 1791129130.7010536,
+      "last_timing_completed_unix": 1791129131.5682356
+    },
+    {
+      "family": "batch",
+      "dtype": "float32",
+      "side": 1024,
+      "replicate": 1,
+      "first_timing_completed_unix": 1791129133.029838,
+      "last_timing_completed_unix": 1791129135.5533948
+    },
+    {
+      "family": "single",
+      "dtype": "float64",
+      "side": 8,
+      "replicate": 1,
+      "first_timing_completed_unix": 1791129136.2647235,
+      "last_timing_completed_unix": 1791129137.6399624
+    },
+    {
+      "family": "broadcast",
+      "dtype": "float64",
+      "side": 128,
+      "replicate": 1,
+      "first_timing_completed_unix": 1791129138.8714705,
+      "last_timing_completed_unix": 1791129142.1782882
+    },
+    {
+      "family": "broadcast",
+      "dtype": "float64",
+      "side": 64,
+      "replicate": 1,
+      "first_timing_completed_unix": 1791129142.6983502,
+      "last_timing_completed_unix": 1791129143.6325552
+    },
+    {
+      "family": "broadcast",
+      "dtype": "float32",
+      "side": 8,
+      "replicate": 1,
+      "first_timing_completed_unix": 1791129144.1885426,
+      "last_timing_completed_unix": 1791129145.2722256
+    },
+    {
+      "family": "single",
+      "dtype": "float64",
+      "side": 128,
+      "replicate": 1,
+      "first_timing_completed_unix": 1791129146.5244682,
+      "last_timing_completed_unix": 1791129149.2270846
+    },
+    {
+      "family": "single",
+      "dtype": "float64",
+      "side": 64,
+      "replicate": 1,
+      "first_timing_completed_unix": 1791129149.7931092,
+      "last_timing_completed_unix": 1791129150.7758262
+    },
+    {
+      "family": "single",
+      "dtype": "float32",
+      "side": 128,
+      "replicate": 1,
+      "first_timing_completed_unix": 1791129151.7289765,
+      "last_timing_completed_unix": 1791129153.1694984
+    },
+    {
+      "family": "single",
+      "dtype": "float32",
+      "side": 8,
+      "replicate": 1,
+      "first_timing_completed_unix": 1791129153.8336656,
+      "last_timing_completed_unix": 1791129155.2837873
+    },
+    {
+      "family": "broadcast",
+      "dtype": "float64",
+      "side": 8,
+      "replicate": 1,
+      "first_timing_completed_unix": 1791129155.8428571,
+      "last_timing_completed_unix": 1791129156.899413
+    },
+    {
+      "family": "broadcast",
+      "dtype": "float32",
+      "side": 256,
+      "replicate": 1,
+      "first_timing_completed_unix": 1791129157.8839197,
+      "last_timing_completed_unix": 1791129159.8589766
+    },
+    {
+      "family": "batch",
+      "dtype": "float64",
+      "side": 8,
+      "replicate": 1,
+      "first_timing_completed_unix": 1791129160.4061117,
+      "last_timing_completed_unix": 1791129161.4701228
+    },
+    {
+      "family": "batch",
+      "dtype": "float64",
+      "side": 32,
+      "replicate": 1,
+      "first_timing_completed_unix": 1791129162.050422,
+      "last_timing_completed_unix": 1791129163.1068685
+    },
+    {
+      "family": "batch",
+      "dtype": "float64",
+      "side": 128,
+      "replicate": 1,
+      "first_timing_completed_unix": 1791129164.0302527,
+      "last_timing_completed_unix": 1791129165.8726985
+    },
+    {
+      "family": "broadcast",
+      "dtype": "float32",
+      "side": 128,
+      "replicate": 1,
+      "first_timing_completed_unix": 1791129166.6171746,
+      "last_timing_completed_unix": 1791129170.5940754
+    },
+    {
+      "family": "broadcast",
+      "dtype": "float64",
+      "side": 512,
+      "replicate": 1,
+      "first_timing_completed_unix": 1791129171.5400293,
+      "last_timing_completed_unix": 1791129172.9463127
+    },
+    {
+      "family": "broadcast",
+      "dtype": "float64",
+      "side": 256,
+      "replicate": 1,
+      "first_timing_completed_unix": 1791129173.7952056,
+      "last_timing_completed_unix": 1791129175.096275
+    },
+    {
+      "family": "single",
+      "dtype": "float32",
+      "side": 1024,
+      "replicate": 1,
+      "first_timing_completed_unix": 1791129175.6593604,
+      "last_timing_completed_unix": 1791129176.4734828
+    },
+    {
+      "family": "single",
+      "dtype": "float32",
+      "side": 256,
+      "replicate": 1,
+      "first_timing_completed_unix": 1791129177.2905402,
+      "last_timing_completed_unix": 1791129179.1517599
+    },
+    {
+      "family": "single",
+      "dtype": "float32",
+      "side": 16,
+      "replicate": 1,
+      "first_timing_completed_unix": 1791129179.7401063,
+      "last_timing_completed_unix": 1791129180.9021468
+    },
+    {
+      "family": "broadcast",
+      "dtype": "float32",
+      "side": 16,
+      "replicate": 1,
+      "first_timing_completed_unix": 1791129181.4849918,
+      "last_timing_completed_unix": 1791129182.6188986
+    },
+    {
+      "family": "broadcast",
+      "dtype": "float32",
+      "side": 64,
+      "replicate": 1,
+      "first_timing_completed_unix": 1791129183.2410874,
+      "last_timing_completed_unix": 1791129184.3732948
+    },
+    {
+      "family": "single",
+      "dtype": "float32",
+      "side": 512,
+      "replicate": 1,
+      "first_timing_completed_unix": 1791129185.1352463,
+      "last_timing_completed_unix": 1791129185.9894722
+    },
+    {
+      "family": "single",
+      "dtype": "float64",
+      "side": 16,
+      "replicate": 1,
+      "first_timing_completed_unix": 1791129186.6045084,
+      "last_timing_completed_unix": 1791129187.7379491
+    },
+    {
+      "family": "batch",
+      "dtype": "float64",
+      "side": 16,
+      "replicate": 1,
+      "first_timing_completed_unix": 1791129188.2893968,
+      "last_timing_completed_unix": 1791129189.3753288
+    },
+    {
+      "family": "batch",
+      "dtype": "float32",
+      "side": 32,
+      "replicate": 1,
+      "first_timing_completed_unix": 1791129189.99666,
+      "last_timing_completed_unix": 1791129191.0175006
+    },
+    {
+      "family": "broadcast",
+      "dtype": "float32",
+      "side": 32,
+      "replicate": 1,
+      "first_timing_completed_unix": 1791129191.6385221,
+      "last_timing_completed_unix": 1791129192.832737
+    },
+    {
+      "family": "batch",
+      "dtype": "float32",
+      "side": 16,
+      "replicate": 1,
+      "first_timing_completed_unix": 1791129193.3830907,
+      "last_timing_completed_unix": 1791129194.3974903
+    },
+    {
+      "family": "batch",
+      "dtype": "float32",
+      "side": 64,
+      "replicate": 2,
+      "first_timing_completed_unix": 1791129195.0229793,
+      "last_timing_completed_unix": 1791129196.0417166
+    },
+    {
+      "family": "batch",
+      "dtype": "float32",
+      "side": 8,
+      "replicate": 2,
+      "first_timing_completed_unix": 1791129196.5902488,
+      "last_timing_completed_unix": 1791129197.625577
+    },
+    {
+      "family": "batch",
+      "dtype": "float64",
+      "side": 128,
+      "replicate": 2,
+      "first_timing_completed_unix": 1791129198.9020834,
+      "last_timing_completed_unix": 1791129201.2262294
+    },
+    {
+      "family": "single",
+      "dtype": "float32",
+      "side": 64,
+      "replicate": 2,
+      "first_timing_completed_unix": 1791129201.8017938,
+      "last_timing_completed_unix": 1791129202.8193488
+    },
+    {
+      "family": "batch",
+      "dtype": "float64",
+      "side": 16,
+      "replicate": 2,
+      "first_timing_completed_unix": 1791129203.3903377,
+      "last_timing_completed_unix": 1791129204.4479196
+    },
+    {
+      "family": "batch",
+      "dtype": "float32",
+      "side": 256,
+      "replicate": 2,
+      "first_timing_completed_unix": 1791129205.2341058,
+      "last_timing_completed_unix": 1791129206.40876
+    },
+    {
+      "family": "broadcast",
+      "dtype": "float64",
+      "side": 16,
+      "replicate": 2,
+      "first_timing_completed_unix": 1791129206.9752214,
+      "last_timing_completed_unix": 1791129208.10181
+    },
+    {
+      "family": "single",
+      "dtype": "float64",
+      "side": 16,
+      "replicate": 2,
+      "first_timing_completed_unix": 1791129208.653943,
+      "last_timing_completed_unix": 1791129209.7628913
+    },
+    {
+      "family": "batch",
+      "dtype": "float32",
+      "side": 16,
+      "replicate": 2,
+      "first_timing_completed_unix": 1791129210.3056283,
+      "last_timing_completed_unix": 1791129211.3360415
+    },
+    {
+      "family": "single",
+      "dtype": "float32",
+      "side": 16,
+      "replicate": 2,
+      "first_timing_completed_unix": 1791129211.9248643,
+      "last_timing_completed_unix": 1791129213.062186
+    },
+    {
+      "family": "batch",
+      "dtype": "float64",
+      "side": 64,
+      "replicate": 2,
+      "first_timing_completed_unix": 1791129213.6658638,
+      "last_timing_completed_unix": 1791129214.719261
+    },
+    {
+      "family": "batch",
+      "dtype": "float32",
+      "side": 512,
+      "replicate": 2,
+      "first_timing_completed_unix": 1791129215.5074751,
+      "last_timing_completed_unix": 1791129216.7721877
+    },
+    {
+      "family": "broadcast",
+      "dtype": "float64",
+      "side": 1024,
+      "replicate": 2,
+      "first_timing_completed_unix": 1791129219.2471423,
+      "last_timing_completed_unix": 1791129224.138891
+    },
+    {
+      "family": "single",
+      "dtype": "float64",
+      "side": 32,
+      "replicate": 2,
+      "first_timing_completed_unix": 1791129224.7055337,
+      "last_timing_completed_unix": 1791129225.7452388
+    },
+    {
+      "family": "batch",
+      "dtype": "float64",
+      "side": 8,
+      "replicate": 2,
+      "first_timing_completed_unix": 1791129226.2904096,
+      "last_timing_completed_unix": 1791129227.3829124
+    },
+    {
+      "family": "batch",
+      "dtype": "float32",
+      "side": 128,
+      "replicate": 2,
+      "first_timing_completed_unix": 1791129228.4105287,
+      "last_timing_completed_unix": 1791129230.5652041
+    },
+    {
+      "family": "batch",
+      "dtype": "float64",
+      "side": 32,
+      "replicate": 2,
+      "first_timing_completed_unix": 1791129231.1937237,
+      "last_timing_completed_unix": 1791129232.232787
+    },
+    {
+      "family": "batch",
+      "dtype": "float64",
+      "side": 256,
+      "replicate": 2,
+      "first_timing_completed_unix": 1791129233.0633948,
+      "last_timing_completed_unix": 1791129234.5042899
+    },
+    {
+      "family": "single",
+      "dtype": "float32",
+      "side": 128,
+      "replicate": 2,
+      "first_timing_completed_unix": 1791129235.7600727,
+      "last_timing_completed_unix": 1791129238.0179708
+    },
+    {
+      "family": "broadcast",
+      "dtype": "float64",
+      "side": 32,
+      "replicate": 2,
+      "first_timing_completed_unix": 1791129238.5575724,
+      "last_timing_completed_unix": 1791129239.508306
+    },
+    {
+      "family": "broadcast",
+      "dtype": "float64",
+      "side": 512,
+      "replicate": 2,
+      "first_timing_completed_unix": 1791129240.6875188,
+      "last_timing_completed_unix": 1791129242.1866906
+    },
+    {
+      "family": "batch",
+      "dtype": "float64",
+      "side": 512,
+      "replicate": 2,
+      "first_timing_completed_unix": 1791129243.088346,
+      "last_timing_completed_unix": 1791129244.257756
+    },
+    {
+      "family": "broadcast",
+      "dtype": "float32",
+      "side": 256,
+      "replicate": 2,
+      "first_timing_completed_unix": 1791129245.022768,
+      "last_timing_completed_unix": 1791129246.3880723
+    },
+    {
+      "family": "broadcast",
+      "dtype": "float32",
+      "side": 128,
+      "replicate": 2,
+      "first_timing_completed_unix": 1791129247.180871,
+      "last_timing_completed_unix": 1791129248.504186
+    },
+    {
+      "family": "single",
+      "dtype": "float64",
+      "side": 64,
+      "replicate": 2,
+      "first_timing_completed_unix": 1791129249.0820568,
+      "last_timing_completed_unix": 1791129250.1321826
+    },
+    {
+      "family": "single",
+      "dtype": "float64",
+      "side": 256,
+      "replicate": 2,
+      "first_timing_completed_unix": 1791129250.9209583,
+      "last_timing_completed_unix": 1791129252.773358
+    },
+    {
+      "family": "broadcast",
+      "dtype": "float64",
+      "side": 256,
+      "replicate": 2,
+      "first_timing_completed_unix": 1791129253.3067982,
+      "last_timing_completed_unix": 1791129254.0237129
+    },
+    {
+      "family": "broadcast",
+      "dtype": "float32",
+      "side": 1024,
+      "replicate": 2,
+      "first_timing_completed_unix": 1791129256.0365646,
+      "last_timing_completed_unix": 1791129259.9577808
+    },
+    {
+      "family": "single",
+      "dtype": "float64",
+      "side": 8,
+      "replicate": 2,
+      "first_timing_completed_unix": 1791129260.6329494,
+      "last_timing_completed_unix": 1791129262.0495646
+    },
+    {
+      "family": "batch",
+      "dtype": "float32",
+      "side": 1024,
+      "replicate": 2,
+      "first_timing_completed_unix": 1791129264.1401997,
+      "last_timing_completed_unix": 1791129268.2337902
+    },
+    {
+      "family": "broadcast",
+      "dtype": "float64",
+      "side": 8,
+      "replicate": 2,
+      "first_timing_completed_unix": 1791129268.7994554,
+      "last_timing_completed_unix": 1791129269.8076127
+    },
+    {
+      "family": "single",
+      "dtype": "float32",
+      "side": 1024,
+      "replicate": 2,
+      "first_timing_completed_unix": 1791129270.9084134,
+      "last_timing_completed_unix": 1791129273.2270885
+    },
+    {
+      "family": "single",
+      "dtype": "float64",
+      "side": 1024,
+      "replicate": 2,
+      "first_timing_completed_unix": 1791129274.0436172,
+      "last_timing_completed_unix": 1791129275.04415
+    },
+    {
+      "family": "single",
+      "dtype": "float32",
+      "side": 8,
+      "replicate": 2,
+      "first_timing_completed_unix": 1791129275.7019074,
+      "last_timing_completed_unix": 1791129277.009356
+    },
+    {
+      "family": "single",
+      "dtype": "float32",
+      "side": 512,
+      "replicate": 2,
+      "first_timing_completed_unix": 1791129277.817192,
+      "last_timing_completed_unix": 1791129280.0446491
+    },
+    {
+      "family": "single",
+      "dtype": "float32",
+      "side": 32,
+      "replicate": 2,
+      "first_timing_completed_unix": 1791129280.6505613,
+      "last_timing_completed_unix": 1791129281.8269138
+    },
+    {
+      "family": "broadcast",
+      "dtype": "float32",
+      "side": 32,
+      "replicate": 2,
+      "first_timing_completed_unix": 1791129282.4193826,
+      "last_timing_completed_unix": 1791129283.5550058
+    },
+    {
+      "family": "broadcast",
+      "dtype": "float32",
+      "side": 512,
+      "replicate": 2,
+      "first_timing_completed_unix": 1791129284.043177,
+      "last_timing_completed_unix": 1791129284.7162435
+    },
+    {
+      "family": "broadcast",
+      "dtype": "float32",
+      "side": 16,
+      "replicate": 2,
+      "first_timing_completed_unix": 1791129285.3085806,
+      "last_timing_completed_unix": 1791129286.413498
+    },
+    {
+      "family": "single",
+      "dtype": "float64",
+      "side": 512,
+      "replicate": 2,
+      "first_timing_completed_unix": 1791129287.421914,
+      "last_timing_completed_unix": 1791129289.5038075
+    },
+    {
+      "family": "broadcast",
+      "dtype": "float32",
+      "side": 64,
+      "replicate": 2,
+      "first_timing_completed_unix": 1791129290.1590676,
+      "last_timing_completed_unix": 1791129291.2469926
+    },
+    {
+      "family": "single",
+      "dtype": "float64",
+      "side": 128,
+      "replicate": 2,
+      "first_timing_completed_unix": 1791129293.7362177,
+      "last_timing_completed_unix": 1791129294.8265676
+    },
+    {
+      "family": "broadcast",
+      "dtype": "float32",
+      "side": 8,
+      "replicate": 2,
+      "first_timing_completed_unix": 1791129295.405536,
+      "last_timing_completed_unix": 1791129296.4954674
+    },
+    {
+      "family": "broadcast",
+      "dtype": "float64",
+      "side": 128,
+      "replicate": 2,
+      "first_timing_completed_unix": 1791129297.139446,
+      "last_timing_completed_unix": 1791129298.9395692
+    },
+    {
+      "family": "batch",
+      "dtype": "float32",
+      "side": 32,
+      "replicate": 2,
+      "first_timing_completed_unix": 1791129299.507936,
+      "last_timing_completed_unix": 1791129300.552824
+    },
+    {
+      "family": "broadcast",
+      "dtype": "float64",
+      "side": 64,
+      "replicate": 2,
+      "first_timing_completed_unix": 1791129301.1569111,
+      "last_timing_completed_unix": 1791129302.2331564
+    },
+    {
+      "family": "single",
+      "dtype": "float32",
+      "side": 256,
+      "replicate": 2,
+      "first_timing_completed_unix": 1791129302.8219457,
+      "last_timing_completed_unix": 1791129303.187878
+    },
+    {
+      "family": "batch",
+      "dtype": "float64",
+      "side": 1024,
+      "replicate": 2,
+      "first_timing_completed_unix": 1791129305.536669,
+      "last_timing_completed_unix": 1791129310.2613049
+    },
+    {
+      "family": "large",
+      "dtype": "float32",
+      "side": 20480,
+      "replicate": 0,
+      "first_timing_completed_unix": 1791130172.975087,
+      "last_timing_completed_unix": 1791130518.5207064
+    },
+    {
+      "family": "large",
+      "dtype": "float64",
+      "side": 8192,
+      "replicate": 0,
+      "first_timing_completed_unix": 1791130536.3635645,
+      "last_timing_completed_unix": 1791130582.5641894
+    },
+    {
+      "family": "large",
+      "dtype": "float64",
+      "side": 20480,
+      "replicate": 0,
+      "first_timing_completed_unix": 1791130828.41133,
+      "last_timing_completed_unix": 1791131485.438651
+    },
+    {
+      "family": "large",
+      "dtype": "float32",
+      "side": 16384,
+      "replicate": 0,
+      "first_timing_completed_unix": 1791131559.3126378,
+      "last_timing_completed_unix": 1791131739.2906094
+    },
+    {
+      "family": "large",
+      "dtype": "float32",
+      "side": 8192,
+      "replicate": 0,
+      "first_timing_completed_unix": 1791131749.0429497,
+      "last_timing_completed_unix": 1791131773.472175
+    },
+    {
+      "family": "large",
+      "dtype": "float64",
+      "side": 20480,
+      "replicate": 1,
+      "first_timing_completed_unix": 1791132027.9714408,
+      "last_timing_completed_unix": 1791132723.1764977
+    },
+    {
+      "family": "large",
+      "dtype": "float32",
+      "side": 8192,
+      "replicate": 1,
+      "first_timing_completed_unix": 1791132733.5690672,
+      "last_timing_completed_unix": 1791132758.665078
+    },
+    {
+      "family": "large",
+      "dtype": "float32",
+      "side": 20480,
+      "replicate": 1,
+      "first_timing_completed_unix": 1791132888.1938076,
+      "last_timing_completed_unix": 1791133239.6455498
+    },
+    {
+      "family": "large",
+      "dtype": "float32",
+      "side": 16384,
+      "replicate": 1,
+      "first_timing_completed_unix": 1791133313.0204759,
+      "last_timing_completed_unix": 1791133505.7008646
+    },
+    {
+      "family": "large",
+      "dtype": "float64",
+      "side": 16384,
+      "replicate": 1,
+      "first_timing_completed_unix": 1791133646.687959,
+      "last_timing_completed_unix": 1791134039.7925062
+    },
+    {
+      "family": "large",
+      "dtype": "float64",
+      "side": 8192,
+      "replicate": 1,
+      "first_timing_completed_unix": 1791134061.609001,
+      "last_timing_completed_unix": 1791134114.5299811
+    },
+    {
+      "family": "large",
+      "dtype": "float64",
+      "side": 20480,
+      "replicate": 2,
+      "first_timing_completed_unix": 1791134374.0395682,
+      "last_timing_completed_unix": 1791135137.9722517
+    },
+    {
+      "family": "large",
+      "dtype": "float32",
+      "side": 8192,
+      "replicate": 2,
+      "first_timing_completed_unix": 1791135152.026133,
+      "last_timing_completed_unix": 1791135180.4558847
+    },
+    {
+      "family": "large",
+      "dtype": "float32",
+      "side": 16384,
+      "replicate": 2,
+      "first_timing_completed_unix": 1791135270.209593,
+      "last_timing_completed_unix": 1791135466.907064
+    },
+    {
+      "family": "large",
+      "dtype": "float64",
+      "side": 8192,
+      "replicate": 2,
+      "first_timing_completed_unix": 1791135486.9927793,
+      "last_timing_completed_unix": 1791135535.3862877
+    },
+    {
+      "family": "large",
+      "dtype": "float64",
+      "side": 16384,
+      "replicate": 2,
+      "first_timing_completed_unix": 1791135669.3283446,
+      "last_timing_completed_unix": 1791136037.1402779
+    },
+    {
+      "family": "large",
+      "dtype": "float32",
+      "side": 20480,
+      "replicate": 2,
+      "first_timing_completed_unix": 1791136169.6460898,
+      "last_timing_completed_unix": 1791136530.9973974
+    }
+  ],
+  "measurement_window_asia_taipei": [
+    "2026-10-04T23:39:38.715560+08:00",
+    "2026-10-05T01:55:30.997397+08:00"
+  ],
+  "execution_note": "Paused between processes after the first large case to prioritize all non-large cases at user request. Resumed large cases afterward. No timed call was paused or removed.",
+  "aggregation": "Geometric mean of three process medians for each method; speedup is their ratio. Bands show min-max across three processes. Pooled medians and round-level quantiles are retained separately."
+}
