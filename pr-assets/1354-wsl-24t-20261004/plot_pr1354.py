@@ -12,7 +12,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
-from matplotlib.ticker import FuncFormatter  # noqa: E402
+from matplotlib.ticker import FuncFormatter, LogLocator  # noqa: E402
 
 
 DEST = Path(__file__).resolve().parent
@@ -187,6 +187,7 @@ def plot_family(family, summary):
         ax.yaxis.set_major_formatter(FuncFormatter(
             lambda value, pos: f'{value:g}'))
         if family == 'large':
+            ax.yaxis.set_minor_locator(LogLocator(base=10, subs=(2, 4, 6)))
             ax.yaxis.set_minor_formatter(FuncFormatter(
                 lambda value, pos: f'{value:g}'))
         ax.set_ylabel(f'Time ({unit}, lower is faster)', fontsize=10)
